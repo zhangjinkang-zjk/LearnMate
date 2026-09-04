@@ -533,7 +533,11 @@ async function selectPath(pathId) {
     await router.replace({ query: { ...route.query, pathId: nextPathId, node: initialNode?.id } })
     if (initialNode) {
       isPageLoading.value = false
-      await selectNode(initialNode.id, false)
+      // Path selection should finish before the potentially slow document
+      // generation begins, so the user can switch to another subject anytime.
+      void selectNode(initialNode.id, false).catch((error) => {
+        if (error?.name !== 'AbortError') pathSwitchError.value = errorDetail(error, '本章材料加载失败，请稍后重试。')
+      })
     }
   } catch (error) {
     pathSwitchError.value = errorDetail(error, '无法打开这条学习路径，请稍后重试。')
