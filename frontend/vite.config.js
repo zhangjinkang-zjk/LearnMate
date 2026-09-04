@@ -33,6 +33,7 @@ export default defineConfig({
       '/ai_portrait': proxyTarget,
       '/path': proxyTarget,
       '/learning_path': proxyTarget,
+      '/learning': proxyTarget,
       '/resource': proxyTarget,
       '/image': proxyTarget,
       '/knowledge': proxyTarget,
