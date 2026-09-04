@@ -232,7 +232,7 @@ frontend/src/
 - 建议先展示一个“系统推荐”任务，再展示少量可选任务，避免堆满任务卡。
 - 点击任务进入学习巩固，并携带任务、路径、节点上下文。
 
-当前实现：后端 `GET /learning/advanced/current` 保留旧的 `task` 字段，同时返回迁移练习、案例诊断、项目实训三个 `tasks`。案例诊断是当前推荐入口，页面不在前端推算掌握度。
+当前实现：后端 `GET /learning/advanced/current` 保留旧的 `task` 字段，同时返回迁移练习、案例诊断、项目实训三个 `tasks`。案例诊断是当前推荐入口，页面不在前端推算掌握度。进阶学习只展示学习状态、系统推荐和任务目录，点击后才进入学习巩固，不在此页展开阶段流程。
 
 #### 5. 学习巩固
 
@@ -245,7 +245,7 @@ frontend/src/
 - 用户始终可以选择：继续追问、请求提示、暂存退出、结束本次巩固、提交方案。
 - `结束本次巩固` 与 `提交方案并完成` 必须是两个不同动作。
 
-当前实现：`LearningConsolidationPage.vue` 使用 `PracticeDialogue.vue` 提供六个阶段、请求提示和结束会话；结束只显示已保存提示，不伪造路径完成状态。后端 `classroom_chat.py` 新增 `practice` 追问和总结兜底规则，并继续使用文档绑定校验、JWT 与 ChatHistory。
+当前实现：`LearningConsolidationPage.vue` 只接收一个已选任务的上下文，使用 `PracticeDialogue.vue` 提供六个阶段、请求提示和结束会话；不重复展示进阶任务目录。结束只显示已保存提示，不伪造路径完成状态。后端 `classroom_chat.py` 新增 `practice` 追问和总结兜底规则，并继续使用文档绑定校验、JWT 与 ChatHistory。
 - 对话消息由现有 ChatHistory 持久化；当前阶段和本地草稿用于当前 Web 会话，尚未把“提交成果/完成评价”伪装成已实现能力。
 
 ### 后端与提示词任务
