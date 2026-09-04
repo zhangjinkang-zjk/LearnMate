@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { clearAuthSession } from '@/shared/auth/session'
 
 const httpClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '',
@@ -22,7 +23,7 @@ httpClient.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('token')
+      clearAuthSession()
       const currentPath = window.location.hash.replace(/^#/, '') || '/'
       if (!currentPath.startsWith('/login')) window.location.hash = `#/login?redirect=${encodeURIComponent(currentPath)}`
     }

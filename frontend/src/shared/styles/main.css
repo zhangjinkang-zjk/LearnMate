@@ -35,8 +35,12 @@ button { cursor: pointer; }
 .sidebar-footer { margin-top: auto; display: grid; gap: 8px; }
 .profile-chip { display: flex; align-items: center; gap: 9px; margin-top: 13px; padding: 12px 9px 0; border-top: 1px solid rgba(255,255,255,.13); }
 .profile-avatar { display: grid; width: 29px; height: 29px; place-items: center; border-radius: 50%; background: #d6e1c9; color: #264637; font-size: 12px; font-weight: 800; }
-.profile-copy { display: grid; gap: 2px; font-size: 11px; }
+.profile-copy { display: grid; min-width: 0; flex: 1; gap: 2px; font-size: 11px; }
+.profile-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profile-copy small { color: rgba(239,243,232,.52); font-size: 10px; }
+.logout-button { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; border: 1px solid rgba(239,243,232,.2); border-radius: 5px; background: transparent; color: rgba(239,243,232,.68); cursor: pointer; transition: background .15s ease, color .15s ease, border-color .15s ease; }
+.logout-button:hover { border-color: rgba(213,242,66,.6); background: rgba(213,242,66,.12); color: #d5f242; }
+.logout-button:focus-visible { outline: 2px solid #d5f242; outline-offset: 2px; }
 .app-content { width: 100%; min-width: 0; margin-left: 232px; }
 .app-header { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; min-height: 64px; padding: 0 42px; border-bottom: 1px solid var(--line); background: rgba(244,246,243,.92); backdrop-filter: blur(14px); }
 .header-context { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; }

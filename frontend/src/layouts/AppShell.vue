@@ -33,7 +33,10 @@
         </RouterLink>
         <div class="profile-chip">
           <span class="profile-avatar">学</span>
-          <span class="profile-copy"><strong>我的学习者</strong><small>学习进行中</small></span>
+          <span class="profile-copy"><strong>{{ displayName }}</strong><small>学习进行中</small></span>
+          <button class="logout-button" type="button" title="退出登录" aria-label="退出登录" @click="logout">
+            <LogOut :size="15" stroke-width="1.8" />
+          </button>
         </div>
       </div>
     </aside>
@@ -56,11 +59,21 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { LogOut } from 'lucide-vue-next'
 import { primaryNavigation, secondaryNavigation, utilityNavigation } from '@/shared/config/navigation'
+import { clearAuthSession } from '@/shared/auth/session'
 
 const route = useRoute()
+const router = useRouter()
 const sidebarOpen = ref(false)
 const allNavigation = [...primaryNavigation, ...secondaryNavigation, ...utilityNavigation]
 const currentTitle = computed(() => allNavigation.find((item) => route.path.startsWith(item.to))?.label || '学习概览')
+const displayName = computed(() => localStorage.getItem('learnmate_username') || '我的学习者')
+
+async function logout() {
+  clearAuthSession()
+  sidebarOpen.value = false
+  await router.replace({ name: 'login' })
+}
 </script>
