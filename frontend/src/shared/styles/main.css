@@ -78,6 +78,7 @@ button { cursor: pointer; }
 .progress-track { height: 7px; overflow: hidden; border-radius: 99px; background: #e9eee8; }
 .progress-value { height: 100%; border-radius: inherit; background: var(--accent-deep); }
 .list-reset { margin: 0; padding: 0; list-style: none; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
 @media (max-width: 860px) {
   .app-sidebar { width: 232px; padding: 28px 18px 20px; background: #1e3c34; pointer-events: auto; transform: translateX(-100%); transition: transform .25s ease; }

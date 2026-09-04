@@ -246,7 +246,7 @@ frontend/src/
 - `结束本次巩固` 与 `提交方案并完成` 必须是两个不同动作。
 
 当前实现：`LearningConsolidationPage.vue` 使用 `PracticeDialogue.vue` 提供六个阶段、请求提示和结束会话；结束只显示已保存提示，不伪造路径完成状态。后端 `classroom_chat.py` 新增 `practice` 追问和总结兜底规则，并继续使用文档绑定校验、JWT 与 ChatHistory。
-- 结束时保存对话、当前阶段、用户假设、证据和草稿；重新进入可以继续。
+- 对话消息由现有 ChatHistory 持久化；当前阶段和本地草稿用于当前 Web 会话，尚未把“提交成果/完成评价”伪装成已实现能力。
 
 ### 后端与提示词任务
 
