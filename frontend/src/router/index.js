@@ -1,6 +1,7 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 
 import HomeView from '../pages/HomeView.vue'
+import IdentitySelectView from '../pages/IdentitySelectView.vue'
 import ResourceView from '../pages/ResourceView.vue'
 import ResourceCenterView from '../pages/ResourceCenterView.vue'
 import ChatView from '../pages/ChatView.vue'
@@ -26,6 +27,11 @@ const router = createRouter({
       path: '/',
       name: 'home',
       component: HomeView
+    },
+    {
+      path: '/select-identity',
+      name: 'identitySelect',
+      component: IdentitySelectView
     },
     {
       path: '/resources',
