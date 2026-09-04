@@ -1,7 +1,11 @@
 <template>
   <main class="identity-page">
-    <ImmersiveOnboardingBackdrop />
-    <router-link class="back-link" to="/">
+    <div class="identity-wash" aria-hidden="true"></div>
+    <div class="identity-word" aria-hidden="true">
+      <span>LEARN</span>
+      <span>MATE</span>
+    </div>
+    <router-link class="back-link" to="/" @click.prevent="router.push('/')">
       <span aria-hidden="true">←</span>
       <span>BACK</span>
     </router-link>
@@ -66,21 +70,10 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { directionOptions, goalOptions } from '@/features/onboarding/onboardingOptions'
-import { learningState, persistLearningProfile } from '@/entities/learning/learningState'
-import ImmersiveOnboardingBackdrop from '@/shared/ui/ImmersiveOnboardingBackdrop.vue'
 
 const router = useRouter()
 const selectedIdentity = ref(localStorage.getItem('learnmate_identity') || '')
-const storedDirection = localStorage.getItem('learnmate_direction') || ''
-const storedGoal = localStorage.getItem('learnmate_goal') || ''
-const selectedDirection = ref(directionOptions.includes(storedDirection) ? storedDirection : '')
-const selectedGoal = ref(goalOptions.includes(storedGoal) ? storedGoal : '')
-const customDirection = ref(directionOptions.includes(storedDirection) ? '' : storedDirection)
-const customGoal = ref(goalOptions.includes(storedGoal) ? '' : storedGoal)
-const resolvedDirection = computed(() => customDirection.value || selectedDirection.value)
-const resolvedGoal = computed(() => customGoal.value || selectedGoal.value)
-const canContinue = computed(() => Boolean(selectedIdentity.value && resolvedDirection.value && resolvedGoal.value))
+const canContinue = computed(() => Boolean(selectedIdentity.value))
 
 const identityOptions = [
   '在校大学生',
@@ -95,14 +88,26 @@ const identityOptions = [
   '自由职业者',
 ]
 
+identityOptions.splice(
+  0,
+  identityOptions.length,
+  '在校大学生',
+  '高职 / 中职学生',
+  '应届毕业生',
+  '一线技术人员',
+  '工程师 / 开发者',
+  '产品 / 项目管理者',
+  '教师 / 培训师',
+  '企业管理者',
+  '想转行的学习者',
+  '自由职业者'
+)
+
 const continueToStudy = () => {
   if (!canContinue.value) return
-  learningState.identity = selectedIdentity.value
-  learningState.direction = resolvedDirection.value
-  learningState.goal = resolvedGoal.value
-  persistLearningProfile()
+  localStorage.setItem('learnmate_identity', selectedIdentity.value)
   window.dispatchEvent(new CustomEvent('learnmate:identity-selected', { detail: selectedIdentity.value }))
-  router.push('/onboarding/diagnosis')
+  router.push('/learnmate-chat')
 }
 </script>
 
@@ -155,15 +160,58 @@ const continueToStudy = () => {
   animation: panelIn 0.8s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.identity-wash {
+  position: absolute;
+  inset: -18%;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.62;
+  filter: blur(96px);
+  background:
+    radial-gradient(ellipse at 35% 30%, rgba(209, 239, 148, 0.34), transparent 46%),
+    radial-gradient(ellipse at 72% 72%, rgba(82, 147, 104, 0.38), transparent 52%);
+  animation: washDrift 12s ease-in-out infinite alternate;
+}
+
+.identity-word {
+  position: absolute;
+  inset: 8% 0 0;
+  z-index: -2;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  color: rgba(173, 198, 178, 0.28);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(116px, 17.5vw, 282px);
+  line-height: 0.76;
+  user-select: none;
+  pointer-events: none;
+}
+
+.identity-word span {
+  display: block;
+  transform: scaleX(1.08);
+}
+
 .identity-panel h1 {
   margin: 0;
   color: #f3f0e7;
-  font-size: clamp(20px, 2.4vw, 30px);
+  font-size: 0;
   font-weight: 500;
   font-family: "Smiley Sans", Georgia, serif;
   letter-spacing: 0.04em;
   line-height: 1;
   text-align: left;
+}
+
+.identity-panel h1::after {
+  content: "Choose Your Identity";
+  display: block;
+  font-size: clamp(20px, 2.4vw, 30px);
+}
+
+.direction-fields {
+  display: none;
 }
 
 .direction-fields {
@@ -327,6 +375,10 @@ const continueToStudy = () => {
 .identity-option:nth-child(8) { animation-delay: 0.28s; }
 .identity-option:nth-child(9) { animation-delay: 0.32s; }
 .identity-option:nth-child(10) { animation-delay: 0.36s; }
+
+.direction-fields {
+  display: none !important;
+}
 
 @keyframes panelIn {
   from { opacity: 0; transform: translateY(18px); }

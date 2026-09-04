@@ -60,7 +60,7 @@
         <span class="platform-edge"></span>
       </div>
 
-      <router-link class="enter-link" to="/onboarding/direction">
+      <router-link class="enter-link" to="/select-identity">
         <span>LET'S GO</span>
         <span class="enter-arrow" aria-hidden="true">↗</span>
       </router-link>

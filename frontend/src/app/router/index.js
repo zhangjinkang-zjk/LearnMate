@@ -2,6 +2,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 
 import HomePage from '@/pages/home/HomePage.vue'
 import DirectionSetupPage from '@/pages/onboarding/DirectionSetupPage.vue'
+import LearnmateChatView from '@/features/learnmateFlow/LearnmateChatView.vue'
 import DiagnosisPage from '@/pages/onboarding/DiagnosisPage.vue'
 import DiagnosisResultPage from '@/pages/onboarding/DiagnosisResultPage.vue'
 import OverviewPage from '@/pages/learning/OverviewPage.vue'
@@ -19,7 +20,8 @@ const router = createRouter({
     { path: '/', name: 'home', component: HomePage, meta: { layout: 'immersive' } },
     { path: '/login', name: 'login', component: LoginPage, meta: { layout: 'immersive' } },
     { path: '/onboarding/direction', name: 'directionSetup', component: DirectionSetupPage, meta: { layout: 'immersive', requiresAuth: true } },
-    { path: '/select-identity', redirect: '/onboarding/direction' },
+    { path: '/select-identity', name: 'identitySelect', component: DirectionSetupPage, meta: { layout: 'immersive' } },
+    { path: '/learnmate-chat', name: 'learnmateChat', component: LearnmateChatView, meta: { layout: 'immersive' } },
     { path: '/onboarding/diagnosis', name: 'diagnosis', component: DiagnosisPage, meta: { layout: 'immersive', requiresAuth: true } },
     { path: '/onboarding/diagnosis/result', name: 'diagnosisResult', component: DiagnosisResultPage, meta: { layout: 'immersive', requiresAuth: true } },
     { path: '/learning/overview', name: 'learningOverview', component: OverviewPage, meta: { requiresAuth: true } },
