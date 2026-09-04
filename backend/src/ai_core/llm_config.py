@@ -14,7 +14,12 @@ load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 logger = logging.getLogger(__name__)
 
-api_key = os.getenv("api_key")
+# 通用生成使用独立的 AI_API_KEY，未配置时回退到项目原有的 api_key。
+# MiMo 密钥只供视觉模型使用，避免不同供应商之间串用密钥。
+api_key = (
+    os.getenv("AI_API_KEY")
+    or os.getenv("api_key")
+)
 
 def _build_chat_model(**kwargs) -> ChatOpenAI | None:
     key = kwargs.get("api_key")
@@ -35,7 +40,7 @@ _raw_llm = _build_chat_model(
 
 # 多模态 LLM（MiMo，用于视觉审查 PPT 截图等）
 _vision_llm = _build_chat_model(
-    model=os.getenv("VISION_MODEL", "MiMo-V2.5"),
+    model=os.getenv("VISION_MODEL", "mimo-v2.5"),
     api_key=os.getenv("VISION_API_KEY", api_key),
     base_url=os.getenv("VISION_BASE_URL", "https://api.xiaomimimo.com/v1"),
     temperature=0.3,

@@ -128,6 +128,10 @@ const codeCountdown = ref(0)
 const errorMessage = ref('')
 const successMessage = ref('')
 let codeTimer = null
+let captchaScriptPromise = null
+
+const captchaAppId = String(import.meta.env.VITE_TENCENT_CAPTCHA_APP_ID || '').trim()
+const captchaEnabled = String(import.meta.env.VITE_TENCENT_CAPTCHA_ENABLED || 'false').trim().toLowerCase() === 'true'
 
 const form = reactive({
   account: '',
@@ -171,6 +175,53 @@ const toggleMode = () => {
 }
 
 const isValidEmail = email => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim())
+
+const loadTencentCaptcha = () => {
+  if (!captchaAppId) {
+    throw new Error('验证码尚未配置，请联系管理员')
+  }
+  if (window.TencentCaptcha) return Promise.resolve()
+  if (captchaScriptPromise) return captchaScriptPromise
+
+  captchaScriptPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-zhiban-tencent-captcha]')
+    if (existing) {
+      existing.addEventListener('load', resolve, { once: true })
+      existing.addEventListener('error', () => reject(new Error('验证码加载失败')), { once: true })
+      return
+    }
+    const script = document.createElement('script')
+    script.src = 'https://turing.captcha.qcloud.com/TJCaptcha.js'
+    script.async = true
+    script.dataset.zhibanTencentCaptcha = 'true'
+    script.onload = () => window.TencentCaptcha ? resolve() : reject(new Error('验证码加载失败'))
+    script.onerror = () => reject(new Error('验证码加载失败，请检查网络后重试'))
+    document.head.appendChild(script)
+  })
+  return captchaScriptPromise.catch(error => {
+    captchaScriptPromise = null
+    throw error
+  })
+}
+
+const requestCaptchaTicket = async () => {
+  if (!captchaEnabled) return {}
+  await loadTencentCaptcha()
+  return new Promise((resolve, reject) => {
+    const captcha = new window.TencentCaptcha(captchaAppId, result => {
+      if (Number(result?.ret) === 0 && result.ticket && result.randstr) {
+        if (result.errorCode) {
+          reject(new Error(result.errorMessage || '验证码服务异常，请稍后重试'))
+          return
+        }
+        resolve({ captcha_ticket: result.ticket, captcha_randstr: result.randstr })
+        return
+      }
+      reject(new Error('请完成图形验证'))
+    }, { userLanguage: 'zh-cn' })
+    captcha.show()
+  })
+}
 
 const validateForm = () => {
   if (!form.account.trim() || !form.password.trim()) {
@@ -258,9 +309,11 @@ const sendRegisterCode = async () => {
 
   codeLoading.value = true
   try {
+    const captcha = await requestCaptchaTicket()
     const result = await sendEmailCode({
       email: form.email.trim(),
-      purpose: 'register'
+      purpose: 'register',
+      ...captcha,
     })
     checkResponse(result)
     successMessage.value = '验证码已发送，请查看邮箱'
@@ -290,7 +343,7 @@ const handleSubmit = async () => {
         username: form.account.trim(),
         email: form.email.trim(),
         password: form.password,
-        code: form.code.trim()
+        code: form.code.trim(),
       })
 
       checkResponse(result)

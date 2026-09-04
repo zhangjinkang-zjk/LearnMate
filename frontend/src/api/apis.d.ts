@@ -8,7 +8,12 @@ export function login(data: unknown): Promise<unknown>;
 
 export function register(data: unknown): Promise<unknown>;
 
-export function sendEmailCode(data: { email: string; purpose?: 'login' | 'register' | 'bind' | string }): Promise<unknown>;
+export function sendEmailCode(data: {
+  email: string;
+  purpose?: 'login' | 'register' | 'bind' | string;
+  captcha_ticket?: string;
+  captcha_randstr?: string;
+}): Promise<unknown>;
 
 export function registerByEmail(data: {
   username: string;

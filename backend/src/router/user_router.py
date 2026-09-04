@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Depends, Body, UploadFile, File, R
 from backend.src.service.user import service as user_service
 from backend.src.utils.jwt import create_access_token, get_user_id_from_token
 from backend.src.utils.redis_client import check_rate_limit_key
+from backend.src.utils.tencent_captcha import captcha_required, verify_ticket
 from backend.src.schemas.user import Create_User, Login_User, Update_User_Password, Update_User_Information, Delete_User, SendEmailCode, RegisterByEmail, LoginByEmail
 
 router = APIRouter(prefix = "/user", tags = ["用户"])
@@ -36,10 +37,18 @@ async def _guard_value(value: str, scope: str, limit: int, window: int, label: s
     if not await check_rate_limit_key(scope, f"value:{_identity(value)}", limit, window):
         raise HTTPException(status_code=429, detail=f"{label}过于频繁，请稍后再试")
 
+
+async def _guard_captcha(request: Request, ticket: str | None, randstr: str | None):
+    if not captcha_required():
+        return
+    if not await verify_ticket(ticket, randstr, _client_ip(request)):
+        raise HTTPException(status_code=403, detail="请先完成图形验证")
+
 @router.post("/create_user")
 async def create(data : Create_User, request: Request):
     # 兼容旧注册接口，但限制匿名批量创建；新前端使用邮箱验证码注册。
     await _guard_anonymous(request, "auth:legacy-register", 5, 600, "注册")
+    await _guard_captcha(request, data.captcha_ticket, data.captcha_randstr)
     try :
         user, msg = await user_service.create_user(data)
         if user is not None:
@@ -84,20 +93,22 @@ async def login(data : Login_User, request: Request):
                 }
             }
     except HTTPException:
-        raise HTTPException(500, "服务器错误")
+        raise
 
 
 @router.post("/send_email_code")
 async def send_email_code(request: Request, data: SendEmailCode = Body(...)):
     await _guard_anonymous(request, "auth:email-code-ip", 10, 600, "验证码发送")
     await _guard_value(data.email, "auth:email-code-email", 5, 600, "验证码发送")
+    if data.purpose == "register":
+        await _guard_captcha(request, data.captcha_ticket, data.captcha_randstr)
     try:
         _, msg = await user_service.send_email_code(data.email, data.purpose)
         if msg != "success":
             return {"code": 400, "msg": msg}
         return {"code": 200, "msg": "验证码已发送"}
     except HTTPException:
-        raise HTTPException(500, "服务器错误")
+        raise
 
 
 @router.post("/register_by_email")
@@ -114,7 +125,7 @@ async def register_by_email(request: Request, data: RegisterByEmail = Body(...))
             "data": {"id": create_access_token(user.id, user.role or "user"), "username": user.username},
         }
     except HTTPException:
-        raise HTTPException(500, "服务器错误")
+        raise
 
 
 @router.post("/login_by_email")
@@ -136,7 +147,7 @@ async def login_by_email(request: Request, data: LoginByEmail = Body(...)):
             },
         }
     except HTTPException:
-        raise HTTPException(500, "服务器错误")
+        raise
 
 
 @router.get("/read_user")
@@ -166,7 +177,7 @@ async def read(user_id : int = Depends(get_user_id_from_token)):
                 }
             }
     except HTTPException:
-        raise HTTPException(500, "服务器错误")
+        raise
     
 @router.post("/update_user/information")
 async def update_information(user_id : int = Depends(get_user_id_from_token), data : Update_User_Information = Body(...)):
@@ -261,4 +272,4 @@ async def delete(user_id : int = Depends(get_user_id_from_token), data : Delete_
                 }
             }
     except HTTPException:
-        raise HTTPException(500, "服务器错误")
+        raise

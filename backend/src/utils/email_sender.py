@@ -7,6 +7,7 @@ import ssl
 from contextlib import suppress
 from email.mime.text import MIMEText
 from email.header import Header
+from email.utils import formataddr
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,8 @@ def send_email(to_email: str, subject: str, body: str) -> bool:
         return False
 
     msg = MIMEText(body, "plain", "utf-8")
-    msg["From"] = cfg["user"]
+    # 使用标准 RFC 5322 地址格式，避免 QQ 邮箱拒绝非标准 From 头。
+    msg["From"] = formataddr(("知伴", cfg["user"]))
     msg["To"] = to_email
     msg["Subject"] = Header(subject, "utf-8")
 

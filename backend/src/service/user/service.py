@@ -240,7 +240,7 @@ async def send_email_code(email: str, purpose: str = "login"):
 
     ok = send_email(
         to_email=email,
-        subject="智伴 - 邮箱验证码",
+        subject="知伴 - 邮箱验证码",
         body=f"您的验证码是：{code}，有效期 10 分钟。如非本人操作，请忽略。",
     )
     if not ok:
