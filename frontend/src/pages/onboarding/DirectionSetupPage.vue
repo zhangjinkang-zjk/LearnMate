@@ -19,12 +19,26 @@
           <select v-model="selectedDirection">
             <option v-for="option in directionOptions" :key="option" :value="option">{{ option }}</option>
           </select>
+          <input
+            v-model.trim="customDirection"
+            type="text"
+            maxlength="80"
+            placeholder="或输入自定义学习方向"
+            aria-label="自定义学习方向"
+          />
         </label>
         <label class="direction-field">
           <span>你希望达成什么</span>
           <select v-model="selectedGoal">
             <option v-for="option in goalOptions" :key="option" :value="option">{{ option }}</option>
           </select>
+          <input
+            v-model.trim="customGoal"
+            type="text"
+            maxlength="120"
+            placeholder="或输入自定义目标"
+            aria-label="自定义学习目标"
+          />
         </label>
       </div>
 
@@ -61,9 +75,15 @@ import { learningState, persistLearningProfile } from '@/entities/learning/learn
 
 const router = useRouter()
 const selectedIdentity = ref(localStorage.getItem('learnmate_identity') || '')
-const selectedDirection = ref(localStorage.getItem('learnmate_direction') || directionOptions[0])
-const selectedGoal = ref(localStorage.getItem('learnmate_goal') || goalOptions[0])
-const canContinue = computed(() => Boolean(selectedIdentity.value && selectedDirection.value && selectedGoal.value))
+const storedDirection = localStorage.getItem('learnmate_direction') || ''
+const storedGoal = localStorage.getItem('learnmate_goal') || ''
+const selectedDirection = ref(directionOptions.includes(storedDirection) ? storedDirection : directionOptions[0])
+const selectedGoal = ref(goalOptions.includes(storedGoal) ? storedGoal : goalOptions[0])
+const customDirection = ref(directionOptions.includes(storedDirection) ? '' : storedDirection)
+const customGoal = ref(goalOptions.includes(storedGoal) ? '' : storedGoal)
+const resolvedDirection = computed(() => customDirection.value || selectedDirection.value)
+const resolvedGoal = computed(() => customGoal.value || selectedGoal.value)
+const canContinue = computed(() => Boolean(selectedIdentity.value && resolvedDirection.value && resolvedGoal.value))
 
 const identityOptions = [
   '在校大学生',
@@ -81,8 +101,8 @@ const identityOptions = [
 const continueToStudy = () => {
   if (!canContinue.value) return
   learningState.identity = selectedIdentity.value
-  learningState.direction = selectedDirection.value
-  learningState.goal = selectedGoal.value
+  learningState.direction = resolvedDirection.value
+  learningState.goal = resolvedGoal.value
   persistLearningProfile()
   window.dispatchEvent(new CustomEvent('learnmate:identity-selected', { detail: selectedIdentity.value }))
   router.push('/onboarding/diagnosis')
@@ -236,7 +256,19 @@ const continueToStudy = () => {
   outline: none;
 }
 
-.direction-field select:focus { border-color: #e2f452; }
+.direction-field input {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid rgba(243, 240, 231, 0.2);
+  border-radius: 5px;
+  background: rgba(10, 31, 22, 0.34);
+  color: #f3f0e7;
+  outline: none;
+}
+
+.direction-field input::placeholder { color: rgba(243, 240, 231, 0.46); }
+.direction-field select:focus,
+.direction-field input:focus { border-color: #e2f452; }
 
 .identity-grid {
   width: min(700px, 100%);
