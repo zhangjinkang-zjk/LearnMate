@@ -42,7 +42,6 @@
           <div class="recommendation-block"><span class="block-label">完成标志</span><p>{{ recommendation.criteria }}</p></div>
           <RouterLink v-if="recommendation.to" class="button button--primary recommendation-action" :to="recommendation.to">{{ recommendation.actionLabel }} <span>→</span></RouterLink>
         </section>
-        <section class="surface surface-pad next-node-panel"><p class="eyebrow">路径进度</p><div class="next-node-heading"><h2>{{ path.hasPath ? '接下来会学' : '正在生成' }}</h2><span class="muted">{{ path.hasPath ? path.stage : '正在生成' }}</span></div><p class="muted">{{ path.currentNode || '正在生成下一步学习内容…' }}</p><RouterLink v-if="path.hasPath" class="text-link" to="/learning/navigation">查看完整路径 →</RouterLink></section>
       </aside>
     </div>
   </div>
@@ -62,6 +61,29 @@ const mastery = ref([])
 const guidance = ref('')
 const unwrap = (response) => response?.data?.data ?? response?.data ?? null
 
+function parseGuidanceSections(value) {
+  const sections = {}
+  let current = ''
+  String(value || '').split(/\r?\n/).forEach((rawLine) => {
+    const line = rawLine.trim()
+    if (!line) return
+    const heading = line.match(/^##\s+(.+)$/)
+    if (heading) {
+      current = heading[1].trim()
+      sections[current] = []
+      return
+    }
+    if (current && line.startsWith('-')) sections[current].push(line.replace(/^-\s*/, '').trim())
+  })
+  return sections
+}
+
+const guidanceSections = computed(() => parseGuidanceSections(guidance.value))
+const abilityScores = computed(() => (guidanceSections.value['学习者能力分析'] || []).flatMap((line) => {
+  const match = line.match(/^(.+?):\s*(\d+(?:\.\d+)?)\s*分/)
+  return match ? [{ tag: match[1].trim(), score: Number(match[2]) }] : []
+}))
+
 const subjects = computed(() => path.nodes.map((node, index) => {
   const status = node.status || 'locked'
   const progress = status === 'completed' ? 100 : status === 'in_progress' ? 55 : status === 'unlocked' ? 15 : 0
@@ -69,21 +91,33 @@ const subjects = computed(() => path.nodes.map((node, index) => {
 }))
 
 const diagnosis = computed(() => {
-  const points = [...(stats.weakPoints || []), ...mastery.value.filter((item) => item.accuracy < 0.6).map((item) => ({ tag: item.knowledge_tag, accuracy: item.accuracy }))]
+  const radarWeakPoints = abilityScores.value.filter((item) => item.score < 50).map((item) => ({ tag: item.tag, accuracy: item.score / 100 }))
+  const points = [...(stats.weakPoints || []), ...mastery.value.filter((item) => item.accuracy < 0.6).map((item) => ({ tag: item.knowledge_tag, accuracy: item.accuracy })), ...radarWeakPoints]
   const unique = points.filter((item, index, all) => item.tag && all.findIndex((other) => other.tag === item.tag) === index).slice(0, 3)
   const scores = mastery.value.map((item) => Number(item.accuracy || 0)).filter(Boolean)
-  const score = path.diagnosis?.latest_score || (scores.length ? Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length * 100) : 0)
-  return { score, hasData: Boolean(path.diagnosis?.latest_score || scores.length || stats.examAnswered), weakPoints: unique.map((item) => ({ ...item, accuracy: Math.round(Number(item.accuracy || 0) * 100) })) }
+  const masteryScore = scores.length ? Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length * 100) : null
+  const radarScore = abilityScores.value.length ? Math.round(abilityScores.value.reduce((sum, item) => sum + item.score, 0) / abilityScores.value.length) : null
+  const storedScore = Number(path.diagnosis?.latest_score)
+  const score = Number.isFinite(storedScore) && storedScore > 0 ? storedScore : (masteryScore ?? radarScore ?? (Number.isFinite(storedScore) ? storedScore : null))
+  const hasData = score !== null || unique.length > 0 || stats.examAnswered > 0
+  return { score, hasData, weakPoints: unique.map((item) => ({ ...item, accuracy: Math.round(Number(item.accuracy || 0) * 100) })) }
 })
 
 const recommendation = computed(() => {
-  const needsDiagnosis = !path.hasPath && !diagnosis.value.hasData
-  const current = needsDiagnosis ? '正在生成' : (path.currentNode || (path.progress >= 100 ? '复盘已完成内容' : '当前学习节点'))
+  const strategyLines = guidanceSections.value['学习策略建议'] || []
+  const materialLines = guidanceSections.value['学习资料指导'] || []
+  const actionableLine = strategyLines.find((line) => !line.startsWith('建议难度配比')) || materialLines[0] || ''
   const weak = diagnosis.value.weakPoints[0]?.tag
-  const text = typeof guidance.value === 'string' ? guidance.value.trim() : ''
-  if (needsDiagnosis) return { title: current, guidance: '正在生成当前建议…', reason: '正在生成依据。', criteria: '正在生成完成标志。', to: '', actionLabel: '' }
-  if (!text) return { title: '正在生成', guidance: '正在生成当前建议…', reason: '正在生成依据。', criteria: '正在生成完成标志。', to: '', actionLabel: '' }
-  return { title: current, guidance: text, reason: weak ? `诊断显示“${weak}”仍是当前薄弱点，先处理它能减少后续迁移练习中的反复。` : '正在生成依据。', criteria: '正在生成完成标志。', to: path.nextAction?.type === 'quiz' ? '/learning/advanced' : '/learning/fundamentals', actionLabel: path.nextAction?.label || '开始当前节点' }
+  const title = weak ? `优先补强：${weak}` : (path.currentNode || '当前学习节点')
+  const hasRecommendation = Boolean(actionableLine)
+  return {
+    title: hasRecommendation ? title : '正在生成',
+    guidance: hasRecommendation ? actionableLine : '正在生成当前建议…',
+    reason: weak ? `诊断显示“${weak}”是当前薄弱点，先处理它可以减少后续练习中的反复。` : '正在生成依据。',
+    criteria: path.hasPath ? '完成当前节点并通过节点测验。' : '正在生成完成标志。',
+    to: hasRecommendation && path.nextAction?.type ? (path.nextAction.type === 'quiz' ? '/learning/advanced' : '/learning/fundamentals') : '',
+    actionLabel: path.nextAction?.label || '开始当前节点',
+  }
 })
 
 function formatDuration(seconds) { const value = Number(seconds || 0); if (value < 60) return `${value}秒`; const minutes = Math.round(value / 60); if (minutes < 60) return `${minutes}分钟`; return `${(minutes / 60).toFixed(1)}小时` }
@@ -111,6 +145,6 @@ onMounted(loadOverview)
 </script>
 
 <style scoped>
-.overview-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }.overview-main, .overview-aside { display: grid; gap: 18px; min-width: 0; }.loading-state, .empty-state { color: var(--muted); font-size: 13px; }.empty-state { display: grid; gap: 8px; padding: 8px 0 2px; line-height: 1.65; }.empty-state strong { color: var(--ink); font-size: 14px; }.section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }.section-heading--compact { align-items: center; margin-bottom: 16px; }.section-heading h2, .next-node-heading h2 { margin: 0; font-size: 19px; letter-spacing: -.01em; }.section-heading .eyebrow { margin-bottom: 6px; }.goal-progress { color: var(--accent-deep); font-size: 24px; font-weight: 800; }.goal-copy { margin: 0 0 16px; font-size: 13px; }.goal-meta { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; color: var(--muted); font-size: 11px; }.subject-list { display: grid; gap: 2px; }.subject-row { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(150px, 1.2fr) 74px; align-items: center; gap: 18px; min-height: 62px; padding: 11px 0; border-top: 1px solid var(--line); }.subject-row:first-child { border-top: 0; }.subject-copy { display: grid; gap: 5px; min-width: 0; }.subject-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }.subject-copy span { font-size: 11px; }.subject-progress { display: flex; align-items: center; gap: 9px; min-width: 0; }.subject-progress .progress-track { flex: 1; }.subject-progress > span { width: 34px; color: var(--muted); font-size: 11px; text-align: right; }.subject-time { color: var(--muted); font-size: 11px; text-align: right; }.diagnosis-summary { display: flex; align-items: center; gap: 28px; }.diagnosis-score { display: grid; gap: 4px; min-width: 112px; }.diagnosis-score strong { color: var(--accent-deep); font-size: 32px; letter-spacing: -.04em; }.diagnosis-score span, .diagnosis-stats span { font-size: 11px; }.diagnosis-stats { display: grid; gap: 8px; }.diagnosis-stats strong { color: var(--ink); font-size: 15px; }.weak-points { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 20px; font-size: 11px; }.weak-point { padding: 5px 8px; border: 1px solid #e2e9d5; border-radius: 4px; background: #f8fbf2; color: var(--accent-deep); }.diagnosis-note { margin: 20px 0 0; font-size: 12px; }.text-link { color: var(--accent-deep); font-size: 12px; font-weight: 800; text-decoration: none; white-space: nowrap; }.recommendation-panel { border-color: #ccd9b8; background: #f8fbf2; }.recommendation-mark { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 50%; background: var(--accent); color: var(--accent-deep); font-size: 18px; font-weight: 800; }.recommendation-copy { margin: 8px 0 22px; color: var(--ink); font-size: 14px; line-height: 1.75; }.recommendation-block { padding: 14px 0; border-top: 1px solid #dce7cc; }.block-label { color: var(--accent-deep); font-size: 11px; font-weight: 800; }.recommendation-block p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }.recommendation-action { margin-top: 20px; width: 100%; }.recommendation-action span { margin-left: 8px; }.next-node-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }.next-node-panel > p:not(.eyebrow) { margin: 13px 0 15px; font-size: 13px; line-height: 1.7; }
+.overview-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }.overview-main, .overview-aside { display: grid; gap: 18px; min-width: 0; }.loading-state, .empty-state { color: var(--muted); font-size: 13px; }.empty-state { display: grid; gap: 8px; padding: 8px 0 2px; line-height: 1.65; }.empty-state strong { color: var(--ink); font-size: 14px; }.section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }.section-heading--compact { align-items: center; margin-bottom: 16px; }.section-heading h2 { margin: 0; font-size: 19px; letter-spacing: -.01em; }.section-heading .eyebrow { margin-bottom: 6px; }.goal-progress { color: var(--accent-deep); font-size: 24px; font-weight: 800; }.goal-copy { margin: 0 0 16px; font-size: 13px; }.goal-meta { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; color: var(--muted); font-size: 11px; }.subject-list { display: grid; gap: 2px; }.subject-row { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(150px, 1.2fr) 74px; align-items: center; gap: 18px; min-height: 62px; padding: 11px 0; border-top: 1px solid var(--line); }.subject-row:first-child { border-top: 0; }.subject-copy { display: grid; gap: 5px; min-width: 0; }.subject-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }.subject-copy span { font-size: 11px; }.subject-progress { display: flex; align-items: center; gap: 9px; min-width: 0; }.subject-progress .progress-track { flex: 1; }.subject-progress > span { width: 34px; color: var(--muted); font-size: 11px; text-align: right; }.subject-time { color: var(--muted); font-size: 11px; text-align: right; }.diagnosis-summary { display: flex; align-items: center; gap: 28px; }.diagnosis-score { display: grid; gap: 4px; min-width: 112px; }.diagnosis-score strong { color: var(--accent-deep); font-size: 32px; letter-spacing: -.04em; }.diagnosis-score span, .diagnosis-stats span { font-size: 11px; }.diagnosis-stats { display: grid; gap: 8px; }.diagnosis-stats strong { color: var(--ink); font-size: 15px; }.weak-points { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 20px; font-size: 11px; }.weak-point { padding: 5px 8px; border: 1px solid #e2e9d5; border-radius: 4px; background: #f8fbf2; color: var(--accent-deep); }.diagnosis-note { margin: 20px 0 0; font-size: 12px; }.text-link { color: var(--accent-deep); font-size: 12px; font-weight: 800; text-decoration: none; white-space: nowrap; }.recommendation-panel { border-color: #ccd9b8; background: #f8fbf2; }.recommendation-mark { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 50%; background: var(--accent); color: var(--accent-deep); font-size: 18px; font-weight: 800; }.recommendation-copy { margin: 8px 0 22px; color: var(--ink); font-size: 14px; line-height: 1.75; }.recommendation-block { padding: 14px 0; border-top: 1px solid #dce7cc; }.block-label { color: var(--accent-deep); font-size: 11px; font-weight: 800; }.recommendation-block p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }.recommendation-action { margin-top: 20px; width: 100%; }.recommendation-action span { margin-left: 8px; }
 @media (max-width: 960px) { .overview-layout { grid-template-columns: 1fr; } } @media (max-width: 620px) { .subject-row { grid-template-columns: 1fr; gap: 8px; padding: 14px 0; }.subject-time { text-align: left; }.goal-meta { display: grid; }.diagnosis-summary { align-items: flex-start; gap: 18px; } }
 </style>
