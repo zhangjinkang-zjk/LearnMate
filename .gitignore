@@ -44,6 +44,9 @@ dist/
 .nuxt/
 Ultralytics/
 
+# 本地素材抓取缓存（文件名过长且不参与构建）
+frontend/src/assets/homepic/*Google 搜索*
+
 # === 日志 ===
 *.log
 logs/
