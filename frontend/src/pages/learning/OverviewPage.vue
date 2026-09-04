@@ -105,7 +105,8 @@ const diagnosis = computed(() => {
   const storedScore = Number(path.diagnosis?.latest_score)
   const score = Number.isFinite(storedScore) && storedScore > 0 ? storedScore : (masteryScore ?? radarScore ?? (Number.isFinite(storedScore) ? storedScore : null))
   const hasData = score !== null || unique.length > 0 || stats.examAnswered > 0
-  return { score, hasData, weakPoints: unique.map((item) => ({ ...item, accuracy: Math.round(Number(item.accuracy || 0) * 100) })) }
+  const stage = score === null ? '正在生成' : score >= 85 ? '应用进阶期' : score >= 60 ? '基础巩固期' : '基础建立期'
+  return { score, stage, hasData, weakPoints: unique.map((item) => ({ ...item, accuracy: Math.round(Number(item.accuracy || 0) * 100) })) }
 })
 
 const recommendation = computed(() => {
@@ -114,12 +115,14 @@ const recommendation = computed(() => {
   const actionableLine = strategyLines.find((line) => !line.startsWith('建议难度配比')) || materialLines[0] || ''
   const weak = diagnosis.value.weakPoints[0]?.tag
   const title = weak ? `优先补强：${weak}` : (path.currentNode || '当前学习节点')
-  const hasRecommendation = Boolean(actionableLine)
+  const hasRecommendation = Boolean(path.currentNode || actionableLine)
+  const action = path.currentNode ? `完成“${path.currentNode}”练习` : actionableLine
   return {
     title: hasRecommendation ? title : '正在生成',
-    guidance: hasRecommendation ? actionableLine : '正在生成当前建议…',
+    judgement: weak ? `当前主要短板是 ${weak} 能力` : '正在生成系统判断…',
+    guidance: hasRecommendation ? action : '正在生成推荐行动…',
     reason: weak ? `诊断显示“${weak}”是当前薄弱点，先处理它可以减少后续练习中的反复。` : '正在生成依据。',
-    criteria: path.hasPath ? '完成当前节点并通过节点测验。' : '正在生成完成标志。',
+    criteria: path.currentNode ? `能够解释“${path.currentNode}”的关键方法，并通过节点测验。` : '正在生成完成标准。',
     to: hasRecommendation && path.nextAction?.type ? (path.nextAction.type === 'quiz' ? '/learning/advanced' : '/learning/fundamentals') : '',
     actionLabel: path.nextAction?.label || '开始当前节点',
   }
@@ -151,5 +154,5 @@ onMounted(loadOverview)
 
 <style scoped>
 .overview-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }.overview-main, .overview-aside { display: grid; gap: 18px; min-width: 0; }.loading-state, .empty-state { color: var(--muted); font-size: 13px; }.empty-state { display: grid; gap: 8px; padding: 8px 0 2px; line-height: 1.65; }.empty-state strong { color: var(--ink); font-size: 14px; }.section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }.section-heading--compact { align-items: center; margin-bottom: 16px; }.section-heading h2 { margin: 0; font-size: 19px; letter-spacing: -.01em; }.section-heading .eyebrow { margin-bottom: 6px; }.goal-progress { color: var(--accent-deep); font-size: 24px; font-weight: 800; }.goal-copy { margin: 0 0 16px; font-size: 13px; }.goal-meta { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; color: var(--muted); font-size: 11px; }.subject-list { display: grid; gap: 2px; }.subject-row { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(150px, 1.2fr) 74px; align-items: center; gap: 18px; min-height: 62px; padding: 11px 0; border-top: 1px solid var(--line); }.subject-row:first-child { border-top: 0; }.subject-copy { display: grid; gap: 5px; min-width: 0; }.subject-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }.subject-copy span { font-size: 11px; }.subject-progress { display: flex; align-items: center; gap: 9px; min-width: 0; }.subject-progress .progress-track { flex: 1; }.subject-progress > span { width: 34px; color: var(--muted); font-size: 11px; text-align: right; }.subject-time { color: var(--muted); font-size: 11px; text-align: right; }.diagnosis-summary { display: flex; align-items: center; gap: 28px; }.diagnosis-score { display: grid; gap: 4px; min-width: 112px; }.diagnosis-score strong { color: var(--accent-deep); font-size: 32px; letter-spacing: -.04em; }.diagnosis-score span, .diagnosis-stats span { font-size: 11px; }.diagnosis-stats { display: grid; gap: 8px; }.diagnosis-stats strong { color: var(--ink); font-size: 15px; }.weak-points { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 20px; font-size: 11px; }.weak-point { padding: 5px 8px; border: 1px solid #e2e9d5; border-radius: 4px; background: #f8fbf2; color: var(--accent-deep); }.diagnosis-note { margin: 20px 0 0; font-size: 12px; }.text-link { color: var(--accent-deep); font-size: 12px; font-weight: 800; text-decoration: none; white-space: nowrap; }.recommendation-panel { border-color: #ccd9b8; background: #f8fbf2; }.recommendation-mark { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 50%; background: var(--accent); color: var(--accent-deep); font-size: 18px; font-weight: 800; }.recommendation-copy { margin: 8px 0 22px; color: var(--ink); font-size: 14px; line-height: 1.75; }.recommendation-block { padding: 14px 0; border-top: 1px solid #dce7cc; }.block-label { color: var(--accent-deep); font-size: 11px; font-weight: 800; }.recommendation-block p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }.recommendation-action { margin-top: 20px; width: 100%; }.recommendation-action span { margin-left: 8px; }
-@media (max-width: 960px) { .overview-layout { grid-template-columns: 1fr; } } @media (max-width: 620px) { .subject-row { grid-template-columns: 1fr; gap: 8px; padding: 14px 0; }.subject-time { text-align: left; }.goal-meta { display: grid; }.diagnosis-summary { align-items: flex-start; gap: 18px; } }
+.status-progress { color: var(--accent-deep); font-size: 24px; font-weight: 800; }.status-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-bottom: 18px; }.status-item { display: grid; gap: 6px; }.status-item strong { color: var(--ink); font-size: 17px; }.status-meta { margin: 10px 0 0; color: var(--muted); font-size: 11px; }.subject-header { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(150px, 1.2fr) 74px; gap: 18px; padding: 0 0 8px; color: var(--muted); font-size: 10px; }.recommendation-block--first { padding-top: 0; border-top: 0; }.recommendation-block--first p { color: var(--ink); font-size: 14px; }.recommendation-panel { min-height: 100%; } @media (max-width: 960px) { .overview-layout { grid-template-columns: 1fr; } } @media (max-width: 620px) { .status-grid { grid-template-columns: 1fr; gap: 12px; }.subject-header { grid-template-columns: 1fr 1fr 74px; gap: 8px; }.subject-row { grid-template-columns: 1fr 1fr 74px; gap: 8px; padding: 14px 0; }.subject-time { text-align: right; }.goal-meta { display: grid; }.diagnosis-summary { align-items: flex-start; gap: 18px; } }
 </style>
