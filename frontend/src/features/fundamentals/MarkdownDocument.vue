@@ -12,7 +12,19 @@
     </header>
 
     <Transition name="page-turn" mode="out-in">
-      <div v-if="content" :key="`page-${currentPage}`" class="markdown-body document-page" v-html="renderedContent"></div>
+      <DocumentAnnotator
+        v-if="content"
+        :key="`page-${currentPage}`"
+        class="markdown-body document-page"
+        :html="renderedContent"
+        :text="currentPageContent"
+        :page="currentPage"
+        :annotations="annotations"
+        :annotatable="annotatable"
+        @create="emit('create-note', $event)"
+        @update="(id, payload) => emit('update-note', id, payload)"
+        @delete="emit('delete-note', $event)"
+      />
       <div v-else key="empty" class="document-empty">
         <FileText :size="24" stroke-width="1.5" />
         <strong>本章文档还没有准备好</strong>
@@ -41,6 +53,7 @@
 import { computed, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, FileText } from 'lucide-vue-next'
 import { renderMarkdown } from '@/shared/lib/markdown'
+import DocumentAnnotator from './DocumentAnnotator.vue'
 
 const props = defineProps({
   title: { type: String, default: '' },
@@ -51,8 +64,11 @@ const props = defineProps({
   wide: { type: Boolean, default: false },
   paginate: { type: Boolean, default: false },
   showTitle: { type: Boolean, default: true },
+  annotatable: { type: Boolean, default: false },
+  annotations: { type: Array, default: () => [] },
 })
 
+const emit = defineEmits(['create-note', 'update-note', 'delete-note'])
 const currentPage = ref(0)
 const pages = computed(() => props.paginate ? splitDocumentPages(props.content, props.title) : [props.content])
 const pageCount = computed(() => Math.max(1, pages.value.length))

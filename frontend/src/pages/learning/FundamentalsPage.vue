@@ -170,6 +170,11 @@
                 :content="documentContent"
                 :tags="activeNode.knowledge_tags || []"
                 :chapter-number="activeNodeIndex + 1"
+                annotatable
+                :annotations="documentAnnotations"
+                @create-note="createDocumentAnnotation"
+                @update-note="updateDocumentAnnotation"
+                @delete-note="deleteDocumentAnnotation"
                 empty-message="本章文档尚未生成。"
               >
                 <template #pagination-action="{ isLastPage }">
@@ -323,6 +328,7 @@ const activeNodeId = ref(null)
 const nodeDetail = ref(null)
 const documentResource = ref(null)
 const documentContent = ref('')
+const documentAnnotations = ref([])
 const pptResource = ref(null)
 const pptContent = ref('')
 const mindmapResource = ref(null)
@@ -366,6 +372,8 @@ const nextNode = computed(() => {
   return candidate && candidate.status !== 'locked' ? candidate : null
 })
 const estimatedReadMinutes = computed(() => Math.max(3, Math.ceil(documentContent.value.replace(/\s/g, '').length / 420)))
+const knowledgeContent = computed(() => extractDocumentSection(documentContent.value, ['知识点', '概念', '原理']) || '')
+const exampleContent = computed(() => extractDocumentSection(documentContent.value, ['示例', '例子', '实践', 'example']) || '')
 const resourceStatusLabel = computed(() => {
   if (isResourceLoading.value) return '正在准备本章'
   if (documentError.value) return '主讲文档异常'
@@ -861,6 +869,7 @@ async function loadActiveNode() {
   nodeDetail.value = null
   documentResource.value = null
   documentContent.value = ''
+  documentAnnotations.value = []
   pptResource.value = null
   pptContent.value = ''
   mindmapResource.value = null
@@ -891,7 +900,10 @@ async function loadActiveNode() {
 
     if (documentSummary) {
       resourceLoadingMessage.value = '正在读取本章文档'
-      if (await hydrateResource('document', documentSummary, loadVersion)) markDocumentReady()
+      if (await hydrateResource('document', documentSummary, loadVersion)) {
+        void refreshDocumentAnnotations()
+        markDocumentReady()
+      }
     }
 
     // Always pass through the idempotent path-node resource endpoint.  The
@@ -930,7 +942,10 @@ async function loadActiveNode() {
             ? '主讲文档已准备，正在读取正文'
             : `${type === 'ppt' ? 'PPT' : '知识结构'} 已准备，正在同步`
           void hydrateResource(type, summary, loadVersion).then((loaded) => {
-            if (type === 'document' && loaded) markDocumentReady()
+            if (type === 'document' && loaded) {
+              void refreshDocumentAnnotations()
+              markDocumentReady()
+            }
           })
         }
         if (event?.type === 'error') {
@@ -953,7 +968,10 @@ async function loadActiveNode() {
         if (!documentContent.value && !documentError.value) {
           const refreshed = await fundamentalsApi.getNode(learningPath.value.path_id, activeNode.value.id).catch(() => null)
           const refreshedDocument = findResource(refreshed?.progress?.resources, 'document')
-          if (refreshedDocument && await hydrateResource('document', refreshedDocument, loadVersion)) markDocumentReady()
+          if (refreshedDocument && await hydrateResource('document', refreshedDocument, loadVersion)) {
+            void refreshDocumentAnnotations()
+            markDocumentReady()
+          }
         }
         if (!documentContent.value && !documentError.value) documentError.value = '资源生成完成，但没有找到本章主讲文档'
         if (!documentContent.value) isResourceLoading.value = false

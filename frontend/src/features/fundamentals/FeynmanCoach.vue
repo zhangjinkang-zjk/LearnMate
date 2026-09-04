@@ -70,7 +70,7 @@ const props = defineProps({
   resourceId: { type: [Number, String], default: null },
 })
 
-defineEmits(['end'])
+const emit = defineEmits(['end', 'recorded'])
 
 const draft = ref('')
 const errorMessage = ref('')
@@ -139,6 +139,7 @@ async function sendMessage() {
       }
     }, requestController.signal)
     if (!responseMessage.text.trim()) throw new Error('LearnMate 暂时没有返回有效追问')
+    emit('recorded')
   } catch (error) {
     if (error.name === 'AbortError') return
     if (responseMessage.text.trim()) responseMessage.text += '\n\n> 回复中断了，你可以继续补充。'

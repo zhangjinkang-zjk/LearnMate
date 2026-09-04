@@ -3,6 +3,7 @@
     <PageTitle
       eyebrow="FOUNDATION TEST"
       title="基础测试"
+      description="用题目测试和费曼反讲确认本章掌握情况，结果会同步到学习概览。"
     >
       <template #actions>
         <RouterLink class="button button--quiet" to="/learning/fundamentals">回到基础讲解</RouterLink>
@@ -54,6 +55,32 @@
         <span class="test-chapter-status">{{ canStartTest ? '可以开始测试' : '等待完成阅读' }}</span>
       </section>
 
+      <section v-if="activeNode" class="test-insights" aria-label="基础测试结果">
+        <article class="insight-card insight-card--score">
+          <span class="insight-label">最近答题</span>
+          <strong>{{ latestScoreLabel }}</strong>
+          <span>{{ answerSummary }}</span>
+        </article>
+        <article class="insight-card">
+          <span class="insight-label">错误知识点</span>
+          <strong>{{ testInsights.weakPoints.length || 0 }}</strong>
+          <div v-if="testInsights.weakPoints.length" class="insight-tags">
+            <span v-for="point in testInsights.weakPoints.slice(0, 3)" :key="point.tag">{{ point.tag }}</span>
+          </div>
+          <span v-else>完成答题后自动记录</span>
+        </article>
+        <article class="insight-card">
+          <span class="insight-label">掌握度</span>
+          <strong>{{ masteryLabel }}</strong>
+          <div class="insight-progress progress-track"><span :style="{ width: `${masteryValue}%` }"></span></div>
+        </article>
+        <article class="insight-card insight-card--next">
+          <span class="insight-label">下一步建议</span>
+          <strong>{{ nextSuggestionTitle }}</strong>
+          <span>{{ nextSuggestionReason }}</span>
+        </article>
+      </section>
+
       <section v-if="nodeError" class="surface surface-pad foundation-state foundation-state--error">
         <CircleAlert :size="22" />
         <div><strong>当前章节无法读取</strong><p>{{ nodeError }}</p></div>
@@ -75,7 +102,19 @@
         </RouterLink>
       </section>
 
-      <template v-else-if="activeNode">
+      <template v-if="activeNode">
+        <section class="test-entries" aria-label="基础测试入口">
+          <button class="entry-card" :class="{ 'is-active': activeTab === 'quiz' }" type="button" :disabled="!canStartTest" @click="activeTab = 'quiz'">
+            <span class="entry-icon"><SquareCheck :size="21" /></span>
+            <span class="entry-copy"><strong>题目测试</strong><small>提交答案，记录正确率和错误知识点</small></span>
+            <ArrowRight :size="18" />
+          </button>
+          <button class="entry-card" :class="{ 'is-active': activeTab === 'feynman' }" type="button" :disabled="!canStartTest" @click="activeTab = 'feynman'">
+            <span class="entry-icon"><MessageCircle :size="21" /></span>
+            <span class="entry-copy"><strong>费曼反讲</strong><small>用自己的话讲清本章，获得下一步追问</small></span>
+            <ArrowRight :size="18" />
+          </button>
+        </section>
         <div class="test-tabs" role="tablist" aria-label="基础测试方式">
           <button type="button" role="tab" :aria-selected="activeTab === 'quiz'" :class="{ 'is-active': activeTab === 'quiz' }" @click="activeTab = 'quiz'">
             <SquareCheck :size="16" /> 题目测试
@@ -88,7 +127,7 @@
         </div>
 
         <ChapterCheck
-          v-if="activeTab === 'quiz'"
+          v-if="canStartTest && activeTab === 'quiz'"
           :key="`quiz-${activeNode.id}`"
           :path-id="learningPath.path_id"
           :node-id="activeNode.id"
@@ -97,9 +136,10 @@
           :quiz-config="nodeDetail?.quiz_config || {}"
           @close="leaveTest"
           @passed="handlePassed"
+          @submitted="handleSubmitted"
         />
         <FeynmanCoach
-          v-else
+          v-else-if="canStartTest && activeTab === 'feynman'"
           :key="`feynman-${activeNode.id}`"
           :path-id="learningPath.path_id"
           :node-id="activeNode.id"
@@ -108,6 +148,7 @@
           :knowledge-tags="activeNode.knowledge_tags || []"
           :resource-id="documentResource?.resource_id || documentResource?.id"
           @end="leaveTest"
+          @recorded="refreshInsights"
         />
       </template>
 
@@ -118,12 +159,13 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { BookOpenText, CircleAlert, LoaderCircle, MessageCircle, Route, SquareCheck } from 'lucide-vue-next'
+import { ArrowRight, BookOpenText, CircleAlert, LoaderCircle, MessageCircle, Route, SquareCheck } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 import ChapterCheck from '@/features/fundamentals/ChapterCheck.vue'
 import FeynmanCoach from '@/features/fundamentals/FeynmanCoach.vue'
 import PageTitle from '@/shared/ui/PageTitle.vue'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
+import { learningApi } from '@/shared/api/learningApi'
 
 const route = useRoute()
 const router = useRouter()
@@ -138,11 +180,50 @@ const activeNodeId = ref(null)
 const nodeDetail = ref(null)
 const documentResource = ref(null)
 const chapterContent = ref('')
-const activeTab = ref('quiz')
+const activeTab = ref('')
+const latestResult = ref(null)
+const testInsights = ref({ totalAnswered: 0, totalCorrect: 0, masteryScore: null, weakPoints: [], recommendation: null })
 
 const testableNodes = computed(() => (learningPath.value?.nodes || []).filter((node) => node.status !== 'locked'))
 const activeNode = computed(() => testableNodes.value.find((node) => String(node.id) === String(activeNodeId.value)) || testableNodes.value[0] || null)
 const canStartTest = computed(() => Boolean(activeNode.value?.resources_viewed))
+const latestScore = computed(() => latestResult.value?.score ?? testInsights.value.masteryScore)
+const latestScoreLabel = computed(() => latestScore.value === null || latestScore.value === undefined ? '--' : `${Math.round(Number(latestScore.value))}%`)
+const answerSummary = computed(() => {
+  const total = latestResult.value?.total_questions ?? testInsights.value.totalAnswered
+  const correct = latestResult.value?.correct_count ?? testInsights.value.totalCorrect
+  if (latestResult.value && total) return `${correct} / ${total} 题正确`
+  return total ? `${total} 题已记录` : '完成一次题目测试后显示'
+})
+const masteryValue = computed(() => Math.max(0, Math.min(100, Number(latestScore.value || 0))))
+const masteryLabel = computed(() => latestScore.value === null || latestScore.value === undefined ? '--' : `${Math.round(Number(latestScore.value))}%`)
+const nextSuggestionTitle = computed(() => testInsights.value.recommendation?.action || (latestResult.value?.passed ? '进入下一章节' : '先补齐错误知识点'))
+const nextSuggestionReason = computed(() => testInsights.value.recommendation?.reason || (latestResult.value?.passed ? '本章已达到通过标准，可以继续学习。' : '完成测试后，系统会根据错误知识点给出建议。'))
+
+function unwrap(response) {
+  return response?.data?.data ?? response?.data ?? response ?? null
+}
+
+function applyInsights(payload) {
+  const overview = unwrap(payload) || {}
+  const summary = overview.summary || {}
+  const diagnosis = overview.diagnosis || {}
+  testInsights.value = {
+    totalAnswered: Number(diagnosis.answered || 0),
+    totalCorrect: Number(diagnosis.correct || 0),
+    masteryScore: summary.mastery_score ?? diagnosis.score ?? null,
+    weakPoints: Array.isArray(overview.blind_spots) ? overview.blind_spots : [],
+    recommendation: overview.recommendation || null,
+  }
+}
+
+async function refreshInsights() {
+  try {
+    applyInsights(await learningApi.getOverview())
+  } catch {
+    // The test result is already persisted; keep the last visible snapshot when refresh is unavailable.
+  }
+}
 
 function chooseNode(path) {
   // `node` is the canonical FundamentalsPage query key; accept the older
@@ -226,6 +307,7 @@ async function selectPath(pathId) {
       learningPath.value = selected
       chooseNode(selected)
       await loadNode()
+      activeTab.value = ''
       await router.replace({ query: { pathId: selected.path_id } })
     } else nodeError.value = '这条学习路径尚未加入，暂时不能进行基础测试。'
   } catch (error) {
@@ -239,11 +321,17 @@ async function selectNode(nodeId) {
   activeNodeId.value = nodeId
   nodeError.value = ''
   await loadNode()
+  activeTab.value = ''
   await router.replace({ query: { pathId: learningPath.value.path_id, node: nodeId } })
 }
 
 function leaveTest() {
   router.push({ path: '/learning/fundamentals', query: { pathId: learningPath.value?.path_id, node: activeNode.value?.id } })
+}
+
+function handleSubmitted(result) {
+  latestResult.value = result
+  refreshInsights()
 }
 
 function handlePassed() {
@@ -299,6 +387,30 @@ onMounted(loadPage)
 .foundation-test-page :deep(.chapter-check), .foundation-test-page :deep(.feynman-coach) { border-radius: 16px; }
 .foundation-test-page :deep(.option-item) { border-radius: 12px; }
 .test-notice { border-radius: 12px; background: #f4f8ed; }
+.test-insights { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 0 0 18px; }
+.insight-card { display: grid; min-width: 0; min-height: 118px; align-content: start; gap: 7px; padding: 16px; border: 1px solid #dfe6df; border-radius: 14px; background: #fff; box-shadow: 0 6px 16px rgba(31, 49, 40, .035); }
+.insight-label { color: #728078; font-size: 11px; font-weight: 800; }
+.insight-card strong { overflow: hidden; color: #203a33; font-size: 24px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.insight-card > span:last-child { overflow: hidden; color: #78857d; font-size: 11px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
+.insight-card--score strong { color: #3f5b31; }
+.insight-card--next strong { font-size: 15px; }
+.insight-tags { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.insight-tags span { max-width: 100%; overflow: hidden; padding: 4px 7px; border-radius: 999px; background: #f1f6eb; color: #53713e; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.insight-progress { width: 100%; height: 5px; margin-top: 3px; background: #e7eee3; }
+.insight-progress span { display: block; height: 100%; border-radius: inherit; background: #8cae5a; transition: width .25s ease; }
+.test-entries { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.entry-card { display: grid; grid-template-columns: 42px minmax(0, 1fr) 18px; align-items: center; gap: 12px; min-width: 0; min-height: 84px; padding: 14px 16px; border: 1px solid #dfe6df; border-radius: 14px; background: #fff; color: #203a33; text-align: left; box-shadow: 0 7px 18px rgba(31, 49, 40, .04); transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease; }
+.entry-card:hover:not(:disabled), .entry-card.is-active { border-color: #a9c27f; box-shadow: 0 9px 22px rgba(63, 91, 49, .1); transform: translateY(-1px); }
+.entry-card:focus-visible { outline: 2px solid #8cae5a; outline-offset: 2px; }
+.entry-card:disabled { cursor: not-allowed; opacity: .52; }
+.entry-icon { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 12px; background: #edf4e6; color: #3f5b31; }
+.entry-card:nth-child(2) .entry-icon { background: #f0eef9; color: #514c8c; }
+.entry-copy { display: grid; min-width: 0; gap: 5px; }
+.entry-copy strong { color: #203a33; font-size: 15px; }
+.entry-copy small { overflow: hidden; color: #78857d; font-size: 11px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.entry-card > svg { color: #8cae5a; }
+.test-tabs { display: none; }
 @media (max-width: 900px) { .test-controls { grid-template-columns: 1fr 1fr; }.test-path-summary { grid-column: 1 / -1; }.test-context { align-items: flex-start; flex-direction: column; gap: 10px; }.test-chapter-status { align-self: flex-start; } }
-@media (max-width: 680px) { :global(.page-container:has(.foundation-test-page)) { padding: 22px 18px 42px; }.test-controls { grid-template-columns: 1fr; gap: 13px; padding: 15px; }.test-path-summary { grid-column: auto; }.test-context h2 { font-size: 20px; }.test-gate { align-items: flex-start; padding: 15px; }.test-gate .button { width: 100%; } }
+@media (max-width: 900px) { .test-insights { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 680px) { :global(.page-container:has(.foundation-test-page)) { padding: 22px 18px 42px; }.test-controls { grid-template-columns: 1fr; gap: 13px; padding: 15px; }.test-path-summary { grid-column: auto; }.test-context h2 { font-size: 20px; }.test-gate { align-items: flex-start; padding: 15px; }.test-gate .button { width: 100%; }.test-insights, .test-entries { grid-template-columns: 1fr; }.insight-card { min-height: 100px; }.entry-copy small { white-space: normal; } }
 </style>
