@@ -20,16 +20,19 @@
       </div>
     </Transition>
 
-    <nav v-if="paginate && pageCount > 1" class="document-pagination" aria-label="文档分页">
+    <nav v-if="paginate" class="document-pagination" aria-label="文档分页">
       <button type="button" :disabled="currentPage === 0" @click="goToPage(currentPage - 1)">
         <ChevronLeft :size="15" />
         上一页
       </button>
       <span aria-live="polite"><strong>{{ currentPage + 1 }}</strong><i>/</i>{{ pageCount }}</span>
-      <button type="button" :disabled="currentPage >= pageCount - 1" @click="goToPage(currentPage + 1)">
-        下一页
-        <ChevronRight :size="15" />
-      </button>
+      <div class="document-pagination__actions">
+        <button type="button" :disabled="currentPage >= pageCount - 1" @click="goToPage(currentPage + 1)">
+          下一页
+          <ChevronRight :size="15" />
+        </button>
+        <slot name="pagination-action" :is-last-page="currentPage >= pageCount - 1" />
+      </div>
     </nav>
   </article>
 </template>
@@ -154,7 +157,7 @@ watch(() => [props.content, props.title, props.paginate], () => {
 .lesson-document--wide .markdown-body { max-width: 940px; }
 .lesson-document--without-title .lesson-document__header { padding-top: 17px; padding-bottom: 15px; }
 .lesson-document--without-title .lesson-tags { margin-top: 0; }
-.lesson-document--paged .document-page { min-height: clamp(430px, calc(100vh - 310px), 680px); }
+.lesson-document--paged .document-page { min-height: clamp(390px, calc(100vh - 350px), 640px); padding-bottom: 36px; }
 .lesson-document--paged .document-page :deep(h2:first-child) { margin-top: 0; padding-top: 0; border-top: 0; font-size: 26px; }
 .document-pagination { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 24px; border-top: 1px solid var(--line); background: #fbfcfa; }
 .document-pagination button { display: inline-flex; min-height: 32px; align-items: center; gap: 6px; padding: 0 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); color: var(--ink); font-size: 11px; }
@@ -164,6 +167,9 @@ watch(() => [props.content, props.title, props.paginate], () => {
 .document-pagination > span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
 .document-pagination > span strong { color: var(--ink); font-size: 14px; }
 .document-pagination > span i { font-style: normal; color: #a5aea7; }
+.document-pagination__actions { display: inline-flex; align-items: center; gap: 8px; }
+.document-pagination__action { border-color: var(--ink) !important; background: var(--ink) !important; color: #fff !important; font-weight: 800; }
+.document-pagination__action:hover:not(:disabled) { background: #345447 !important; }
 .page-turn-enter-active, .page-turn-leave-active { transition: opacity .16s ease, transform .18s ease; }
 .page-turn-enter-from { opacity: 0; transform: translateX(14px); }
 .page-turn-leave-to { opacity: 0; transform: translateX(-14px); }

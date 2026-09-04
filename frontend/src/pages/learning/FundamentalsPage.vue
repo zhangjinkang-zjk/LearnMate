@@ -136,9 +136,22 @@
                 :tags="activeNode.knowledge_tags || []"
                 :chapter-number="activeNodeIndex + 1"
                 :empty-message="resourceView === 'mindmap' ? '本章暂时没有知识结构材料。' : '本章文档尚未生成。'"
-              />
+              >
+                <template #pagination-action="{ isLastPage }">
+                  <button
+                    v-if="isLastPage"
+                    class="button button--primary document-pagination__action"
+                    type="button"
+                    :disabled="!documentContent || isResourceLoading"
+                    @click="handlePrimaryAction"
+                  >
+                    {{ primaryActionLabel }}
+                    <ArrowRight :size="15" />
+                  </button>
+                </template>
+              </MarkdownDocument>
 
-              <footer class="chapter-footer surface">
+              <footer v-if="resourceView !== 'document'" class="chapter-footer surface">
                 <button class="button button--quiet" type="button" :disabled="!previousNode" @click="previousNode && selectNode(previousNode.id)">
                   <ArrowLeft :size="15" />
                   上一章
