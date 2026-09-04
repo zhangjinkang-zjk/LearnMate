@@ -1,6 +1,8 @@
 <template>
-  <div class="onboarding-page">
-    <PageTitle eyebrow="能力诊断" title="和知伴聊聊你的起点" description="系统会围绕你的学习方向逐步提问，回答会用于调整后续讲解深度和练习难度。" />
+  <main class="diagnosis-page">
+    <ImmersiveOnboardingBackdrop />
+    <RouterLink class="back-link" to="/onboarding/direction"><span aria-hidden="true">←</span><span>BACK</span></RouterLink>
+    <header class="diagnosis-heading"><p class="eyebrow">能力诊断 · 学习起点</p><h1>和知伴聊聊你的起点</h1><p>系统会围绕你的学习方向逐步提问，回答会用于调整后续讲解深度和练习难度。</p></header>
     <section class="surface diagnosis-card" aria-live="polite">
       <div class="diagnosis-meta">
         <span>{{ isFinished ? '诊断完成' : `第 ${Math.min(answeredCount + 1, totalQuestions)} / ${totalQuestions} 题` }}</span>
@@ -27,15 +29,15 @@
 
       <div v-if="errorMessage" class="diagnosis-error"><span>{{ errorMessage }}</span><button class="button button--quiet" type="button" @click="startDiagnosis">重试</button></div>
     </section>
-  </div>
+  </main>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import PageTitle from '@/shared/ui/PageTitle.vue'
 import { diagnosisApi } from '@/shared/api/diagnosisApi'
 import { learningState } from '@/entities/learning/learningState'
+import ImmersiveOnboardingBackdrop from '@/shared/ui/ImmersiveOnboardingBackdrop.vue'
 
 const router = useRouter()
 const totalQuestions = 3
@@ -122,19 +124,22 @@ onMounted(startDiagnosis)
 </script>
 
 <style scoped>
-.onboarding-page { max-width: 820px; margin: 0 auto; }
-.diagnosis-card { overflow: hidden; padding: 0; }
-.diagnosis-meta { display: flex; align-items: center; gap: 14px; padding: 22px 28px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+@font-face { font-family: "Smiley Sans"; src: url("../../shared/assets/fonts/SmileySans-Oblique.woff2") format("woff2"); font-style: normal; font-display: swap; }
+.diagnosis-page { position: relative; min-height: 100vh; overflow: hidden; isolation: isolate; padding: clamp(28px, 5vw, 64px) clamp(20px, 6vw, 90px) 56px; color: #f3f0e7; background: #1e3c34; }
+.back-link { position: relative; z-index: 2; display: inline-flex; align-items: center; gap: 10px; color: rgba(243, 240, 231, .8); font-size: 11px; font-weight: 800; letter-spacing: .16em; text-decoration: none; }.back-link:hover { color: #e2f452; }.back-link span:first-child { font-size: 20px; line-height: .6; }
+.diagnosis-heading { position: relative; z-index: 1; width: min(820px, 100%); margin: clamp(38px, 8vh, 86px) auto 26px; }.diagnosis-heading .eyebrow { color: #d9ed9a; }.diagnosis-heading h1 { margin: 0; color: #f3f0e7; font-family: "Smiley Sans", Georgia, serif; font-size: clamp(30px, 4.5vw, 52px); font-weight: 500; letter-spacing: .01em; line-height: 1.15; }.diagnosis-heading > p:last-child { max-width: 600px; margin: 14px 0 0; color: rgba(243, 240, 231, .72); font-size: 14px; line-height: 1.8; }
+.diagnosis-card { position: relative; z-index: 1; width: min(820px, 100%); margin: 0 auto; overflow: hidden; padding: 0; border: 1px solid rgba(243, 240, 231, .22); border-radius: 8px; background: rgba(9, 29, 21, .72); box-shadow: 0 20px 55px rgba(2, 15, 10, .22); }
+.diagnosis-meta { display: flex; align-items: center; gap: 14px; padding: 22px 28px; border-bottom: 1px solid rgba(243, 240, 231, .16); color: rgba(243, 240, 231, .72); font-size: 12px; }
 .diagnosis-meta .progress-track { flex: 1; }
 .conversation-list { display: grid; gap: 18px; min-height: 390px; max-height: 52vh; overflow-y: auto; padding: 28px; }
 .chat-message { display: flex; align-items: flex-start; gap: 10px; max-width: 84%; }
 .chat-message p { margin: 0; padding: 12px 14px; border-radius: 8px; font-size: 14px; line-height: 1.7; white-space: pre-wrap; }
-.chat-message--assistant p { background: var(--soft); color: var(--ink); }
+.chat-message--assistant p { background: rgba(232, 241, 224, .94); color: var(--ink); }
 .chat-message--user { align-self: flex-end; justify-content: flex-end; }
 .chat-message--user p { background: var(--ink); color: #fff; }
 .message-avatar { display: grid; flex: 0 0 auto; width: 27px; height: 27px; place-items: center; border-radius: 50%; background: var(--accent); color: var(--accent-deep); font-size: 11px; font-weight: 900; }
 .typing { color: var(--muted) !important; }.typing span { display: inline-block; animation: blink 1.1s infinite; }.typing span:nth-child(2) { animation-delay: .15s; }.typing span:nth-child(3) { animation-delay: .3s; }
-.answer-panel { padding: 20px 28px 28px; border-top: 1px solid var(--line); }.answer-label { margin: 0 0 13px; color: var(--muted); font-size: 12px; }.answer-list { display: grid; gap: 10px; }.answer-option { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 0 15px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); color: var(--ink); text-align: left; font-size: 13px; }.answer-option:hover, .answer-option.selected { border-color: var(--accent-deep); background: #f8fbf2; }.answer-option:disabled { cursor: wait; opacity: .65; }.answer-dot { width: 13px; height: 13px; border: 1px solid #aeb8ad; border-radius: 50%; }.selected .answer-dot { border: 4px solid var(--accent-deep); }.diagnosis-actions { display: flex; justify-content: flex-end; margin-top: 22px; }.diagnosis-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 28px; border-top: 1px solid var(--line); color: #a66b47; font-size: 12px; }.diagnosis-error .button { flex: 0 0 auto; }
+.answer-panel { padding: 20px 28px 28px; border-top: 1px solid rgba(243, 240, 231, .16); }.answer-label { margin: 0 0 13px; color: rgba(243, 240, 231, .72); font-size: 12px; }.answer-list { display: grid; gap: 10px; }.answer-option { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 0 15px; border: 1px solid rgba(243, 240, 231, .22); border-radius: 5px; background: rgba(243, 240, 231, .08); color: #f3f0e7; text-align: left; font-size: 13px; }.answer-option:hover, .answer-option.selected { border-color: #e2f452; background: rgba(226, 244, 82, .16); }.answer-option:disabled { cursor: wait; opacity: .65; }.answer-dot { width: 13px; height: 13px; border: 1px solid rgba(243, 240, 231, .68); border-radius: 50%; }.selected .answer-dot { border: 4px solid #e2f452; }.diagnosis-actions { display: flex; justify-content: flex-end; margin-top: 22px; }.diagnosis-actions .button--primary { background: #e2f452; color: #1e3c34; }.diagnosis-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 28px; border-top: 1px solid rgba(243, 240, 231, .16); color: #f2c49b; font-size: 12px; }.diagnosis-error .button--quiet { border-color: rgba(243, 240, 231, .3); background: transparent; color: #f3f0e7; }.diagnosis-error .button { flex: 0 0 auto; }
 @keyframes blink { 0%, 60%, 100% { opacity: .25; } 30% { opacity: 1; } }
 @media (max-width: 600px) { .conversation-list { min-height: 330px; padding: 20px 16px; }.chat-message { max-width: 94%; }.diagnosis-meta, .answer-panel, .diagnosis-error { padding-left: 16px; padding-right: 16px; }.diagnosis-error { align-items: flex-start; flex-direction: column; } }
 </style>

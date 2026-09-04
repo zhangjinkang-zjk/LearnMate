@@ -1,10 +1,6 @@
 <template>
   <main class="identity-page">
-    <div class="identity-wash" aria-hidden="true"></div>
-    <div class="identity-word" aria-hidden="true">
-      <span>LEARN</span>
-      <span>MATE</span>
-    </div>
+    <ImmersiveOnboardingBackdrop />
     <router-link class="back-link" to="/">
       <span aria-hidden="true">←</span>
       <span>BACK</span>
@@ -72,6 +68,7 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { directionOptions, goalOptions } from '@/features/onboarding/onboardingOptions'
 import { learningState, persistLearningProfile } from '@/entities/learning/learningState'
+import ImmersiveOnboardingBackdrop from '@/shared/ui/ImmersiveOnboardingBackdrop.vue'
 
 const router = useRouter()
 const selectedIdentity = ref(localStorage.getItem('learnmate_identity') || '')
@@ -126,66 +123,6 @@ const continueToStudy = () => {
   color: #f3f0e7;
   background: #1e3c34;
   font-family: Inter, "Helvetica Neue", Arial, sans-serif;
-}
-
-.identity-page::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -3;
-  background:
-    linear-gradient(120deg, rgba(3, 18, 13, 0.86) 0%, rgba(28, 68, 53, 0.68) 34%, rgba(5, 24, 17, 0.92) 68%, rgba(53, 93, 69, 0.56) 100%),
-    radial-gradient(ellipse 80% 68% at 8% 92%, rgba(151, 184, 137, 0.5), transparent 66%),
-    radial-gradient(ellipse 62% 62% at 92% 8%, rgba(2, 13, 10, 0.92), transparent 70%),
-    #1e3c34;
-  background-size: 180% 180%, 100% 100%, 100% 100%, 100% 100%;
-  animation: metalShift 18s ease-in-out infinite alternate;
-}
-
-.identity-page::after {
-  content: "";
-  position: absolute;
-  inset: -30%;
-  z-index: -1;
-  pointer-events: none;
-  background: linear-gradient(112deg, transparent 30%, rgba(216, 239, 187, 0.08) 44%, rgba(255, 255, 255, 0.14) 48%, rgba(216, 239, 187, 0.04) 54%, transparent 68%);
-  transform: translate3d(-18%, 0, 0) rotate(-3deg);
-  animation: metalSheen 14s ease-in-out infinite alternate;
-}
-
-.identity-wash {
-  position: absolute;
-  inset: -18%;
-  z-index: -1;
-  pointer-events: none;
-  opacity: 0.62;
-  filter: blur(96px);
-  background:
-    radial-gradient(ellipse at 35% 30%, rgba(209, 239, 148, 0.34), transparent 46%),
-    radial-gradient(ellipse at 72% 72%, rgba(82, 147, 104, 0.38), transparent 52%);
-  animation: washDrift 12s ease-in-out infinite alternate;
-}
-
-.identity-word {
-  position: absolute;
-  inset: 8% 0 0;
-  z-index: -2;
-  display: grid;
-  align-content: center;
-  justify-items: center;
-  color: rgba(173, 198, 178, 0.28);
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: clamp(116px, 17.5vw, 282px);
-  font-weight: 400;
-  letter-spacing: -0.045em;
-  line-height: 0.76;
-  user-select: none;
-  pointer-events: none;
-}
-
-.identity-word span {
-  display: block;
-  transform: scaleX(1.08);
 }
 
 .back-link {
@@ -405,21 +342,6 @@ const continueToStudy = () => {
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-@keyframes washDrift {
-  from { transform: translate3d(-3%, -2%, 0) scale(0.98); }
-  to { transform: translate3d(3%, 2%, 0) scale(1.04); }
-}
-
-@keyframes metalShift {
-  from { background-position: 0% 50%, 0 0, 0 0, 0 0; filter: saturate(0.94) contrast(1.02); }
-  to { background-position: 100% 50%, 0 0, 0 0, 0 0; filter: saturate(1.1) contrast(1.08); }
-}
-
-@keyframes metalSheen {
-  from { transform: translate3d(-18%, 0, 0) rotate(-3deg); opacity: 0.45; }
-  to { transform: translate3d(18%, 0, 0) rotate(-3deg); opacity: 0.88; }
-}
-
 @media (max-width: 640px) {
   .identity-page {
     padding: 26px 18px 34px;
@@ -454,8 +376,6 @@ const continueToStudy = () => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .identity-page::before,
-  .identity-wash,
   .identity-panel,
   .back-link,
   .identity-option,
