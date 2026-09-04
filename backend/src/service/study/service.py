@@ -120,9 +120,9 @@ class StudyService:
         weak_tag = weak_points[0]["tag"] if weak_points else ""
         recommendation = {
             "judgement": f"当前主要短板是 {weak_tag} 能力" if weak_tag else "当前还缺少足够练习数据",
-            "action": current_node.get("title") if current_node else "完成一次基础练习",
+            "action": current_node.get("title") if current_node else None,
             "reason": f"{weak_tag} 当前正确率约 {weak_points[0]['accuracy']}%，先补强该知识点能减少后续反复。" if weak_tag else "完成一次学习节点后，系统才能给出更精确的下一步判断。",
-            "criteria": f"能够解释“{current_node.get('title')}”的关键方法，并通过节点测验。" if current_node else "完成练习并提交可验证的答案。",
+            "criteria": f"能够解释“{current_node.get('title')}”的关键方法，并通过节点测验。" if current_node else None,
             "target_id": current_node.get("id") if current_node else None,
             "action_type": (current_path or {}).get("next_action", {}).get("type") if current_path else None,
             "status": "ready" if current_node or weak_tag else "generating",
@@ -131,7 +131,7 @@ class StudyService:
         return {
             "profile": {
                 "identity": onboarding.get("identity", ""),
-                "direction": onboarding.get("direction", ""),
+                "direction": onboarding.get("direction") or traits.get("learning_direction", ""),
                 "goal": onboarding.get("goal") or portrait.get("learning_goal", ""),
             },
             "path": {
