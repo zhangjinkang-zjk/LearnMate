@@ -283,7 +283,7 @@ class PathService:
                 "prerequisites": json.loads(node.prerequisites) if node.prerequisites else [],
                 "resource_types": json.loads(node.resource_types) if node.resource_types else [],
                 "quiz_config": json.loads(node.quiz_config) if node.quiz_config else {},
-                "difficulty_score": node.difficulty_score,
+                "difficulty_score": getattr(node, "difficulty_score", None),
                 "teaching_spec": teaching_spec_payload(
                     node.teaching_spec,
                     node={"topic": node.topic, "knowledge_tags": json.loads(node.knowledge_tags or "[]")},
@@ -637,7 +637,7 @@ class PathService:
                 "prerequisites": json.loads(node.prerequisites) if node.prerequisites else [],
                 "resource_types": json.loads(node.resource_types) if node.resource_types else [],
                 "quiz_config": json.loads(node.quiz_config) if node.quiz_config else {},
-                "difficulty_score": node.difficulty_score,
+                "difficulty_score": getattr(node, "difficulty_score", None),
                 "teaching_spec": teaching_spec_payload(
                     node.teaching_spec,
                     node={"topic": node.topic, "knowledge_tags": json.loads(node.knowledge_tags or "[]")},
@@ -748,7 +748,7 @@ class PathService:
                     "node_id": n.id,
                     "topic": n.topic,
                     "order_index": n.order_index,
-                    "difficulty_score": n.difficulty_score,
+                    "difficulty_score": getattr(n, "difficulty_score", None),
                     "knowledge_tags": json.loads(n.knowledge_tags) if n.knowledge_tags else [],
                     "prerequisites": json.loads(n.prerequisites) if n.prerequisites else [],
                     "resource_types": json.loads(n.resource_types) if n.resource_types else [],
@@ -900,7 +900,7 @@ class PathService:
             "prerequisites": json.loads(node.prerequisites) if node.prerequisites else [],
             "resource_types": json.loads(node.resource_types) if node.resource_types else [],
             "quiz_config": json.loads(node.quiz_config) if node.quiz_config else {},
-            "difficulty_score": node.difficulty_score,
+            "difficulty_score": getattr(node, "difficulty_score", None),
             "teaching_spec": teaching_spec_payload(
                 getattr(node, "teaching_spec", None),
                 node={"topic": node.topic, "knowledge_tags": json.loads(node.knowledge_tags or "[]")},
@@ -1008,7 +1008,7 @@ class PathService:
                     from backend.src.service.resource.service import ResourceService
                     async for event_str in ResourceService.generate_stream(
                         topic=topic, user_id=user_id, resource_types=gen_types, skip_review=True,
-                        ppt_prompt_key="ppt_video",
+                        ppt_prompt_key="ppt",
                         llm_priority=llm_priority,
                         chat_group_id=0,
                         bind_chat_history=False,
@@ -1093,7 +1093,7 @@ class PathService:
                         topic=topic,
                         user_id=user_id,
                         resource_types=gen_types,
-                        ppt_prompt_key="ppt_video",
+                        ppt_prompt_key="ppt",
                         skip_review=True,
                         chat_group_id=0,
                         bind_chat_history=False,
@@ -1527,7 +1527,10 @@ class PathService:
         for k, v in fields.items():
             if k in allowed and v is not None:
                 if k == "difficulty_score":
-                    v = clamp_difficulty_score(v)
+                    if node.order_index == 1:
+                        v = 1.0
+                    else:
+                        v = clamp_difficulty_score(v)
                     if v is None:
                         continue
                 updates[k] = json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v
@@ -1564,6 +1567,7 @@ class PathService:
             "knowledge_tags": json.loads(node.knowledge_tags) if node.knowledge_tags else [],
             "resource_types": json.loads(node.resource_types) if node.resource_types else [],
             "quiz_config": json.loads(node.quiz_config) if node.quiz_config else {},
+            "difficulty_score": getattr(node, "difficulty_score", None),
             "teaching_spec": teaching_spec_payload(
                 getattr(node, "teaching_spec", None),
                 node={"topic": node.topic, "knowledge_tags": json.loads(node.knowledge_tags or "[]")},
@@ -1600,16 +1604,18 @@ class PathService:
 
         max_order = await PathNode.filter(path_id=path_id).order_by("-order_index").first()
         next_order = (max_order.order_index + 1) if max_order else 1
+        node_order = fields.get("order_index", next_order)
 
         node = await PathNode.create(
             path=path,
             topic=topic,
             knowledge_tags=json.dumps(fields.get("knowledge_tags", []), ensure_ascii=False),
-            order_index=fields.get("order_index", next_order),
+            order_index=node_order,
             prerequisites=json.dumps(fields.get("prerequisites", []), ensure_ascii=False),
             resource_types=json.dumps(fields.get("resource_types", list(PATH_DEFAULT_RESOURCE_TYPES)), ensure_ascii=False),
             quiz_config=json.dumps(fields.get("quiz_config", {"count": 5, "threshold": 0.7}), ensure_ascii=False),
             teaching_spec=dump_teaching_spec(fields.get("teaching_spec"), node={"topic": topic, **fields}),
+            difficulty_score=_node_difficulty_score(fields, node_order, max(next_order, 1)),
         )
 
         await LearningPath.filter(id=path_id, user_id=user_id).update(
@@ -1626,6 +1632,7 @@ class PathService:
             "node_id": node.id,
             "topic": node.topic,
             "order_index": node.order_index,
+            "difficulty_score": getattr(node, "difficulty_score", None),
         }
 
     # ── 路径视频 ──
@@ -1852,7 +1859,8 @@ class PathService:
                 "status": status,
                 "summary": summary,
                 "knowledge_tags": knowledge_tags,
-                "difficulty_score": node.difficulty_score,
+                "prerequisites": json.loads(node.prerequisites) if node.prerequisites else [],
+                "difficulty_score": getattr(node, "difficulty_score", None),
                 "teaching_spec": teaching_spec_payload(
                     getattr(node, "teaching_spec", None),
                     node={"topic": node.topic, "knowledge_tags": knowledge_tags},
