@@ -1,5 +1,5 @@
 <template>
-  <article class="lesson-document surface">
+  <article class="lesson-document surface" :class="{ 'lesson-document--wide': wide }">
     <header class="lesson-document__header">
       <div class="lesson-document__meta">
         <span>第 {{ chapterNumber }} 章</span>
@@ -31,6 +31,7 @@ const props = defineProps({
   tags: { type: Array, default: () => [] },
   chapterNumber: { type: Number, default: 1 },
   emptyMessage: { type: String, default: '系统会围绕当前节点生成完整讲解。' },
+  wide: { type: Boolean, default: false },
 })
 
 const renderedContent = computed(() => renderMarkdown(props.content))
@@ -63,6 +64,8 @@ const estimatedMinutes = computed(() => Math.max(3, Math.ceil(props.content.repl
 .document-empty { display: grid; min-height: 520px; place-items: center; align-content: center; gap: 10px; padding: 40px; color: var(--muted); text-align: center; }
 .document-empty strong { color: var(--ink); font-size: 16px; }
 .document-empty p { max-width: 360px; margin: 0; font-size: 12px; line-height: 1.7; }
+.lesson-document--wide .lesson-document__header > * { max-width: 940px; margin-right: auto; margin-left: auto; }
+.lesson-document--wide .markdown-body { max-width: 940px; }
 @media (max-width: 680px) {
   .lesson-document__header { padding: 22px 20px; }
   .lesson-document__meta { align-items: flex-start; flex-direction: column; gap: 6px; }

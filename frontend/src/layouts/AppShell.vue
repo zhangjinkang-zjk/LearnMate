@@ -77,7 +77,12 @@
           </RouterLink>
         </div>
       </header>
-      <section class="page-container"><slot /></section>
+      <section
+        class="page-container"
+        :class="{ 'page-container--workspace': route.meta.contentLayout === 'workspace' }"
+      >
+        <slot />
+      </section>
     </main>
   </div>
 </template>

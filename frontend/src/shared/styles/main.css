@@ -59,6 +59,7 @@ button { cursor: pointer; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #70aa63; }
 .menu-button { display: none; border: 0; background: transparent; color: var(--ink); font-size: 21px; }
 .page-container { width: min(1180px, 100%); margin: 0 auto; padding: 42px 42px 72px; }
+.page-container--workspace { width: 100%; max-width: none; padding: 24px 28px 48px; }
 .sidebar-backdrop { display: none; }
 
 .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 34px; }
@@ -122,6 +123,7 @@ button { cursor: pointer; }
   .header-context { margin-right: auto; margin-left: 12px; }
   .header-actions { display: none; }
   .page-container { padding: 30px 20px 58px; }
+  .page-container--workspace { padding: 18px 14px 40px; }
   .grid--three, .grid--two { grid-template-columns: 1fr; }
   .page-heading { display: block; }
   .page-actions { margin-top: 18px; }

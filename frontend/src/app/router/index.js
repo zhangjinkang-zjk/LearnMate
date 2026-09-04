@@ -31,7 +31,12 @@ const router = createRouter({
     { path: '/onboarding/diagnosis/result', name: 'diagnosisResult', component: DiagnosisResultPage, meta: { layout: 'immersive', requiresAuth: true } },
     { path: '/learning/overview', name: 'learningOverview', component: OverviewPage, meta: { requiresAuth: true } },
     { path: '/learning/task-analysis', redirect: '/learning/overview' },
-    { path: '/learning/fundamentals', name: 'fundamentals', component: FundamentalsPage, meta: { requiresAuth: true } },
+    {
+      path: '/learning/fundamentals',
+      name: 'fundamentals',
+      component: FundamentalsPage,
+      meta: { requiresAuth: true, contentLayout: 'workspace' },
+    },
     { path: '/learning/foundation-test', name: 'foundationTest', component: FoundationTestPage, meta: { requiresAuth: true } },
     { path: '/learning/advanced', name: 'advancedLearning', component: AdvancedLearningPage, meta: { requiresAuth: true } },
     { path: '/learning/consolidation', name: 'learningConsolidation', component: LearningConsolidationPage, meta: { requiresAuth: true } },

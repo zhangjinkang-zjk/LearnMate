@@ -1,6 +1,6 @@
 <template>
-  <section class="path-picker" aria-labelledby="path-picker-title">
-    <div class="path-picker__heading">
+  <section class="path-picker" :class="{ 'path-picker--compact': compact }" :aria-labelledby="compact ? undefined : 'path-picker-title'">
+    <div v-if="!compact" class="path-picker__heading">
       <div>
         <p class="eyebrow">学习方向拆解</p>
         <h2 id="path-picker-title">相关学习路径</h2>
@@ -57,6 +57,7 @@ defineProps({
   activePathId: { type: [Number, String], default: null },
   loading: { type: Boolean, default: false },
   switching: { type: Boolean, default: false },
+  compact: { type: Boolean, default: false },
 })
 
 defineEmits(['select'])
@@ -102,6 +103,12 @@ function currentLabel(path) {
 .path-card__meta { color: var(--muted); font-size: 10px; }
 .path-card__track { height: 5px; margin-top: 2px; }
 .path-card__track .progress-value { display: block; }
+.path-picker--compact { margin: 0; padding: 0; border-bottom: 0; }
+.path-picker--compact .path-picker__state { min-height: 120px; justify-content: center; }
+.path-picker--compact .path-picker__list { display: grid; overflow: visible; gap: 9px; padding: 0; scroll-snap-type: none; }
+.path-picker--compact .path-card { width: 100%; min-height: 112px; }
+.path-picker--compact .path-card strong,
+.path-picker--compact .path-card__current { overflow: visible; text-overflow: clip; white-space: normal; }
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 620px) { .path-picker__heading { align-items: flex-start; flex-direction: column; gap: 8px; }.path-picker__list { gap: 9px; }.path-card { flex-basis: min(245px, 82vw); } }
