@@ -25,6 +25,13 @@ async def get_stats(user_id: int = Depends(get_user_id_from_token)):
     return {"code": 200, "msg": "success", "data": result}
 
 
+@router.get("/overview")
+async def get_overview(user_id: int = Depends(get_user_id_from_token)):
+    """学习概览快照：目标、路径、科目、诊断、盲区和学习建议。"""
+    result = await StudyService.get_overview(user_id)
+    return {"code": 200, "msg": "success", "data": result}
+
+
 @router.get("/path-stats")
 async def get_path_stats(user_id: int = Depends(get_user_id_from_token)):
     """分路径统计：每个路径的学习时长、进度、薄弱知识点"""

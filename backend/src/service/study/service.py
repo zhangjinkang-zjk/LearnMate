@@ -10,7 +10,11 @@ from backend.src.models.study_model import StudySession, ResourceReadStatus, Res
 from backend.src.models.exam_model import KnowledgeMastery, ExamRecord
 from backend.src.models.resource_model import GeneratedResource
 from backend.src.models.path_model import LearningPath, PathNode, UserPathProgress
-from backend.src.service.portrait.service import build_learning_guidance, PortraitRadarService
+from backend.src.service.portrait.service import (
+    PortraitChatHistory_Service,
+    PortraitRadarService,
+    build_learning_guidance,
+)
 from backend.src.service.notification.service import check_and_create_weekly_report
 from backend.src.service.path.helpers import reconcile_completed_prerequisites
 
@@ -18,6 +22,145 @@ logger = logging.getLogger(__name__)
 
 
 class StudyService:
+
+    @staticmethod
+    async def get_overview(user_id: int) -> dict:
+        """返回学习概览所需的结构化数据，页面只消费这一份快照。"""
+        from backend.src.service.path.service import PathService
+
+        portrait_result = await PortraitChatHistory_Service.read_portrait(user_id)
+        portrait = portrait_result[0] if isinstance(portrait_result, tuple) else portrait_result
+        portrait = portrait or {}
+        traits = portrait.get("traits") if isinstance(portrait.get("traits"), dict) else {}
+        onboarding = traits.get("onboarding") if isinstance(traits.get("onboarding"), dict) else {}
+
+        current_path = await PathService.get_current_path(user_id)
+        path_stats = await StudyService.get_path_stats(user_id)
+        stats = await StudyService.get_stats(user_id)
+        radar = await PortraitRadarService.get(user_id)
+
+        subjects = []
+        for item in path_stats.get("paths", []):
+            progress = item.get("progress", {})
+            study_time = item.get("study_time", {})
+            subjects.append({
+                "id": item.get("path_id"),
+                "name": item.get("subject") or "未命名科目",
+                "progress": progress.get("percentage", 0),
+                "completed_nodes": progress.get("completed_nodes", 0),
+                "total_nodes": progress.get("total_nodes", 0),
+                "study_seconds": study_time.get("total_seconds", 0),
+            })
+
+        nodes = (current_path or {}).get("nodes", [])
+        goals = [
+            {
+                "id": node.get("id"),
+                "title": node.get("title") or "未命名学习节点",
+                "status": node.get("status", "locked"),
+                "progress": 100 if node.get("status") == "completed" else 0,
+            }
+            for node in nodes[:6]
+        ]
+        next_content = [
+            {
+                "id": node.get("id"),
+                "title": node.get("title") or "未命名学习节点",
+                "status": node.get("status", "locked"),
+            }
+            for node in nodes
+            if node.get("status") in ("in_progress", "unlocked")
+        ][:3]
+
+        weak_points = []
+        seen_tags = set()
+        for point in stats.get("weak_points", []):
+            tag = str(point.get("tag") or "").strip()
+            if not tag or tag in seen_tags:
+                continue
+            seen_tags.add(tag)
+            weak_points.append({
+                "tag": tag,
+                "accuracy": round(float(point.get("accuracy", 0)) * 100),
+                "level": point.get("level", "learning"),
+            })
+        weak_points = weak_points[:6]
+
+        mastery_bars = [
+            {"label": item["name"], "score": item["progress"], "type": "subject"}
+            for item in subjects
+        ]
+        if not mastery_bars and radar:
+            mastery_bars = [
+                {"label": item.get("label", item.get("key", "能力")), "score": item.get("score", 0), "type": "ability"}
+                for item in radar.get("dimensions", [])
+            ]
+
+        sessions = await StudySession.filter(user_id=user_id).all()
+        today = date.today()
+        history = []
+        for offset in range(6, -1, -1):
+            day = today - timedelta(days=offset)
+            seconds = sum(s.total_seconds or 0 for s in sessions if s.date == day)
+            history.append({"date": str(day), "study_seconds": seconds})
+
+        completed_nodes = sum(1 for node in nodes if node.get("status") == "completed")
+        total_nodes = len(nodes)
+        diagnosis = (current_path or {}).get("diagnosis") or {}
+        latest_score = diagnosis.get("latest_score")
+        if latest_score is None and radar and radar.get("dimensions"):
+            latest_score = round(sum(item.get("score", 0) for item in radar["dimensions"]) / len(radar["dimensions"]))
+        stage = "正在生成"
+        if latest_score is not None:
+            stage = "应用进阶期" if latest_score >= 85 else "基础巩固期" if latest_score >= 60 else "基础建立期"
+
+        current_node = next((node for node in nodes if node.get("id") == (current_path or {}).get("current_node_id")), None)
+        if not current_node:
+            current_node = next((node for node in nodes if node.get("status") in ("in_progress", "unlocked")), None)
+        weak_tag = weak_points[0]["tag"] if weak_points else ""
+        recommendation = {
+            "judgement": f"当前主要短板是 {weak_tag} 能力" if weak_tag else "当前还缺少足够练习数据",
+            "action": current_node.get("title") if current_node else None,
+            "reason": f"{weak_tag} 当前正确率约 {weak_points[0]['accuracy']}%，先补强该知识点能减少后续反复。" if weak_tag else "完成一次学习节点后，系统才能给出更精确的下一步判断。",
+            "criteria": f"能够解释“{current_node.get('title')}”的关键方法，并通过节点测验。" if current_node else None,
+            "target_id": current_node.get("id") if current_node else None,
+            "action_type": (current_path or {}).get("next_action", {}).get("type") if current_path else None,
+            "status": "ready" if current_node or weak_tag else "generating",
+        }
+
+        return {
+            "profile": {
+                "identity": onboarding.get("identity", ""),
+                "direction": onboarding.get("direction") or traits.get("learning_direction", ""),
+                "goal": onboarding.get("goal") or portrait.get("learning_goal", ""),
+            },
+            "path": {
+                "id": (current_path or {}).get("path_id"),
+                "progress": (current_path or {}).get("progress", 0),
+                "completed_nodes": completed_nodes,
+                "total_nodes": total_nodes,
+            },
+            "subjects": subjects,
+            "goals": goals,
+            "next_content": next_content,
+            "blind_spots": weak_points,
+            "diagnosis": {
+                "score": latest_score,
+                "stage": stage,
+                "answered": stats.get("exam_summary", {}).get("completed_questions", 0),
+            },
+            "mastery_bars": mastery_bars,
+            "radar": radar or {"dimensions": []},
+            "study_history": history,
+            "summary": {
+                "total_study_seconds": stats.get("study_time", {}).get("total_seconds", 0),
+                "active_days": stats.get("study_time", {}).get("active_days", 0),
+                "completed_nodes": completed_nodes,
+                "total_nodes": total_nodes,
+                "mastery_score": latest_score,
+            },
+            "recommendation": recommendation,
+        }
 
     @staticmethod
     async def heartbeat(user_id: int, path_id: int | None = None) -> dict:

@@ -160,10 +160,10 @@ onBeforeUnmount(() => requestController?.abort())
 </script>
 
 <style scoped>
-.feynman-coach { display: grid; min-height: 650px; grid-template-rows: auto minmax(280px, 1fr) auto auto; overflow: hidden; }
-.feynman-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 24px; border-bottom: 1px solid var(--line); background: #fbfcfa; }
+.feynman-coach { display: grid; height: clamp(430px, calc(100vh - 420px), 650px); min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto auto; overflow: hidden; }
+.feynman-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; min-width: 0; padding: 20px 24px; border-bottom: 1px solid var(--line); background: #fbfcfa; }
 .feynman-header .eyebrow { margin-bottom: 6px; }
-.feynman-header h2 { margin: 0; font-size: 19px; }
+.feynman-header h2 { margin: 0; font-size: 18px; line-height: 1.35; }
 .feynman-header p:last-child { max-width: 660px; margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .feynman-topic { flex: 0 0 auto; max-width: 220px; padding: 7px 9px; border: 1px solid #d7e3c9; border-radius: 4px; background: #f3f8ea; color: var(--accent-deep); font-size: 11px; font-weight: 800; }
 .feynman-messages { display: grid; align-content: start; gap: 15px; overflow-y: auto; padding: 24px; }
@@ -176,7 +176,7 @@ onBeforeUnmount(() => requestController?.abort())
 .typing { display: flex; gap: 4px; padding: 14px; }.typing span { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); animation: pulse 1s infinite ease-in-out; }.typing span:nth-child(2) { animation-delay: .15s; }.typing span:nth-child(3) { animation-delay: .3s; }
 .feynman-starters { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 24px 13px; }.feynman-starters button { padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); color: var(--muted); font-size: 11px; }.feynman-starters button:hover { border-color: var(--accent-deep); color: var(--accent-deep); }
 .feynman-error { margin: 0; padding: 0 24px 10px; color: #a66442; font-size: 11px; }
-.feynman-composer { padding: 14px 24px 20px; border-top: 1px solid var(--line); }.feynman-composer textarea { width: 100%; min-height: 105px; resize: vertical; padding: 12px 13px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); outline: none; font-size: 13px; line-height: 1.7; }.feynman-composer textarea:focus { border-color: var(--accent-deep); }.feynman-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; color: var(--muted); font-size: 10px; }.feynman-actions > div { display: flex; gap: 8px; }.feynman-actions .button { gap: 7px; }
+.feynman-composer { padding: 12px 24px 18px; border-top: 1px solid var(--line); }.feynman-composer textarea { width: 100%; min-height: 78px; max-height: 150px; resize: vertical; padding: 11px 13px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); outline: none; font-size: 13px; line-height: 1.65; }.feynman-composer textarea:focus { border-color: var(--accent-deep); }.feynman-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 9px; color: var(--muted); font-size: 10px; }.feynman-actions > div { display: flex; gap: 8px; }.feynman-actions .button { gap: 7px; }
 @keyframes pulse { 0%, 60%, 100% { opacity: .3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
-@media (max-width: 640px) { .feynman-header { flex-direction: column; padding: 18px; }.feynman-messages { padding: 18px; }.feynman-starters { padding: 0 18px 12px; }.feynman-composer { padding: 12px 18px 18px; }.feynman-actions { align-items: flex-start; flex-direction: column; }.feynman-actions > div { width: 100%; }.feynman-actions .button { flex: 1; } }
+@media (max-width: 640px) { .feynman-coach { height: clamp(420px, calc(100vh - 350px), 620px); }.feynman-header { flex-direction: column; padding: 17px 18px; }.feynman-topic { max-width: 100%; }.feynman-messages { padding: 18px; }.feynman-starters { padding: 0 18px 12px; }.feynman-composer { padding: 11px 18px 16px; }.feynman-actions { align-items: flex-start; flex-direction: column; }.feynman-actions > div { width: 100%; }.feynman-actions .button { flex: 1; } }
 </style>
