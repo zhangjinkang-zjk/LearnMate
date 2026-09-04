@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 ADVANCED_MILESTONE_SIZE = 10
 ADVANCED_UNLOCK_NODES = 10
+ADVANCED_AGENT_TIMEOUT_SECONDS = 40
 _snapshot_locks: dict[tuple[int, int, int], asyncio.Lock] = {}
 
 GOAL_MODES = (
@@ -303,9 +304,15 @@ def _normalise_agent_tasks(payload: Any, fallback_tasks: list[dict]) -> tuple[li
             item["stages"] = fallback["stages"]
         normalised.append(item)
 
-    recommended = payload.get("recommended_kind")
-    if recommended not in {item["kind"] for item in fallback_tasks}:
-        recommended = next((item["kind"] for item in fallback_tasks if item.get("is_recommended")), "case")
+    # The agent can propose a mode, but the server owns the progression gate.
+    # This prevents a low-evidence learner from jumping directly to project work.
+    recommended = next((item["kind"] for item in fallback_tasks if item.get("is_recommended")), "case")
+    if payload.get("recommended_kind") != recommended:
+        logger.info(
+            "advanced task recommendation constrained requested=%s applied=%s",
+            payload.get("recommended_kind"),
+            recommended,
+        )
     for item in normalised:
         item["status"] = "active" if item["kind"] == recommended else "available"
         item["is_recommended"] = item["kind"] == recommended
@@ -330,7 +337,10 @@ async def _generate_agent_task_set(user_id: int, profile: dict, path: dict, mast
             path_json=json.dumps(context["path"], ensure_ascii=False),
             mastery_json=json.dumps(context["mastery"], ensure_ascii=False),
         )
-        response = await llm.ainvoke(prompt, priority="low", user_id=user_id, pool="advanced")
+        response = await asyncio.wait_for(
+            llm.ainvoke(prompt, priority="low", user_id=user_id, pool="advanced"),
+            timeout=ADVANCED_AGENT_TIMEOUT_SECONDS,
+        )
         parsed = parse_llm_json(response.content)
         normalised = _normalise_agent_tasks(parsed, fallback_tasks)
         if normalised:
@@ -605,14 +615,31 @@ class AdvancedLearningService:
                 "task": None,
             }
 
-        snapshot = await _get_or_create_snapshot(
-            user_id,
-            int(current_path["path_id"]),
-            milestone,
-            profile,
-            current_path,
-            mastery_records,
-        )
+        try:
+            snapshot = await _get_or_create_snapshot(
+                user_id,
+                int(current_path["path_id"]),
+                milestone,
+                profile,
+                current_path,
+                mastery_records,
+            )
+        except Exception:
+            # Keep the page usable during a rolling deploy before the new table is created.
+            logger.exception(
+                "advanced task snapshot unavailable user_id=%s path_id=%s milestone=%s",
+                user_id,
+                current_path.get("path_id"),
+                milestone,
+            )
+            generated = build_advanced_tasks(profile, current_path, mastery_records)
+            snapshot = {
+                "tasks": generated,
+                "summary": "当前里程碑任务已生成，保存服务恢复后会继续沿用。",
+                "source": "fallback",
+                "generation_error": "任务快照暂不可用",
+                "generated_at": None,
+            }
         tasks = snapshot["tasks"]
         active_task = next((item for item in tasks if item.get("is_recommended")), tasks[0] if tasks else None)
 

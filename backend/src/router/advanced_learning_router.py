@@ -10,7 +10,7 @@ router = APIRouter(prefix="/learning/advanced", tags=["进阶学习"])
 
 @router.get("/current")
 async def get_current_advanced_task(user_id: int = Depends(get_user_id_from_token)):
-    """Aggregate onboarding, diagnosis, and path data into the current task."""
+    """Return the task snapshot for the current ten-node learning milestone."""
     try:
         result = await AdvancedLearningService.get_current(user_id)
     except ValueError as exc:

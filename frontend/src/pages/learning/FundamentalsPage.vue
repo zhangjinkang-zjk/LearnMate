@@ -76,27 +76,36 @@
               <span>章节</span>
               <small>{{ activeNodeIndex + 1 }}</small>
             </button>
+            <span class="workspace-rail__divider" aria-hidden="true"></span>
+            <div class="resource-tabs resource-tabs--rail" role="tablist" aria-label="章节材料视图">
+              <button
+                type="button"
+                role="tab"
+                :aria-selected="resourceView === 'document'"
+                :class="{ 'is-active': resourceView === 'document' }"
+                @click="showDocument"
+              >
+                <BookOpenText :size="16" />
+                <span>主讲文档</span>
+              </button>
+              <button
+                v-if="mindmapResource"
+                type="button"
+                role="tab"
+                :aria-selected="resourceView === 'mindmap'"
+                :class="{ 'is-active': resourceView === 'mindmap' }"
+                :disabled="isMindmapLoading"
+                :title="mindmapError || '查看本章知识结构'"
+                @click="showMindmap"
+              >
+                <Network :size="16" />
+                <span>{{ isMindmapLoading ? '读取中' : mindmapError ? '重试结构' : '知识结构' }}</span>
+              </button>
+            </div>
           </nav>
 
           <main class="lesson-main">
             <div class="resource-toolbar" aria-label="章节材料视图">
-              <div class="resource-tabs">
-                <button type="button" :class="{ 'is-active': resourceView === 'document' }" @click="showDocument">
-                  <BookOpenText :size="15" />
-                  <span>主讲文档</span>
-                </button>
-                <button
-                  v-if="mindmapResource"
-                  type="button"
-                  :class="{ 'is-active': resourceView === 'mindmap' }"
-                  :disabled="isMindmapLoading"
-                  :title="mindmapError || '查看本章知识结构'"
-                  @click="showMindmap"
-                >
-                  <Network :size="15" />
-                  <span>{{ isMindmapLoading ? '读取中' : mindmapError ? '知识结构重试' : '知识结构' }}</span>
-                </button>
-              </div>
               <span class="resource-status"><span class="status-dot"></span>{{ resourceStatusLabel }}</span>
             </div>
 
@@ -868,13 +877,18 @@ onBeforeUnmount(() => {
 .workspace-rail button:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
 .workspace-rail button > span { font-size: 9px; font-weight: 800; }
 .workspace-rail button > small { position: absolute; top: 4px; right: 4px; display: grid; min-width: 14px; height: 14px; place-items: center; padding: 0 3px; border-radius: 7px; background: var(--soft); color: var(--accent-deep); font-size: 8px; font-weight: 800; }
+.workspace-rail__divider { width: 28px; height: 1px; margin: 3px auto; background: var(--line); }
 .lesson-main { display: grid; min-width: 0; gap: 12px; }
-.resource-toolbar { display: flex; min-height: 38px; align-items: center; justify-content: space-between; gap: 12px; }
+.resource-toolbar { display: flex; min-height: 16px; align-items: center; justify-content: flex-end; gap: 12px; }
 .resource-tabs { display: flex; align-items: center; gap: 4px; }
 .resource-tabs button { display: inline-flex; min-height: 34px; align-items: center; gap: 7px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 11px; }
 .resource-tabs button:hover:not(:disabled) { background: #e9eeea; color: var(--ink); }
 .resource-tabs button.is-active { background: #e4ecdd; color: var(--accent-deep); font-weight: 800; }
 .resource-tabs button:disabled { cursor: wait; opacity: .55; }
+.resource-tabs--rail { display: grid; width: 100%; gap: 5px; }
+.resource-tabs--rail button { display: grid; width: 40px; min-height: 57px; place-items: center; align-content: center; gap: 4px; margin: 0 auto; padding: 5px 2px; font-size: 9px; line-height: 1.25; }
+.resource-tabs--rail button span { max-width: 36px; text-align: center; }
+.resource-tabs--rail button.is-active { background: #e4ecdd; }
 .resource-status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; }
 .resource-status .status-dot { width: 6px; height: 6px; }
 .chapter-footer { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 15px 17px; }
@@ -928,10 +942,14 @@ onBeforeUnmount(() => {
   .workspace-rail { position: static; display: flex; gap: 7px; padding: 0 0 10px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
   .workspace-rail button { display: flex; width: auto; min-width: 72px; min-height: 38px; gap: 6px; padding: 0 10px; }
   .workspace-rail button > small { position: static; min-width: 16px; }
+  .workspace-rail__divider { width: 1px; height: 24px; margin: 0 2px; }
+  .resource-tabs--rail { display: flex; width: auto; gap: 7px; }
+  .resource-tabs--rail button { display: inline-flex; width: auto; min-width: 82px; min-height: 38px; flex-direction: row; gap: 6px; margin: 0; padding: 0 10px; font-size: 11px; }
+  .resource-tabs--rail button span { max-width: none; }
   .lesson-context__copy > p:last-child { display: grid; gap: 5px; }
   .lesson-context__copy > p:last-child span { margin-left: 0; }
   .lesson-context__copy > p:last-child span::before { display: none; }
-  .resource-toolbar { align-items: flex-start; flex-direction: column; }
+  .resource-toolbar { min-height: 14px; }
   .chapter-footer { grid-template-columns: 1fr 1fr; }
   .chapter-footer__copy { grid-column: 1 / -1; grid-row: 1; }
   .chapter-footer .button { width: 100%; }
