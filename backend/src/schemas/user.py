@@ -5,8 +5,6 @@ class Create_User(BaseModel):
     """注册新用户"""
     username: str = Field(description="用户名")
     password: str = Field(description="密码")
-    captcha_ticket: str | None = Field(default=None, max_length=4096, description="腾讯云验证码票据")
-    captcha_randstr: str | None = Field(default=None, max_length=256, description="腾讯云验证码随机串")
 
 
 class Login_User(BaseModel):
@@ -43,8 +41,6 @@ class SendEmailCode(BaseModel):
     """发送邮箱验证码"""
     email: str = Field(description="邮箱地址")
     purpose: str = Field(default="login", description="login / register / bind")
-    captcha_ticket: str | None = Field(default=None, max_length=4096, description="腾讯云验证码票据")
-    captcha_randstr: str | None = Field(default=None, max_length=256, description="腾讯云验证码随机串")
 
 
 class RegisterByEmail(BaseModel):

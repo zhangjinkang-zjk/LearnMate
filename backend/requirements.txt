@@ -28,8 +28,6 @@ python-pptx==1.0.2
 pdfminer.six==20260107
 edge-tts==7.2.8
 httpx==0.28.1
-tencentcloud-sdk-python-common==3.1.51
-tencentcloud-sdk-python-captcha==3.1.51
 APScheduler==3.11.2
 pytest==8.3.4
 pytest-asyncio==0.24.0
