@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import uuid
 from typing import Any
 
@@ -69,38 +70,38 @@ def _safe_question(question: ExamQuestion) -> dict:
         "question_id": question.id,
         "question_type": question.question_type,
         "content": question.content,
-        "options": options,
+        "options": options if question.question_type in {"single_choice", "multi_choice", "true_false"} else [],
         "difficulty": question.difficulty,
         "knowledge_tags": tags,
     }
 
 
 def _fallback_question(index: int, direction: str) -> dict:
-    """LLM 不可用时仍保持诊断结构，但兜底题只覆盖已定义的核心考点。"""
+    """LLM 不可用时仍保持开放式访谈结构。"""
     topic = direction or "当前学习方向"
     items = [
         {
-            "content": f"学习“{topic}”时，第一步更应该做什么？",
-            "options": ["A. 先明确问题和评价标准", "B. 先堆叠更多工具", "C. 先复制一份复杂案例", "D. 先追求最终界面效果"],
-            "answer": "A",
-            "analysis": "先明确问题与评价标准，才能判断后续方案是否有效；工具数量、案例复杂度和界面效果都不能替代问题定义。",
-            "tags": ["问题定义", "评价标准"],
+            "content": f"用自己的话说说，在学习“{topic}”时，你认为最核心的概念或方法是什么？它解决什么问题？",
+            "reference_answer": "能够说清核心概念的定义、要解决的问题，以及它与学习方向的关系。",
+            "evaluation_points": ["概念定义", "解决的问题"],
+            "analysis": "先确认你是否理解概念和它要解决的问题，再进入具体应用。",
+            "tags": ["核心概念", "问题定义"],
             "difficulty": "easy",
         },
         {
-            "content": f"如果“{topic}”的第一次结果不理想，你更适合先检查什么？",
-            "options": ["A. 结果是否符合目标和证据", "B. 立刻整体推倒重来", "C. 只更换最热门的工具", "D. 直接增加任务数量"],
-            "answer": "A",
-            "analysis": "先对照目标检查结果和证据，才能定位问题来源；盲目重做、换工具或加量都无法形成有效诊断。",
+            "content": f"假设你第一次把“{topic}”用于一个真实任务，结果没有达到目标，你会先检查什么？请说说你的判断顺序。",
+            "reference_answer": "先对照目标和评价标准确认问题，再检查输入、关键步骤和输出证据，最后决定是否调整方案。",
+            "evaluation_points": ["目标与标准", "输入和步骤", "证据验证"],
+            "analysis": "应用能力不只看会不会操作，还要看能否按证据定位问题。",
             "tags": ["结果评估", "问题排查"],
             "difficulty": "medium",
         },
         {
-            "content": f"要把“{topic}”用于一个新场景，最能说明你已经掌握的是？",
-            "options": ["A. 能解释取舍并用结果验证方案", "B. 能复述完整术语定义", "C. 能记住所有工具参数", "D. 能照着示例逐步操作"],
-            "answer": "A",
-            "analysis": "迁移能力体现在能结合新场景做出取舍，并用结果验证方案；复述、记参数或照做只能说明接触过。",
-            "tags": ["迁移应用", "方案取舍"],
+            "content": f"如果要把“{topic}”迁移到一个你没见过的新场景，你会怎样做取舍并验证方案有效？",
+            "reference_answer": "先分析新场景约束和目标，说明方案取舍，再用可观察的指标或对照结果验证效果并迭代。",
+            "evaluation_points": ["场景约束", "方案取舍", "指标验证"],
+            "analysis": "迁移能力体现在面对新约束时能解释取舍，并用结果验证，而不是复述示例。",
+            "tags": ["迁移应用", "方案取舍", "效果验证"],
             "difficulty": "medium",
         },
     ]
@@ -128,14 +129,14 @@ async def _generate_question(user_id: int, identity: str, direction: str, goal: 
         response = await llm.ainvoke(prompt, priority="high", user_id=int(user_id), pool="diagnosis")
         result = parse_llm_json(response.content.strip())
         if isinstance(result, dict):
-            options = result.get("options")
-            answer = str(result.get("answer") or "").strip().upper()
             content = str(result.get("content") or "").strip()
-            if content and isinstance(options, list) and len(options) == 4 and answer in {"A", "B", "C", "D"}:
+            reference_answer = str(result.get("reference_answer") or result.get("answer") or "").strip()
+            evaluation_points = [str(point).strip()[:80] for point in (result.get("evaluation_points") or []) if str(point).strip()][:3]
+            if content and reference_answer:
                 return {
                     "content": content[:300],
-                    "options": [str(option)[:120] for option in options],
-                    "answer": answer,
+                    "reference_answer": reference_answer[:600],
+                    "evaluation_points": evaluation_points,
                     "analysis": str(result.get("analysis") or "").strip()[:500],
                     "tags": [str(tag)[:40] for tag in (result.get("knowledge_tags") or [])][:3],
                     "difficulty": str(result.get("difficulty") or "medium"),
@@ -146,12 +147,16 @@ async def _generate_question(user_id: int, identity: str, direction: str, goal: 
 
 
 async def _create_question(user_id: int, session_id: str, payload: dict) -> ExamQuestion:
+    evaluation_context = {
+        "feedback_basis": payload.get("analysis") or "",
+        "evaluation_points": payload.get("evaluation_points") or [],
+    }
     question = await ExamQuestion.create(
-        question_type="single_choice",
+        question_type="short_answer",
         content=payload["content"],
-        options=json.dumps(payload["options"], ensure_ascii=False),
-        answer=payload["answer"],
-        analysis=payload.get("analysis") or "",
+        options=None,
+        answer=payload["reference_answer"],
+        analysis=json.dumps(evaluation_context, ensure_ascii=False),
         difficulty=payload.get("difficulty") if payload.get("difficulty") in {"easy", "medium", "hard"} else "medium",
         knowledge_tags=json.dumps(payload.get("tags") or [], ensure_ascii=False),
         point_value=1.0,
@@ -159,6 +164,79 @@ async def _create_question(user_id: int, session_id: str, payload: dict) -> Exam
     )
     await ExamRecord.create(question=question, user_id=user_id, session_id=session_id)
     return question
+
+
+def _evaluation_context(question: ExamQuestion) -> tuple[str, list[str]]:
+    try:
+        context = json.loads(question.analysis or "{}")
+    except (json.JSONDecodeError, TypeError):
+        context = {}
+    points = [str(point).strip() for point in (context.get("evaluation_points") or []) if str(point).strip()]
+    return str(context.get("feedback_basis") or "").strip(), points
+
+
+def _fallback_evaluation(question: ExamQuestion, answer_text: str) -> dict:
+    """LLM 评估不可用时，用参考答案和评估要点做保守的关键词覆盖判断。"""
+    answer = str(answer_text or "").strip()
+    reference = str(question.answer or "").strip()
+    _, points = _evaluation_context(question)
+    if not answer:
+        return {"is_correct": False, "score": 0.0, "feedback": "还没有收到你的回答，请先说说你的理解。"}
+    source = " ".join([reference, *points])
+    tokens = set(re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z][A-Za-z0-9_+-]{1,}", source.casefold()))
+    matched = {token for token in tokens if token in answer.casefold()}
+    coverage = len(matched) / max(len(tokens), 1)
+    is_correct = answer.casefold() == reference.casefold() or (len(answer) >= 8 and coverage >= 0.35)
+    feedback = "你的回答覆盖了关键判断，我继续从应用和迁移角度确认。" if is_correct else "你的回答里已经有部分线索，但还缺少关键依据；我会据此调整后续问题。"
+    return {"is_correct": is_correct, "score": 1.0 if is_correct else 0.0, "feedback": feedback}
+
+
+async def _evaluate_answer(user_id: int, question: ExamQuestion, answer_text: str) -> dict:
+    answer = str(answer_text or "").strip()[:2000]
+    feedback_basis, points = _evaluation_context(question)
+    try:
+        from backend.src.ai_core.llm_config import llm
+
+        prompt = fill_prompt(
+            load_prompt("diagnosis_evaluate"),
+            question=question.content[:500],
+            reference_answer=str(question.answer or "")[:600],
+            evaluation_points="；".join(points)[:300] or "关注回答是否给出概念、依据或验证方式",
+            answer=answer,
+        )
+        response = await llm.ainvoke(prompt, priority="high", user_id=int(user_id), pool="diagnosis")
+        result = parse_llm_json(response.content.strip())
+        if isinstance(result, dict) and isinstance(result.get("is_correct"), bool):
+            return {
+                "is_correct": result["is_correct"],
+                "score": 1.0 if result["is_correct"] else 0.0,
+                "feedback": str(result.get("feedback") or feedback_basis or "已记录你的回答。")[:500],
+            }
+    except Exception:
+        logger.warning("开放回答评估失败，使用关键词兜底 user_id=%s question_id=%s", user_id, question.id, exc_info=True)
+    return _fallback_evaluation(question, answer)
+
+
+async def _submit_open_answer(user_id: int, record: ExamRecord, answer_text: str, time_spent: int | None, session_id: str) -> dict:
+    question = await record.question
+    evaluation = await _evaluate_answer(user_id, question, answer_text)
+    # 复用 ExamService 的掌握度、画像和会话汇总逻辑；题目答案是服务端参考答案，实际回答随后写回记录。
+    probe_answer = str(question.answer or "") if evaluation["is_correct"] else "__learnmate_incorrect_answer__"
+    result = await ExamService.submit_answer(question.id, user_id, probe_answer, time_spent, session_id)
+    saved_record = await ExamRecord.filter(user_id=user_id, session_id=session_id, question_id=question.id).order_by("-id").first()
+    if saved_record:
+        saved_record.user_answer = str(answer_text or "").strip()[:2000]
+        saved_record.is_correct = evaluation["is_correct"]
+        saved_record.score = evaluation["score"]
+        await saved_record.save()
+    result.update({
+        "is_correct": evaluation["is_correct"],
+        "score": 100.0 if evaluation["is_correct"] else 0.0,
+        "correct_answer": None,
+        "analysis": evaluation["feedback"],
+        "feedback": evaluation["feedback"],
+    })
+    return result
 
 
 async def start(user_id: int, identity: str, direction: str, goal: str, max_steps: int = 3) -> dict:
@@ -182,7 +260,7 @@ async def answer(user_id: int, session_id: str, question_id: int, answer_text: s
     if record.is_correct is not None:
         raise ValueError("该题已经提交过")
 
-    result = await ExamService.submit_answer(question_id, user_id, str(answer_text or ""), time_spent, session_id)
+    result = await _submit_open_answer(user_id, record, str(answer_text or ""), time_spent, session_id)
     records = await ExamRecord.filter(user_id=user_id, session_id=session_id).order_by("id").prefetch_related("question").all()
     answered = [item for item in records if item.is_correct is not None]
     max_steps = max(_MIN_QUESTIONS, min(int(max_steps or _MIN_QUESTIONS), _MAX_QUESTIONS))

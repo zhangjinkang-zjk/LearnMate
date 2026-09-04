@@ -26,7 +26,7 @@ class StartDiagnosisRequest(BaseModel):
 class AnswerDiagnosisRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=64)
     question_id: int
-    answer: str = Field(default="", max_length=2000)
+    answer: str = Field(min_length=1, max_length=2000)
     time_spent: Optional[int] = Field(default=None, ge=0)
     max_steps: int = Field(default=3, ge=3, le=5)
 

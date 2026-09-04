@@ -18,13 +18,25 @@
       </div>
 
       <div v-if="currentQuestion && !isFinished" class="answer-panel">
-        <p class="answer-label">选择最符合你当前理解的一项</p>
-        <div class="answer-list">
-          <button v-for="(option, optionIndex) in currentQuestion.options" :key="option" class="answer-option" :class="{ selected: selectedAnswer === answerKey(option, optionIndex) }" type="button" :disabled="isLoading" @click="selectedAnswer = answerKey(option, optionIndex)">
-            <span class="answer-dot"></span>{{ option }}
-          </button>
+        <label class="answer-label" for="diagnosis-answer">说说你的理解</label>
+        <div class="answer-composer">
+          <textarea
+            id="diagnosis-answer"
+            v-model="answerDraft"
+            :disabled="isLoading"
+            maxlength="2000"
+            rows="4"
+            placeholder="用你自己的话回答，想到什么先说什么…"
+            @keydown.ctrl.enter.prevent="submitAnswer"
+            @keydown.meta.enter.prevent="submitAnswer"
+          ></textarea>
+          <div class="composer-footer">
+            <span class="answer-hint">{{ answerDraft.length }} / 2000</span>
+            <button class="button button--primary" type="button" :disabled="!canSubmit || isLoading" @click="submitAnswer">
+              {{ isLoading ? '分析中…' : '发送回答' }} <span aria-hidden="true">↗</span>
+            </button>
+          </div>
         </div>
-        <div class="diagnosis-actions"><button class="button button--primary" type="button" :disabled="!selectedAnswer || isLoading" @click="submitAnswer">提交回答 <span>→</span></button></div>
       </div>
 
       <div v-if="errorMessage" class="diagnosis-error"><span>{{ errorMessage }}</span><button class="button button--quiet" type="button" @click="startDiagnosis">重试</button></div>
@@ -45,23 +57,19 @@ const isLoading = ref(false)
 const isFinished = ref(false)
 const errorMessage = ref('')
 const answeredCount = ref(0)
-const selectedAnswer = ref('')
+const answerDraft = ref('')
 const currentQuestion = ref(null)
 const messages = ref([])
 const sessionId = ref('')
 const loadingMessage = ref('正在分析你的回答')
 
 const progress = computed(() => isFinished.value ? 100 : Math.round((answeredCount.value / totalQuestions) * 100))
+const canSubmit = computed(() => Boolean(answerDraft.value.trim()))
 const context = computed(() => ({
   identity: learningState.identity || localStorage.getItem('learnmate_identity') || '',
   direction: learningState.direction || localStorage.getItem('learnmate_direction') || '',
   goal: learningState.goal || localStorage.getItem('learnmate_goal') || '',
 }))
-
-function answerKey(option, index = 0) {
-  const match = String(option).match(/^\s*([A-D])(?:[.、)）]|\s)/i)
-  return match ? match[1].toUpperCase() : String.fromCharCode(65 + index)
-}
 
 function questionText(question) {
   return question?.content || question?.title || ''
@@ -72,7 +80,7 @@ async function startDiagnosis() {
   isFinished.value = false
   errorMessage.value = ''
   answeredCount.value = 0
-  selectedAnswer.value = ''
+  answerDraft.value = ''
   currentQuestion.value = null
   loadingMessage.value = '正在根据你的学习方向生成第一道诊断题'
   messages.value = [{ role: 'assistant', text: '我会根据你的学习方向，从基础理解开始了解你的起点。每次只回答一个问题即可。' }]
@@ -89,9 +97,9 @@ async function startDiagnosis() {
 }
 
 async function submitAnswer() {
-  if (!selectedAnswer.value || !currentQuestion.value || isLoading.value) return
-  const selectedOption = currentQuestion.value.options?.find((option, index) => answerKey(option, index) === selectedAnswer.value) || selectedAnswer.value
-  messages.value.push({ role: 'user', text: selectedOption })
+  const answer = answerDraft.value.trim()
+  if (!answer || !currentQuestion.value || isLoading.value) return
+  messages.value.push({ role: 'user', text: answer })
   isLoading.value = true
   loadingMessage.value = '正在结合你的回答调整下一道题'
   errorMessage.value = ''
@@ -99,13 +107,13 @@ async function submitAnswer() {
     const result = await diagnosisApi.answerStream({
       session_id: sessionId.value,
       question_id: currentQuestion.value.question_id,
-      answer: selectedAnswer.value,
+      answer,
       max_steps: totalQuestions,
     }, handleStreamEvent)
     answeredCount.value += 1
     const feedback = result.feedback || {}
     messages.value.push({ role: 'assistant', text: feedback.is_correct ? '这道题回答正确，我继续确认你在实际应用中的判断。' : (feedback.analysis || '这道题能看出你已经接触过相关概念，我们换一个角度继续确认。') })
-    selectedAnswer.value = ''
+    answerDraft.value = ''
     if (result.finished) {
       isFinished.value = true
       localStorage.setItem('learnmate_diagnosis_result', JSON.stringify(result.result || {}))
@@ -136,10 +144,10 @@ onMounted(startDiagnosis)
 .diagnosis-page { position: relative; min-height: 100vh; overflow: hidden; isolation: isolate; padding: clamp(28px, 5vw, 64px) clamp(20px, 6vw, 90px) 56px; color: #f3f0e7; background: #1e3c34; }
 .back-link { position: relative; z-index: 2; display: inline-flex; align-items: center; gap: 10px; color: rgba(243, 240, 231, .8); font-size: 11px; font-weight: 800; letter-spacing: .16em; text-decoration: none; }.back-link:hover { color: #e2f452; }.back-link span:first-child { font-size: 20px; line-height: .6; }
 .diagnosis-heading { position: relative; z-index: 1; width: min(820px, 100%); margin: clamp(38px, 8vh, 86px) auto 26px; }.diagnosis-heading .eyebrow { color: #d9ed9a; }.diagnosis-heading h1 { margin: 0; color: #f3f0e7; font-family: "Smiley Sans", Georgia, serif; font-size: clamp(30px, 4.5vw, 52px); font-weight: 500; letter-spacing: .01em; line-height: 1.15; }.diagnosis-heading > p:last-child { max-width: 600px; margin: 14px 0 0; color: rgba(243, 240, 231, .72); font-size: 14px; line-height: 1.8; }
-.diagnosis-card { position: relative; z-index: 1; width: min(820px, 100%); margin: 0 auto; overflow: hidden; padding: 0; border: 1px solid rgba(243, 240, 231, .22); border-radius: 8px; background: rgba(9, 29, 21, .72); box-shadow: 0 20px 55px rgba(2, 15, 10, .22); }
+.diagnosis-card { position: relative; z-index: 1; display: flex; flex-direction: column; width: min(820px, 100%); height: min(720px, calc(100vh - 248px)); min-height: 600px; margin: 0 auto; overflow: hidden; padding: 0; border: 1px solid rgba(243, 240, 231, .22); border-radius: 8px; background: rgba(9, 29, 21, .72); box-shadow: 0 20px 55px rgba(2, 15, 10, .22); }
 .diagnosis-meta { display: flex; align-items: center; gap: 14px; padding: 22px 28px; border-bottom: 1px solid rgba(243, 240, 231, .16); color: rgba(243, 240, 231, .72); font-size: 12px; }
 .diagnosis-meta .progress-track { flex: 1; }
-.conversation-list { display: grid; gap: 18px; min-height: 390px; max-height: 52vh; overflow-y: auto; padding: 28px; }
+.conversation-list { display: flex; flex: 1 1 auto; flex-direction: column; gap: 18px; min-height: 0; overflow-y: auto; padding: 28px; }
 .chat-message { display: flex; align-items: flex-start; gap: 10px; max-width: 84%; }
 .chat-message p { margin: 0; padding: 12px 14px; border-radius: 8px; font-size: 14px; line-height: 1.7; white-space: pre-wrap; }
 .chat-message--assistant p { background: rgba(232, 241, 224, .94); color: var(--ink); }
@@ -147,7 +155,7 @@ onMounted(startDiagnosis)
 .chat-message--user p { background: var(--ink); color: #fff; }
 .message-avatar { display: grid; flex: 0 0 auto; width: 27px; height: 27px; place-items: center; border-radius: 50%; background: var(--accent); color: var(--accent-deep); font-size: 11px; font-weight: 900; }
 .typing { color: var(--muted) !important; }.typing span { display: inline-block; animation: blink 1.1s infinite; }.typing span:nth-child(2) { animation-delay: .15s; }.typing span:nth-child(3) { animation-delay: .3s; }
-.answer-panel { padding: 20px 28px 28px; border-top: 1px solid rgba(243, 240, 231, .16); }.answer-label { margin: 0 0 13px; color: rgba(243, 240, 231, .72); font-size: 12px; }.answer-list { display: grid; gap: 10px; }.answer-option { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 0 15px; border: 1px solid rgba(243, 240, 231, .22); border-radius: 5px; background: rgba(243, 240, 231, .08); color: #f3f0e7; text-align: left; font-size: 13px; }.answer-option:hover, .answer-option.selected { border-color: #e2f452; background: rgba(226, 244, 82, .16); }.answer-option:disabled { cursor: wait; opacity: .65; }.answer-dot { width: 13px; height: 13px; border: 1px solid rgba(243, 240, 231, .68); border-radius: 50%; }.selected .answer-dot { border: 4px solid #e2f452; }.diagnosis-actions { display: flex; justify-content: flex-end; margin-top: 22px; }.diagnosis-actions .button--primary { background: #e2f452; color: #1e3c34; }.diagnosis-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 28px; border-top: 1px solid rgba(243, 240, 231, .16); color: #f2c49b; font-size: 12px; }.diagnosis-error .button--quiet { border-color: rgba(243, 240, 231, .3); background: transparent; color: #f3f0e7; }.diagnosis-error .button { flex: 0 0 auto; }
+.answer-panel { flex: 0 0 190px; padding: 18px 28px 22px; border-top: 1px solid rgba(243, 240, 231, .16); }.answer-label { display: block; margin: 0 0 10px; color: rgba(243, 240, 231, .72); font-size: 12px; }.answer-composer { display: grid; gap: 10px; }.answer-composer textarea { width: 100%; height: 92px; min-height: 92px; max-height: 92px; resize: none; padding: 12px 14px; border: 1px solid rgba(243, 240, 231, .28); border-radius: 6px; background: rgba(243, 240, 231, .1); color: #f3f0e7; outline: none; font-size: 13px; line-height: 1.6; }.answer-composer textarea::placeholder { color: rgba(243, 240, 231, .48); }.answer-composer textarea:focus { border-color: #e2f452; box-shadow: 0 0 0 2px rgba(226, 244, 82, .12); }.answer-composer textarea:disabled { cursor: wait; opacity: .65; }.composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }.answer-hint { color: rgba(243, 240, 231, .48); font-size: 11px; }.diagnosis-actions .button--primary { background: #e2f452; color: #1e3c34; }.diagnosis-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 28px; border-top: 1px solid rgba(243, 240, 231, .16); color: #f2c49b; font-size: 12px; }.diagnosis-error .button--quiet { border-color: rgba(243, 240, 231, .3); background: transparent; color: #f3f0e7; }.diagnosis-error .button { flex: 0 0 auto; }
 @keyframes blink { 0%, 60%, 100% { opacity: .25; } 30% { opacity: 1; } }
-@media (max-width: 600px) { .conversation-list { min-height: 330px; padding: 20px 16px; }.chat-message { max-width: 94%; }.diagnosis-meta, .answer-panel, .diagnosis-error { padding-left: 16px; padding-right: 16px; }.diagnosis-error { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 600px) { .diagnosis-card { height: calc(100svh - 184px); min-height: 540px; }.conversation-list { padding: 20px 16px; }.chat-message { max-width: 94%; }.diagnosis-meta, .answer-panel, .diagnosis-error { padding-left: 16px; padding-right: 16px; }.diagnosis-error { align-items: flex-start; flex-direction: column; } }
 </style>
