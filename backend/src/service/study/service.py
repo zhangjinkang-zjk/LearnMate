@@ -4,6 +4,8 @@ import json
 import logging
 from datetime import date, datetime, timedelta
 
+from tortoise.expressions import Q
+
 from backend.src.models.study_model import StudySession, ResourceReadStatus, ResourceCollection
 from backend.src.models.exam_model import KnowledgeMastery, ExamRecord
 from backend.src.models.resource_model import GeneratedResource
@@ -40,7 +42,10 @@ class StudyService:
     @staticmethod
     async def mark_read(user_id: int, resource_id: int, duration_seconds: int = 0) -> dict:
         """标记资源为已读，可选上报使用时长"""
-        resource = await GeneratedResource.filter(id=resource_id).first()
+        resource = await GeneratedResource.filter(
+            Q(id=resource_id),
+            Q(user_id=user_id) | Q(visibility="public"),
+        ).first()
         if not resource:
             raise ValueError("资源不存在")
         status, created = await ResourceReadStatus.get_or_create(
@@ -59,7 +64,10 @@ class StudyService:
     @staticmethod
     async def mark_unread(user_id: int, resource_id: int) -> dict:
         """标记资源为未读"""
-        resource = await GeneratedResource.filter(id=resource_id).first()
+        resource = await GeneratedResource.filter(
+            Q(id=resource_id),
+            Q(user_id=user_id) | Q(visibility="public"),
+        ).first()
         if not resource:
             raise ValueError("资源不存在")
         status = await ResourceReadStatus.filter(user_id=user_id, resource_id=resource_id).first()

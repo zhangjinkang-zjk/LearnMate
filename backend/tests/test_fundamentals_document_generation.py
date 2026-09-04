@@ -313,12 +313,59 @@ def test_generic_document_body_uses_general_resource_prompt():
         "document",
         "操作系统调度",
         portrait="计算机专业学生",
-        section="时间片轮转",
     )
 
     assert "专业的学习文档生成器" in prompt
     assert "路径节点教学契约" not in prompt
     assert "当前小节：" not in prompt
+
+
+def test_path_mindmap_custom_prompt_cannot_replace_scope_contract():
+    prompt = resource_graph.build_resource_prompt(
+        "mindmap",
+        "文档切分",
+        teaching_context=_make_teaching_context(),
+        custom_prompts={"mindmap": "采用左右布局，突出 {topic} 的对比关系。"},
+    )
+
+    assert "当前路径节点教学契约" in prompt
+    assert "reserved_scope 不得展开" in prompt
+    assert "采用左右布局，突出 文档切分 的对比关系" in prompt
+    assert "可选表达偏好" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generic_parallel_document_assigns_a_distinct_section_to_each_prompt(monkeypatch):
+    prompts = []
+    section_titles = ("调度目标", "时间片轮转", "饥饿与公平性")
+
+    class FakeLlm:
+        async def ainvoke(self, prompt, **kwargs):
+            prompts.append(prompt)
+            match = re.search(r"当前章节\n第 \d+/\d+ 章「([^」]+)」", prompt)
+            assert match, "普通文档正文 prompt 应明确标识当前章节"
+            return SimpleNamespace(content=_valid_section(match.group(1)))
+
+    async def fake_kb_search(*args, **kwargs):
+        return "暂无相关知识库资料"
+
+    monkeypatch.setattr(resource_graph, "llm", FakeLlm())
+    monkeypatch.setattr(resource_graph, "kb_search", fake_kb_search)
+
+    content = await resource_graph.generate_document_parallel(
+        "操作系统调度",
+        portrait="计算机专业学生",
+        sections=list(section_titles),
+        section_count=len(section_titles),
+    )
+
+    assert len(prompts) == len(section_titles)
+    for title in section_titles:
+        matching_prompts = [prompt for prompt in prompts if f"章「{title}」" in prompt]
+        assert len(matching_prompts) == 1
+        assert all(item in matching_prompts[0] for item in section_titles)
+        assert "路径节点教学契约" not in matching_prompts[0]
+    assert all(f"## {title}" in content for title in section_titles)
 
 
 def test_custom_document_prompt_keeps_standard_path_teaching_contract():
