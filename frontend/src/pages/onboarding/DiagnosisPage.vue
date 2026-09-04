@@ -112,12 +112,12 @@ async function submitAnswer() {
     }, handleStreamEvent)
     answeredCount.value += 1
     const feedback = result.feedback || {}
-    messages.value.push({ role: 'assistant', text: feedback.is_correct ? '这道题回答正确，我继续确认你在实际应用中的判断。' : (feedback.analysis || '这道题能看出你已经接触过相关概念，我们换一个角度继续确认。') })
+    messages.value.push({ role: 'assistant', text: feedback.is_correct ? '这道题回答正确，我继续确认你在实际应用中的判断。' : (feedback.analysis || '正在生成回复…') })
     answerDraft.value = ''
     if (result.finished) {
       isFinished.value = true
       localStorage.setItem('learnmate_diagnosis_result', JSON.stringify(result.result || {}))
-      messages.value.push({ role: 'assistant', text: result.result?.message || '诊断完成，我已经整理好你的学习起点。' })
+      messages.value.push({ role: 'assistant', text: result.result?.message || '正在生成诊断结果…' })
       window.setTimeout(() => router.push('/onboarding/diagnosis/result'), 500)
     } else {
       currentQuestion.value = result.question

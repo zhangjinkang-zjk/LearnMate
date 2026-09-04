@@ -82,7 +82,8 @@ const recommendation = computed(() => {
   const weak = diagnosis.value.weakPoints[0]?.tag
   const text = typeof guidance.value === 'string' ? guidance.value.trim() : ''
   if (needsDiagnosis) return { title: current, guidance: '正在生成当前建议…', reason: '正在生成依据。', criteria: '正在生成完成标志。', to: '', actionLabel: '' }
-  return { title: current, guidance: text || `先完成“${current}”的学习材料，再用节点测验验证是否真正掌握。`, reason: weak ? `诊断显示“${weak}”仍是当前薄弱点，先处理它能减少后续迁移练习中的反复。` : '当前还没有足够的练习数据，先完成一个完整节点，系统才能给出更精确的建议。', criteria: '能够用自己的话解释核心概念，并在节点测验中达到系统设定的通过线。', to: path.nextAction?.type === 'quiz' ? '/learning/advanced' : '/learning/fundamentals', actionLabel: path.nextAction?.label || '开始当前节点' }
+  if (!text) return { title: '正在生成', guidance: '正在生成当前建议…', reason: '正在生成依据。', criteria: '正在生成完成标志。', to: '', actionLabel: '' }
+  return { title: current, guidance: text, reason: weak ? `诊断显示“${weak}”仍是当前薄弱点，先处理它能减少后续迁移练习中的反复。` : '正在生成依据。', criteria: '正在生成完成标志。', to: path.nextAction?.type === 'quiz' ? '/learning/advanced' : '/learning/fundamentals', actionLabel: path.nextAction?.label || '开始当前节点' }
 })
 
 function formatDuration(seconds) { const value = Number(seconds || 0); if (value < 60) return `${value}秒`; const minutes = Math.round(value / 60); if (minutes < 60) return `${minutes}分钟`; return `${(minutes / 60).toFixed(1)}小时` }

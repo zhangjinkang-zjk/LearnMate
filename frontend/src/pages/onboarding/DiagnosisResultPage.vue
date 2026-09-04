@@ -7,7 +7,7 @@
       <section class="result-card score-card">
         <span class="score-label">当前综合起点</span>
         <strong>{{ level }}</strong>
-        <div class="score-ring"><span>{{ score }}<small>%</small></span></div>
+        <div class="score-ring"><span>{{ score ?? '正在生成' }}<small v-if="hasResult">%</small></span></div>
         <p>{{ description }}</p>
       </section>
       <section class="result-card result-list">
@@ -27,11 +27,15 @@
 import { computed } from 'vue'
 import ImmersiveOnboardingBackdrop from '@/shared/ui/ImmersiveOnboardingBackdrop.vue'
 
-let storedResult = {}
-try { storedResult = JSON.parse(localStorage.getItem('learnmate_diagnosis_result') || '{}') } catch { storedResult = {} }
-const score = computed(() => Math.round(Number(storedResult.percentage ?? 42)))
-const level = computed(() => score.value >= 85 ? '应用进阶期' : score.value >= 60 ? '基础巩固期' : '基础建立期')
-const description = computed(() => storedResult.message || '你已经理解部分概念，下一步适合通过基础讲解建立完整方法，再进入项目练习。')
+let storedResult = null
+try {
+  const rawResult = localStorage.getItem('learnmate_diagnosis_result')
+  storedResult = rawResult ? JSON.parse(rawResult) : null
+} catch { storedResult = null }
+const hasResult = computed(() => Boolean(storedResult && Number.isFinite(Number(storedResult.percentage))))
+const score = computed(() => hasResult.value ? Math.round(Number(storedResult.percentage)) : null)
+const level = computed(() => hasResult.value ? (score.value >= 85 ? '应用进阶期' : score.value >= 60 ? '基础巩固期' : '基础建立期') : '正在生成')
+const description = computed(() => storedResult?.message || '正在生成诊断结果…')
 </script>
 
 <style scoped>

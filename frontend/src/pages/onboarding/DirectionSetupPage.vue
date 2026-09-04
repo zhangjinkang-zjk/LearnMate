@@ -74,8 +74,8 @@ const router = useRouter()
 const selectedIdentity = ref(localStorage.getItem('learnmate_identity') || '')
 const storedDirection = localStorage.getItem('learnmate_direction') || ''
 const storedGoal = localStorage.getItem('learnmate_goal') || ''
-const selectedDirection = ref(directionOptions.includes(storedDirection) ? storedDirection : directionOptions[0])
-const selectedGoal = ref(goalOptions.includes(storedGoal) ? storedGoal : goalOptions[0])
+const selectedDirection = ref(directionOptions.includes(storedDirection) ? storedDirection : '')
+const selectedGoal = ref(goalOptions.includes(storedGoal) ? storedGoal : '')
 const customDirection = ref(directionOptions.includes(storedDirection) ? '' : storedDirection)
 const customGoal = ref(goalOptions.includes(storedGoal) ? '' : storedGoal)
 const resolvedDirection = computed(() => customDirection.value || selectedDirection.value)
