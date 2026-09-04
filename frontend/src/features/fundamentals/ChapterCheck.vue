@@ -225,20 +225,20 @@ onBeforeUnmount(() => requestController?.abort())
 </script>
 
 <style scoped>
-.chapter-check { min-height: 680px; overflow: hidden; }
+.chapter-check { display: grid; height: clamp(430px, calc(100vh - 420px), 680px); min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
 .check-header { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 20px 24px; border-bottom: 1px solid var(--line); background: #fbfcfa; }
 .check-header .eyebrow { margin-bottom: 5px; }
 .check-header h2 { margin: 0; overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
 .check-count { color: var(--muted); font-size: 11px; }
 .icon-button { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); color: var(--ink); }
 .icon-button:hover { background: var(--soft); }
-.check-state, .result-state { display: grid; min-height: 570px; place-items: center; align-content: center; gap: 10px; padding: 42px; text-align: center; }
+.check-state, .result-state { display: grid; min-height: 0; place-items: center; align-content: center; gap: 10px; overflow-y: auto; padding: 32px 26px; text-align: center; }
 .check-state { color: var(--accent-deep); }
 .check-state strong { color: var(--ink); font-size: 16px; }
 .check-state p, .result-state > p:last-of-type { max-width: 430px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .check-state--error { color: #a66442; }
 .check-state .button { margin-top: 8px; }
-.question-panel { max-width: 760px; margin: 0 auto; padding: 42px clamp(24px, 5vw, 54px) 48px; }
+.question-panel { width: min(760px, 100%); min-height: 0; margin: 0 auto; padding: 30px clamp(20px, 5vw, 54px) 34px; overflow-y: auto; }
 .question-progress { height: 5px; margin-bottom: 30px; }
 .question-type { color: var(--accent-deep); font-size: 11px; font-weight: 800; }
 .question-panel h2 { margin: 10px 0 28px; font-size: clamp(20px, 2.5vw, 27px); line-height: 1.5; }
@@ -251,7 +251,7 @@ onBeforeUnmount(() => requestController?.abort())
 .text-answer { display: grid; gap: 9px; color: var(--muted); font-size: 11px; }
 .text-answer textarea { width: 100%; min-height: 150px; resize: vertical; padding: 13px 14px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); outline: none; font-size: 13px; line-height: 1.65; }
 .text-answer textarea:focus { border-color: var(--accent-deep); }
-.question-actions { display: flex; justify-content: space-between; gap: 10px; margin-top: 32px; padding-top: 22px; border-top: 1px solid var(--line); }
+.question-actions { position: sticky; bottom: -1px; display: flex; justify-content: space-between; gap: 10px; margin-top: 28px; padding: 16px 0 2px; border-top: 1px solid var(--line); background: var(--paper); }
 .result-mark { display: grid; width: 62px; height: 62px; place-items: center; border-radius: 50%; background: #f1e6dc; color: #a66442; }
 .result-mark.is-passed { background: #e8f2de; color: var(--accent-deep); }
 .result-state .eyebrow { margin: 8px 0 0; }
@@ -265,5 +265,5 @@ onBeforeUnmount(() => requestController?.abort())
 .result-actions { display: flex; gap: 9px; margin-top: 16px; }
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (max-width: 560px) { .question-panel { padding: 30px 18px 38px; }.question-actions { align-items: stretch; flex-direction: column-reverse; }.question-actions .button { width: 100%; }.check-header { padding: 16px; } }
+@media (max-width: 560px) { .chapter-check { height: clamp(420px, calc(100vh - 350px), 620px); }.question-panel { padding: 24px 18px 28px; }.question-actions { align-items: stretch; flex-direction: column-reverse; }.question-actions .button { width: 100%; }.check-header { padding: 16px; } }
 </style>

@@ -760,8 +760,8 @@ onBeforeUnmount(() => {
 .chapter-footer .button { gap: 7px; white-space: nowrap; }
 .chapter-footer .button:disabled { cursor: not-allowed; opacity: .45; }
 .page-state, .document-loading { display: grid; place-items: center; align-content: center; gap: 10px; color: var(--accent-deep); text-align: center; }
-.page-state { min-height: 520px; padding: 50px; }
-.document-loading { min-height: 680px; padding: 40px; }
+.page-state { min-height: clamp(420px, calc(100vh - 260px), 520px); padding: 42px; }
+.document-loading { min-height: clamp(420px, calc(100vh - 380px), 680px); padding: 36px; }
 .page-state strong, .document-loading strong { color: var(--ink); font-size: 16px; }
 .page-state p, .document-loading p { max-width: 440px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .page-state .button, .document-loading .button { margin-top: 8px; }
