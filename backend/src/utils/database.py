@@ -1,15 +1,16 @@
 import asyncio
 import os
-from pathlib import Path
 
 from dotenv import load_dotenv
 from tortoise import Tortoise
 
-_DEFAULT_SQLITE_DB = Path(__file__).resolve().parents[2] / "dev.sqlite3"
 # database.py 可能在 main.py 加载 .env 之前被其他模块导入，因此这里必须
-# 自己加载项目配置，避免开发环境误退回 SQLite。
-load_dotenv(Path(__file__).resolve().parents[2] / ".env")
-database = os.getenv("database") or f"sqlite://{_DEFAULT_SQLITE_DB.as_posix()}"
+# 自己加载项目配置。生产和开发环境统一使用已配置的 MySQL，不再回退到 SQLite。
+_backend_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+load_dotenv(os.path.join(_backend_root, ".env"))
+database = os.getenv("database", "").strip()
+if not database:
+    raise RuntimeError("未配置 database，必须在 backend/.env 或环境变量中提供 MySQL 连接串")
 # 连接池参数：默认最小5、最大20
 if "mysql://" in database and "minsize" not in database:
     sep = "&" if "?" in database else "?"

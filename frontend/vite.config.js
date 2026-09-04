@@ -33,6 +33,7 @@ export default defineConfig({
       '/ai_portrait': proxyTarget,
       '/path': proxyTarget,
       '/learning_path': proxyTarget,
+      '/learning': proxyTarget,
       '/resource': proxyTarget,
       '/image': proxyTarget,
       '/knowledge': proxyTarget,
@@ -47,12 +48,5 @@ export default defineConfig({
       '/annotation': proxyTarget,
       '/debug': proxyTarget,
     },
-  },
-  css: {
-    preprocessorOptions: {
-      scss: {
-        additionalData: `@use "@/assets/styles/base-style.scss" as *;`
-      }
-    }
   }
 })

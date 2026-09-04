@@ -18,6 +18,7 @@ from backend.src.models.path_model import LearningPath, PathNode, UserPathProgre
 from backend.src.models.exam_model import ExamQuestion, ExamRecord, KnowledgeMastery
 from backend.src.service.notification.service import check_and_create_node_unlocked, check_and_create_quiz_failed
 from backend.src.models.resource_model import GeneratedResource
+from backend.src.models.study_model import ResourceReadStatus
 from backend.src.models.usermodel import User
 from backend.src.utils.database import init_db
 from backend.src.utils.prompt_loader import load_prompt, fill_prompt
@@ -1590,10 +1591,18 @@ class PathService:
                 all_resource_ids.extend(rids)
 
         resources_map = {}
+        read_duration_map = {}
         if all_resource_ids:
             res_records = await GeneratedResource.filter(id__in=all_resource_ids).all()
             for r in res_records:
                 resources_map[r.id] = r
+            read_statuses = await ResourceReadStatus.filter(
+                user_id=user_id, resource_id__in=all_resource_ids
+            ).all()
+            read_duration_map = {
+                status.resource_id: status.duration_seconds or 0
+                for status in read_statuses
+            }
 
         nodes = []
         current_node_id = None
@@ -1642,6 +1651,10 @@ class PathService:
                 (resources_map.get(rid).view_count or 0) for rid in resource_ids_map.get(node.id, [])
                 if resources_map.get(rid)
             )
+            node_time_spent = sum(
+                read_duration_map.get(rid, 0)
+                for rid in resource_ids_map.get(node.id, [])
+            )
 
             resource_types = json.loads(node.resource_types) if node.resource_types else ["document", "ppt", "mindmap"]
             nodes.append({
@@ -1657,6 +1670,7 @@ class PathService:
                 "narration_status": p.narration_status or "",
                 "resources_viewed": node_total_views > 0,
                 "total_views": node_total_views,
+                "time_spent": node_time_spent,
                 "action_label": "开始测验" if node.quiz_config and status in ("unlocked", "in_progress") else "开始学习",
             })
 

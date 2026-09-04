@@ -124,6 +124,14 @@ def format_portrait(picture, show_missing: bool = False, radar_data: dict | None
             lines.append(f"性格标签：{picture.personality_tags}")
 
     traits = parse_traits(picture.traits)
+    onboarding = traits.get("onboarding")
+    if isinstance(onboarding, dict):
+        if onboarding.get("identity"):
+            lines.append(f"学习者身份：{onboarding['identity']}")
+        if onboarding.get("direction"):
+            lines.append(f"学习方向：{onboarding['direction']}")
+        if onboarding.get("goal"):
+            lines.append(f"学习目标原文：{onboarding['goal']}")
     filled_keys = []
     for key in TRAIT_KEYS:
         data = traits.get(key)

@@ -70,7 +70,7 @@ MOCK_CLASSROOM_ASR_TIMEOUT_SECONDS=120
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-$env:PYTHONPATH="D:\知伴app"
+$env:PYTHONPATH="D:\LearnMate"
 uvicorn backend.src.main:app --host 127.0.0.1 --port 2221
 ```
 

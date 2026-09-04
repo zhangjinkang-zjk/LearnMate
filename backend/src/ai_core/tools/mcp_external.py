@@ -1,4 +1,4 @@
-"""Load external MCP tools for the Zhiban agent.
+"""Load external MCP tools for the LearnMate agent.
 
 The agent treats MCP tools as optional. If the config file is absent, a server is
 unavailable, or the adapter package is not installed, the normal local tools
