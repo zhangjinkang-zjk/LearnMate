@@ -62,7 +62,7 @@ const continueToStudy = () => {
   if (!selectedIdentity.value) return
   localStorage.setItem('learnmate_identity', selectedIdentity.value)
   window.dispatchEvent(new CustomEvent('learnmate:identity-selected', { detail: selectedIdentity.value }))
-  router.push('/chat')
+  router.push('/learnmate-chat')
 }
 </script>
 

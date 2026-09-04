@@ -2,6 +2,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 
 import HomeView from '../pages/HomeView.vue'
 import IdentitySelectView from '../pages/IdentitySelectView.vue'
+import LearnmateChatView from '../features/learnmateFlow/LearnmateChatView.vue'
 import ResourceView from '../pages/ResourceView.vue'
 import ResourceCenterView from '../pages/ResourceCenterView.vue'
 import ChatView from '../pages/ChatView.vue'
@@ -32,6 +33,11 @@ const router = createRouter({
       path: '/select-identity',
       name: 'identitySelect',
       component: IdentitySelectView
+    },
+    {
+      path: '/learnmate-chat',
+      name: 'learnmateChat',
+      component: LearnmateChatView
     },
     {
       path: '/resources',

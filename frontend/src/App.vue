@@ -38,7 +38,7 @@ import HomeNoticePopup from './features/homeNotice/HomeNoticePopup.vue'
 
 const route = useRoute()
 const router = useRouter()
-const immersiveRoute = computed(() => route.path === '/' || route.path === '/select-identity')
+const immersiveRoute = computed(() => route.path === '/' || route.path === '/select-identity' || route.path === '/learnmate-chat')
 
 // ---- route-name → component map ----
 const compByRouteName = Object.create(null)
