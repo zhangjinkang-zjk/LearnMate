@@ -81,7 +81,7 @@ def send_email(to_email: str, subject: str, body: str) -> bool:
 
     msg = MIMEText(body, "plain", "utf-8")
     # 使用标准 RFC 5322 地址格式，避免 QQ 邮箱拒绝非标准 From 头。
-        msg["From"] = formataddr(("LearnMate", cfg["user"]))
+    msg["From"] = formataddr(("LearnMate", cfg["user"]))
     msg["To"] = to_email
     msg["Subject"] = Header(subject, "utf-8")
 
