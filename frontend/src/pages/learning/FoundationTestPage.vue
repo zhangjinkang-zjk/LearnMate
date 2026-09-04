@@ -1,9 +1,8 @@
 <template>
   <div class="foundation-test-page">
     <PageTitle
-      eyebrow="知识学习 · 基础测试"
-      title="确认你真的掌握了"
-      description="先用题目检查关键概念，再用费曼反讲把知识讲成自己的话。两种方式都不会替你跳过基础学习。"
+      eyebrow="FOUNDATION TEST"
+      title="基础测试"
     >
       <template #actions>
         <RouterLink class="button button--quiet" to="/learning/fundamentals">回到基础讲解</RouterLink>
@@ -26,26 +25,33 @@
     </section>
 
     <template v-else>
-      <PathPicker
-        :paths="pathCatalog"
-        :active-path-id="learningPath.path_id"
-        :loading="loading"
-        :switching="switching"
-        @select="selectPath"
-      />
+      <section class="test-controls surface">
+        <div class="test-path-summary">
+          <p class="eyebrow">当前学习路径</p>
+          <strong>{{ learningPath.subject || learningPath.goal || '当前科目' }}</strong>
+          <div class="test-path-progress"><span>{{ learningPath.progress || 0 }}%</span><div class="progress-track"><div class="progress-value" :style="{ width: `${learningPath.progress || 0}%` }"></div></div></div>
+        </div>
+        <label class="test-select">
+          <span>切换科目</span>
+          <select :value="learningPath.path_id" :disabled="switching" @change="selectPath($event.target.value)">
+            <option v-for="path in pathCatalog" :key="path.path_id" :value="path.path_id">{{ path.subject || '未命名科目' }}</option>
+          </select>
+        </label>
+        <label class="test-select">
+          <span>选择章节</span>
+          <select v-model="activeNodeId" @change="selectNode(activeNodeId)">
+            <option v-for="node in testableNodes" :key="node.id" :value="node.id">第 {{ node.order_index || 1 }} 章 · {{ node.title }}</option>
+          </select>
+        </label>
+      </section>
 
-      <section class="test-context surface surface-pad">
+      <section class="test-context">
         <div>
-          <p class="eyebrow">当前章节</p>
+          <p class="eyebrow">CHAPTER CHECK</p>
           <h2>{{ activeNode?.title || '选择一个章节' }}</h2>
           <p>{{ activeNode?.summary || '从上方路径或下方章节选择要检查的知识。' }}</p>
         </div>
-        <label class="chapter-picker">
-          <span>选择章节</span>
-          <select v-model="activeNodeId" @change="selectNode(activeNodeId)">
-            <option v-for="node in testableNodes" :key="node.id" :value="node.id">{{ node.title }}</option>
-          </select>
-        </label>
+        <span class="test-chapter-status">{{ canStartTest ? '可以开始测试' : '等待完成阅读' }}</span>
       </section>
 
       <section v-if="nodeError" class="surface surface-pad foundation-state foundation-state--error">
@@ -116,7 +122,6 @@ import { BookOpenText, CircleAlert, LoaderCircle, MessageCircle, Route, SquareCh
 import { useRoute, useRouter } from 'vue-router'
 import ChapterCheck from '@/features/fundamentals/ChapterCheck.vue'
 import FeynmanCoach from '@/features/fundamentals/FeynmanCoach.vue'
-import PathPicker from '@/features/fundamentals/PathPicker.vue'
 import PageTitle from '@/shared/ui/PageTitle.vue'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 
@@ -240,4 +245,44 @@ onMounted(loadPage)
 .test-tabs { display: inline-flex; gap: 4px; margin-bottom: 12px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: #f4f7f3; }.test-tabs button { display: inline-flex; align-items: center; gap: 7px; min-height: 38px; padding: 0 13px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); text-align: left; font-size: 12px; font-weight: 800; }.test-tabs button small { display: none; }.test-tabs button.is-active { background: var(--paper); color: var(--accent-deep); box-shadow: 0 1px 3px rgba(32,40,36,.1); }.test-notice { margin: 12px 0 0; padding: 11px 13px; border: 1px solid #d7e3c9; border-radius: 5px; background: #f4f8ed; color: var(--accent-deep); font-size: 12px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 680px) { .foundation-test-page :deep(.page-heading) { margin-bottom: 18px; }.foundation-test-page :deep(.path-picker) { margin-bottom: 12px; }.test-context { grid-template-columns: 1fr; gap: 13px; padding: 15px; }.test-gate { flex-direction: column; gap: 10px; }.test-gate .button { width: 100%; margin-top: 0; }.test-tabs { display: flex; width: 100%; }.test-tabs button { flex: 1; justify-content: center; padding: 0 9px; } }
+:global(.app-content:has(.foundation-test-page)) { background: #f7f7f7; }
+:global(.page-container:has(.foundation-test-page)) { width: 100%; max-width: none; box-sizing: border-box; min-height: calc(100vh - 64px); margin: 0; background: #f7f7f7; }
+:global(.app-content:has(.foundation-test-page) .app-header) { border-bottom-color: #e8e8e8; background: #f7f7f7; }
+.foundation-test-page :deep(.page-heading) { margin-bottom: 18px; }
+.foundation-test-page :deep(.page-heading .eyebrow) { color: #738078; font-size: 12px; letter-spacing: .14em; }
+.foundation-test-page :deep(.page-heading h1) { color: #1e3c34; font-size: clamp(28px, 2.5vw, 36px); }
+.foundation-test-page .surface { border-color: #dfe6df; border-radius: 16px; box-shadow: 0 8px 22px rgba(31, 49, 40, .045); }
+.foundation-test-page .button { border-radius: 12px; }
+.foundation-test-page .button--primary { border-color: #c4df3d; background: #b6d837; color: #1e3c34; box-shadow: 0 6px 14px rgba(63, 91, 49, .14); }
+.foundation-test-page .button--primary:hover { border-color: #a9ca27; background: #a9ca27; color: #1e3c34; }
+.foundation-test-page .button--quiet { border-color: #dce3dc; background: #fff; color: #3f5b31; }
+.foundation-test-page .button--quiet:hover { border-color: #b9c9b2; background: #f1f6eb; }
+.test-controls { display: grid; grid-template-columns: minmax(230px, 1.15fr) minmax(190px, .82fr) minmax(260px, 1fr); align-items: end; gap: 16px; margin-bottom: 22px; padding: 16px 18px; background: #fff; }
+.test-path-summary { display: grid; min-width: 0; gap: 5px; }
+.test-path-summary .eyebrow { margin: 0; color: #728078; font-size: 10px; }
+.test-path-summary strong { overflow: hidden; color: #203a33; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.test-path-progress { display: grid; grid-template-columns: auto minmax(70px, 1fr); align-items: center; gap: 9px; max-width: 250px; color: #547042; font-size: 11px; font-weight: 800; }
+.test-path-progress .progress-track { height: 5px; overflow: hidden; border-radius: 999px; background: #e7eee3; }
+.test-path-progress .progress-value { height: 100%; border-radius: inherit; background: #8cae5a; }
+.test-select { display: grid; min-width: 0; gap: 6px; color: #728078; font-size: 11px; }
+.test-select select { width: 100%; min-height: 40px; padding: 0 34px 0 11px; border: 1px solid #dce4dc; border-radius: 10px; outline: none; background: #fbfcfa; color: #263c35; font: inherit; font-size: 12px; }
+.test-select select:focus { border-color: #8cae5a; box-shadow: 0 0 0 3px rgba(140, 174, 90, .14); }
+.test-select select:disabled { cursor: wait; color: #9ba69f; }
+.test-context { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin: 0 0 13px; padding: 0; background: transparent; }
+.test-context .eyebrow { margin: 0 0 5px; color: #71807a; font-size: 10px; }
+.test-context h2 { color: #203a33; font-size: 23px; }
+.test-context p:last-child { max-width: 720px; margin-top: 5px; font-size: 12px; }
+.test-chapter-status { flex: 0 0 auto; padding: 8px 11px; border: 1px solid #dce7d4; border-radius: 999px; background: #f3f8ee; color: #53713e; font-size: 11px; font-weight: 800; }
+.test-gate { align-items: center; gap: 13px; min-height: 0; margin-bottom: 12px; padding: 16px 18px; border: 1px solid #d8e4cd; border-radius: 16px; background: #f4f8ef; }
+.test-gate h2 { font-size: 16px; }
+.test-gate p:last-child { max-width: 850px; margin-top: 4px; }
+.test-gate .button { min-height: 40px; padding: 0 14px; border-radius: 10px; }
+.test-tabs { border: 0; border-radius: 14px; background: #eaf1e5; }
+.test-tabs button { border-radius: 10px; }
+.test-tabs button.is-active { background: #fff; color: var(--accent-deep); }
+.foundation-test-page :deep(.chapter-check), .foundation-test-page :deep(.feynman-coach) { border-radius: 16px; }
+.foundation-test-page :deep(.option-item) { border-radius: 12px; }
+.test-notice { border-radius: 12px; background: #f4f8ed; }
+@media (max-width: 900px) { .test-controls { grid-template-columns: 1fr 1fr; }.test-path-summary { grid-column: 1 / -1; }.test-context { align-items: flex-start; flex-direction: column; gap: 10px; }.test-chapter-status { align-self: flex-start; } }
+@media (max-width: 680px) { :global(.page-container:has(.foundation-test-page)) { padding: 22px 18px 42px; }.test-controls { grid-template-columns: 1fr; gap: 13px; padding: 15px; }.test-path-summary { grid-column: auto; }.test-context h2 { font-size: 20px; }.test-gate { align-items: flex-start; padding: 15px; }.test-gate .button { width: 100%; } }
 </style>

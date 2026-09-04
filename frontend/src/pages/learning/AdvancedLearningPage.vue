@@ -188,6 +188,7 @@ onMounted(async () => {
 @media (max-width: 560px) { .learning-snapshot { grid-template-columns: 1fr; }.catalog-heading { align-items: flex-start; flex-direction: column; gap: 6px; }.recommendation-card h3 { font-size: 19px; }.recommendation-facts { gap: 14px; }.recommendation-card .button { width: 100%; } }
 @media (max-width: 760px) { .session-context { grid-template-columns: 1fr; align-items: flex-start; padding: 14px 15px; }.session-context__identity { width: 100%; }.session-context__facts { width: 100%; grid-auto-columns: minmax(0, 1fr); justify-content: space-between; }.session-context__facts span { text-align: left; } }
 @media (max-width: 560px) { .session-ended > div { align-items: stretch; flex-direction: column; width: 100%; }.session-ended .button { width: 100%; } }
+:global(.app-content:has(.advanced-page)) { background: #f7f7f7; }
 :global(.page-container:has(.advanced-page)) { background: #f7f7f7; }
 :global(.app-content:has(.advanced-page) .app-header) { border-bottom-color: #e8e8e8; background: #f7f7f7; }
 :global(.page-container:has(.advanced-page)) { width: 100%; height: calc(100vh - 64px); box-sizing: border-box; margin: 0; padding: 28px 42px 58px; overflow-x: hidden; overflow-y: auto; }

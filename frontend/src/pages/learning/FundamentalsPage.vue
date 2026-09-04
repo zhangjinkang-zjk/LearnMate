@@ -37,9 +37,9 @@
       <template v-else>
         <header class="lesson-context">
           <div class="lesson-context__copy">
-            <p class="eyebrow">基础讲解 · {{ learningPath.goal }}</p>
+            <p class="eyebrow lesson-eyebrow">FOUNDATION LESSON</p>
             <h1>{{ activeNode?.title || '选择一个章节' }}</h1>
-            <p>第 {{ activeNodeIndex + 1 }} / {{ learningPath.nodes.length }} 章<span>{{ activeNode?.summary || '按学习路径逐章补齐知识基础。' }}</span></p>
+            <p>基础讲解 · {{ learningPath.goal }}<span>第 {{ activeNodeIndex + 1 }} / {{ learningPath.nodes.length }} 章</span><span>{{ activeNode?.summary || '按学习路径逐章补齐知识基础。' }}</span></p>
           </div>
           <div class="path-progress" aria-label="当前科目学习进度">
             <div><span>科目进度</span><strong>{{ learningPath.progress }}%</strong></div>
@@ -1146,4 +1146,24 @@ onBeforeUnmount(() => {
   .navigation-drawer__header { padding: 20px 18px 17px; }
   .navigation-drawer__body { padding: 17px 14px 28px; }
 }
+
+:global(.app-content:has(.fundamentals-page)) { background: #f7f7f7; }
+:global(.page-container:has(.fundamentals-page)) { width: 100%; max-width: none; box-sizing: border-box; min-height: calc(100vh - 64px); margin: 0; padding: 28px 42px 56px; background: #f7f7f7; }
+:global(.app-content:has(.fundamentals-page) .app-header) { border-bottom-color: #e8e8e8; background: #f7f7f7; }
+.fundamentals-page .surface { border-color: rgba(63, 91, 49, .28); border-radius: 16px; box-shadow: 0 8px 24px rgba(45, 40, 92, .07); }
+.lesson-context { min-height: 0; margin-bottom: 18px; padding: 0 0 18px; border: 0; border-bottom: 1px solid #dfe5df; border-radius: 0; background: transparent; }
+.lesson-context__copy .lesson-eyebrow { color: var(--muted); font-size: 12px; letter-spacing: .14em; }
+.lesson-context h1 { color: #1e3c34; font-size: clamp(22px, 2.5vw, 31px); }
+.path-progress { min-width: 210px; padding: 11px 13px; border: 1px solid #dbe5d1; border-radius: 14px; background: #f4f8ed; }
+.workspace-rail { top: 82px; border-radius: 16px; padding: 7px; background: #fff; box-shadow: 0 8px 20px rgba(45, 40, 92, .05); }
+.workspace-rail button, .resource-tabs--rail button { border-radius: 11px; }
+.workspace-rail button.is-active, .resource-tabs--rail button.is-active { background: #e8efdf; color: var(--accent-deep); }
+.resource-tabs button, .document-pagination button, .icon-button { border-radius: 11px; }
+.lesson-main > .lesson-document, .lesson-main > .document-loading, .lesson-main > .chapter-footer { border-radius: 16px; }
+.fundamentals-page .button { border-radius: 12px; }
+.fundamentals-page .button--primary { border-color: #c4df3d; background: #b6d837; color: #1e3c34; box-shadow: 0 6px 14px rgba(63, 91, 49, .14); }
+.fundamentals-page .button--primary:hover { border-color: #a9ca27; background: #a9ca27; color: #1e3c34; }
+.fundamentals-page .button--quiet { border-color: #dce3dc; background: #fff; color: #3f5b31; }
+.fundamentals-page .button--quiet:hover { border-color: #b9c9b2; background: #f1f6eb; }
+@media (max-width: 680px) { :global(.page-container:has(.fundamentals-page)) { padding: 22px 18px 42px; }.lesson-context { align-items: flex-start; flex-direction: column; padding: 0 0 16px; }.path-progress { width: 100%; min-width: 0; } }
 </style>
