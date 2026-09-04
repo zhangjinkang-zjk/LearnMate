@@ -46,9 +46,33 @@ from backend.src.service.path.teaching_context import (
     dump_teaching_spec,
     teaching_spec_payload,
 )
+from backend.src.service.path.difficulty import (
+    clamp_difficulty_score,
+    derive_difficulty_score,
+)
 
 
 _RESOURCE_GENERATION_ERROR_MESSAGE = "本章学习材料生成失败，请重试"
+
+
+def _node_difficulty_score(node_data: dict, order_index: int, total_nodes: int) -> float:
+    """读取智能体难度并为旧格式节点提供稳定兜底。"""
+    spec = node_data.get("teaching_spec") if isinstance(node_data.get("teaching_spec"), dict) else {}
+    tags = node_data.get("knowledge_tags") if isinstance(node_data.get("knowledge_tags"), list) else []
+    prerequisites = node_data.get("prerequisites") if isinstance(node_data.get("prerequisites"), list) else []
+    if order_index == 1:
+        return 1.0
+    score = clamp_difficulty_score(node_data.get("difficulty_score"))
+    if score is not None:
+        return score
+    return derive_difficulty_score(
+        order_index=order_index,
+        total_nodes=total_nodes,
+        cognitive_level=str(node_data.get("cognitive_level") or spec.get("cognitive_level") or ""),
+        module=str(node_data.get("module") or spec.get("module") or ""),
+        key_points_count=len(node_data.get("key_points") or spec.get("key_points") or tags),
+        prerequisite_count=len(prerequisites),
+    )
 
 
 def _safe_resource_generation_error_detail(error: Exception) -> str:
@@ -240,6 +264,7 @@ class PathService:
                 resource_types=json.dumps(nd.get("resource_types", list(PATH_DEFAULT_RESOURCE_TYPES)), ensure_ascii=False),
                 quiz_config=json.dumps(nd.get("quiz_config", {"count": 5, "threshold": 0.7}), ensure_ascii=False),
                 teaching_spec=dump_teaching_spec(nd.get("teaching_spec"), node=nd),
+                difficulty_score=_node_difficulty_score(nd, order_index, max(node_count, order_index, 1)),
             )
 
             status = "unlocked" if order_index == 1 else "locked"
@@ -258,6 +283,7 @@ class PathService:
                 "prerequisites": json.loads(node.prerequisites) if node.prerequisites else [],
                 "resource_types": json.loads(node.resource_types) if node.resource_types else [],
                 "quiz_config": json.loads(node.quiz_config) if node.quiz_config else {},
+                "difficulty_score": node.difficulty_score,
                 "teaching_spec": teaching_spec_payload(
                     node.teaching_spec,
                     node={"topic": node.topic, "knowledge_tags": json.loads(node.knowledge_tags or "[]")},
@@ -590,15 +616,17 @@ class PathService:
         nodes = []
         created_nodes = []
         for nd in nodes_data:
+            order_index = nd.get("order_index", len(nodes) + 1)
             node = await PathNode.create(
                 path=path,
                 topic=nd.get("topic", ""),
                 knowledge_tags=json.dumps(nd.get("knowledge_tags", []), ensure_ascii=False),
-                order_index=nd.get("order_index", len(nodes) + 1),
+                order_index=order_index,
                 prerequisites=json.dumps(nd.get("prerequisites", []), ensure_ascii=False),
                 resource_types=json.dumps(nd.get("resource_types", list(PATH_DEFAULT_RESOURCE_TYPES)), ensure_ascii=False),
                 quiz_config=json.dumps(nd.get("quiz_config", {"count": 5, "threshold": 0.7}), ensure_ascii=False),
                 teaching_spec=dump_teaching_spec(nd.get("teaching_spec"), node=nd),
+                difficulty_score=_node_difficulty_score(nd, order_index, max(len(nodes_data), 1)),
             )
             created_nodes.append(node)
             nodes.append({
@@ -609,6 +637,7 @@ class PathService:
                 "prerequisites": json.loads(node.prerequisites) if node.prerequisites else [],
                 "resource_types": json.loads(node.resource_types) if node.resource_types else [],
                 "quiz_config": json.loads(node.quiz_config) if node.quiz_config else {},
+                "difficulty_score": node.difficulty_score,
                 "teaching_spec": teaching_spec_payload(
                     node.teaching_spec,
                     node={"topic": node.topic, "knowledge_tags": json.loads(node.knowledge_tags or "[]")},
@@ -719,6 +748,7 @@ class PathService:
                     "node_id": n.id,
                     "topic": n.topic,
                     "order_index": n.order_index,
+                    "difficulty_score": n.difficulty_score,
                     "knowledge_tags": json.loads(n.knowledge_tags) if n.knowledge_tags else [],
                     "prerequisites": json.loads(n.prerequisites) if n.prerequisites else [],
                     "resource_types": json.loads(n.resource_types) if n.resource_types else [],
@@ -870,6 +900,7 @@ class PathService:
             "prerequisites": json.loads(node.prerequisites) if node.prerequisites else [],
             "resource_types": json.loads(node.resource_types) if node.resource_types else [],
             "quiz_config": json.loads(node.quiz_config) if node.quiz_config else {},
+            "difficulty_score": node.difficulty_score,
             "teaching_spec": teaching_spec_payload(
                 getattr(node, "teaching_spec", None),
                 node={"topic": node.topic, "knowledge_tags": json.loads(node.knowledge_tags or "[]")},
@@ -1491,10 +1522,14 @@ class PathService:
         if not node:
             raise ValueError("节点不存在")
 
-        allowed = {"topic", "knowledge_tags", "resource_types", "quiz_config", "teaching_spec", "order_index"}
+        allowed = {"topic", "knowledge_tags", "resource_types", "quiz_config", "teaching_spec", "order_index", "difficulty_score"}
         updates = {}
         for k, v in fields.items():
             if k in allowed and v is not None:
+                if k == "difficulty_score":
+                    v = clamp_difficulty_score(v)
+                    if v is None:
+                        continue
                 updates[k] = json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v
 
         current_tags = json.loads(node.knowledge_tags) if node.knowledge_tags else []
@@ -1817,6 +1852,7 @@ class PathService:
                 "status": status,
                 "summary": summary,
                 "knowledge_tags": knowledge_tags,
+                "difficulty_score": node.difficulty_score,
                 "teaching_spec": teaching_spec_payload(
                     getattr(node, "teaching_spec", None),
                     node={"topic": node.topic, "knowledge_tags": knowledge_tags},

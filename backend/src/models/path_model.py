@@ -38,6 +38,10 @@ class PathNode(Model):
         null=True,
         description="节点教学规格 JSON，含模块、认知层级、学习目标、关键知识点和最小示例",
     )
+    difficulty_score = fields.FloatField(
+        null=True,
+        description="节点相对难度倍数；路径首节点为 1.0，由路径规划智能体生成",
+    )
 
     path = fields.ForeignKeyField(
         "models.LearningPath",

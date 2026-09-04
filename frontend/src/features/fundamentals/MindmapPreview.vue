@@ -71,7 +71,7 @@ function toMindElixirData(value) {
     ? { topic: props.title || '知识结构', children: parsed }
     : parsed?.nodeData || parsed?.root || parsed?.mindmap || parsed?.data || parsed
   nodeIndex = 0
-  return { nodeData: normalizeNode(root), linkData: {}, direction: MindElixir.DOWN }
+  return { nodeData: normalizeNode(root), linkData: {}, direction: MindElixir.SIDE }
 }
 
 async function renderMap() {
@@ -82,7 +82,7 @@ async function renderMap() {
     if (mind) { mind.destroy(); mind = null }
     mind = new MindElixir({
       el: mapEl.value,
-      direction: MindElixir.DOWN,
+      direction: MindElixir.SIDE,
       editable: false,
       contextMenu: false,
       toolBar: false,
@@ -109,7 +109,7 @@ onBeforeUnmount(() => { if (mind) { mind.destroy(); mind = null } })
 .mindmap-preview__header .eyebrow { margin-bottom: 4px; }
 .mindmap-preview__header h2 { margin: 0; color: var(--ink); font-size: 17px; }
 .mindmap-preview__hint { color: var(--muted); font-size: 10px; }
-.mindmap-canvas { width: 100%; height: clamp(500px, calc(100vh - 290px), 760px); min-height: 500px; background: #f7faf5; }
+.mindmap-canvas { width: 100%; height: clamp(420px, calc(100vh - 320px), 620px); min-height: 420px; background: #f7faf5; }
 .mindmap-canvas.is-hidden { display: none; }
 .mindmap-preview :deep(.map-container) { background: #f7faf5; }
 .mindmap-preview :deep(me-root > me-tpc) { border-radius: 6px; background: var(--accent-deep); color: #fff; font-weight: 800; }
@@ -119,6 +119,6 @@ onBeforeUnmount(() => { if (mind) { mind.destroy(); mind = null } })
 .mindmap-fallback pre { max-height: 560px; margin: 14px 0 0; overflow: auto; white-space: pre-wrap; word-break: break-word; font: inherit; line-height: 1.7; }
 @media (max-width: 680px) {
   .mindmap-preview__header { align-items: flex-start; flex-direction: column; }
-  .mindmap-canvas { min-height: 430px; height: 560px; }
+  .mindmap-canvas { min-height: 390px; height: 500px; }
 }
 </style>

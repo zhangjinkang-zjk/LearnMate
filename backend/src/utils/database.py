@@ -72,6 +72,33 @@ async def _ensure_path_node_teaching_spec_column():
         _log.exception("路径节点教学规格字段迁移失败")
         raise
 
+
+async def _ensure_path_node_difficulty_score_column():
+    """为存量路径补充可空难度分数；旧节点由概览服务按元数据兜底计算。"""
+    import logging
+
+    _log = logging.getLogger(__name__)
+    conn = Tortoise.get_connection("default")
+    try:
+        await conn.execute_query(
+            "ALTER TABLE path_nodes ADD COLUMN difficulty_score DOUBLE NULL "
+            "COMMENT '节点相对难度倍数，首节点为 1.0'"
+        )
+    except Exception as exc:
+        error_text = str(exc).lower()
+        is_duplicate_column = "1060" in error_text or "duplicate column" in error_text
+        if is_duplicate_column:
+            try:
+                await conn.execute_query(
+                    "ALTER TABLE path_nodes MODIFY COLUMN difficulty_score DOUBLE NULL "
+                    "COMMENT '节点相对难度倍数，首节点为 1.0'"
+                )
+            except Exception:
+                _log.debug("路径节点难度字段类型迁移跳过", exc_info=True)
+            return
+        _log.exception("路径节点难度字段迁移失败")
+        raise
+
 async def init_db():
     global _DB_INITIALIZED
     if _DB_INITIALIZED :
@@ -87,6 +114,7 @@ async def init_db():
         await _ensure_generated_resource_visibility_column()
         await _ensure_classroom_lesson_schema()
         await _ensure_path_node_teaching_spec_column()
+        await _ensure_path_node_difficulty_score_column()
         _DB_INITIALIZED = True
 
 async def close_db():

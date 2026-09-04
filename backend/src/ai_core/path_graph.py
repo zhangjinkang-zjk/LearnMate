@@ -15,6 +15,10 @@ from backend.src.service.path.teaching_context import (
     PATH_DEFAULT_RESOURCE_TYPES,
     attach_teaching_specs,
 )
+from backend.src.service.path.difficulty import (
+    clamp_difficulty_score,
+    derive_difficulty_score,
+)
 from backend.src.utils.prompt_loader import load_prompt, fill_prompt
 from backend.src.utils.json_parser import parse_llm_json
 
@@ -42,6 +46,7 @@ def _normalize_topic_outline(raw, subject: str, node_count: int = 0) -> list[dic
 
     normalized: list[dict] = []
     seen: set[str] = set()
+    total_nodes = max(len(raw), node_count, 1)
     for index, item in enumerate(raw, 1):
         if not isinstance(item, dict):
             continue
@@ -50,14 +55,27 @@ def _normalize_topic_outline(raw, subject: str, node_count: int = 0) -> list[dic
             continue
         seen.add(topic)
         level = str(item.get("cognitive_level") or _COGNITIVE_LEVELS[min(index - 1, len(_COGNITIVE_LEVELS) - 1)])
+        key_points = item.get("key_points") if isinstance(item.get("key_points"), list) else [topic]
+        prerequisite_topics = item.get("prerequisite_topics") if isinstance(item.get("prerequisite_topics"), list) else []
+        difficulty_score = 1.0 if index == 1 else clamp_difficulty_score(item.get("difficulty_score"))
+        if difficulty_score is None:
+            difficulty_score = derive_difficulty_score(
+                order_index=index,
+                total_nodes=total_nodes,
+                cognitive_level=level,
+                module=str(item.get("module") or item.get("category") or subject),
+                key_points_count=len(key_points),
+                prerequisite_count=len(prerequisite_topics),
+            )
         normalized.append({
             "topic": topic,
             "module": str(item.get("module") or item.get("category") or subject).strip(),
             "cognitive_level": level,
             "learning_goal": str(item.get("learning_goal") or f"理解并掌握{topic}").strip(),
-            "prerequisite_topics": item.get("prerequisite_topics") if isinstance(item.get("prerequisite_topics"), list) else [],
-            "key_points": item.get("key_points") if isinstance(item.get("key_points"), list) else [topic],
+            "prerequisite_topics": prerequisite_topics,
+            "key_points": key_points,
             "micro_example": str(item.get("micro_example") or f"完成一个关于{topic}的小练习").strip(),
+            "difficulty_score": difficulty_score,
         })
         if node_count and len(normalized) >= node_count:
             break
@@ -92,6 +110,14 @@ def _fallback_topic_outline(subject: str, node_count: int = 0) -> list[dict]:
             "prerequisite_topics": [outline[-1]["topic"]] if outline else [],
             "key_points": [subject, name, module],
             "micro_example": f"用一个小例子检查「{name}」是否掌握",
+            "difficulty_score": 1.0 if index == 0 else derive_difficulty_score(
+                order_index=index + 1,
+                total_nodes=target,
+                cognitive_level=_COGNITIVE_LEVELS[min(index, len(_COGNITIVE_LEVELS) - 1)],
+                module=module,
+                key_points_count=3,
+                prerequisite_count=1 if outline else 0,
+            ),
         })
     return outline
 
@@ -110,6 +136,17 @@ def _fallback_group_nodes(group: list[dict], group_start: int) -> list[dict]:
             "resource_types": list(PATH_DEFAULT_RESOURCE_TYPES),
             "quiz_config": {"count": 5, "threshold": 0.7},
             "description": str(item.get("learning_goal") or f"掌握{topic}的核心概念、典型应用和常见误区").strip(),
+            "difficulty_score": 1.0 if order_index == 1 else clamp_difficulty_score(
+                item.get("difficulty_score"),
+                derive_difficulty_score(
+                    order_index=order_index,
+                    total_nodes=max(len(group), order_index),
+                    cognitive_level=str(item.get("cognitive_level") or ""),
+                    module=str(item.get("module") or ""),
+                    key_points_count=len(key_points),
+                    prerequisite_count=1 if order_index > 1 else 0,
+                ),
+            ),
         })
     return nodes
 
@@ -308,6 +345,13 @@ async def executor_node(state: PathState) -> dict:
         all_nodes.extend(group_nodes)
     all_nodes.sort(key=lambda n: n.get("order_index", 0))
     all_nodes = attach_teaching_specs(all_nodes, topic_outline)
+    outline_by_topic = {str(item.get("topic") or "").strip(): item for item in topic_outline}
+    for index, node in enumerate(all_nodes, 1):
+        planned = outline_by_topic.get(str(node.get("topic") or "").strip()) or {}
+        node["difficulty_score"] = 1.0 if index == 1 else clamp_difficulty_score(
+            node.get("difficulty_score"),
+            clamp_difficulty_score(planned.get("difficulty_score"), 1.0),
+        )
 
     logger.info(f"[PathExecutor] 全部节点生成完成 total={len(all_nodes)} 耗时={time.perf_counter() - t0:.1f}s")
     return {"nodes": all_nodes}
