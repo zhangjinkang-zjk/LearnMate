@@ -113,7 +113,8 @@ GET /study/overview
     "active_days": 4,
     "completed_nodes": 2,
     "total_nodes": 5,
-    "mastery_score": 58
+    "mastery_score": 58,
+    "text": "当前综合掌握度为 58%。当前优先关注“向量检索”，先补强后再进入下一步。"
   },
   "recommendation": {
     "judgement": "当前主要短板是向量检索能力",
@@ -133,7 +134,7 @@ GET /study/overview
 
 - `subjects`、`goals`、`next_content`、`blind_spots`、`study_history`、`mastery_bars` 返回空数组；
 - `path.id` 可以为 `null`，进度为 `0`；
-- `diagnosis.score`、`summary.mastery_score` 可以为 `null`，`diagnosis.stage` 为 `正在生成`；
+- `diagnosis.score`、`summary.mastery_score` 可以为 `null`，`diagnosis.stage` 为 `正在生成`，`summary.text` 为空字符串；
 - `recommendation.status` 为 `generating`，没有可执行节点时 `target_id` 和 `action` 为 `null`。
 
 前端应根据这些字段显示“正在生成”或空状态，不能填充示例科目、进度、时长或推荐结论。
