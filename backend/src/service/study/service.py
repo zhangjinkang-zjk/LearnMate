@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 from datetime import date, datetime, timedelta
 
 from tortoise.expressions import Q
@@ -14,6 +15,7 @@ from backend.src.service.portrait.service import (
     PortraitChatHistory_Service,
     PortraitRadarService,
     build_learning_guidance,
+    record_learning_event,
 )
 from backend.src.service.notification.service import check_and_create_weekly_report
 from backend.src.service.path.helpers import reconcile_completed_prerequisites
@@ -26,9 +28,18 @@ from backend.src.service.path.difficulty import (
 logger = logging.getLogger(__name__)
 
 
+def _node_title(node: dict) -> str:
+    if not isinstance(node, dict):
+        return ""
+    return str(node.get("title") or node.get("topic") or "").strip()
+
+
 def _build_path_difficulty_trend(nodes: list[dict]) -> list[dict]:
     """为当前路径生成难度折线数据；高度只表达路径内难度，不混入完成状态。"""
-    ordered_nodes = sorted(nodes, key=lambda item: item.get("order_index", 0))
+    ordered_nodes = sorted(
+        (node for node in nodes if _node_title(node)),
+        key=lambda item: item.get("order_index", 0),
+    )
     raw_scores: list[float] = []
     for index, node in enumerate(ordered_nodes, 1):
         if index == 1:
@@ -54,8 +65,8 @@ def _build_path_difficulty_trend(nodes: list[dict]) -> list[dict]:
         {
             "id": node.get("id"),
             "order_index": node.get("order_index", index),
-            "title": node.get("title") or "未命名学习节点",
-            "status": node.get("status", "locked"),
+            "title": _node_title(node),
+            "status": node.get("status") or "",
             "difficulty_score": round(raw_scores[index], 2),
             "relative_difficulty": relative_scores[index],
         }
@@ -86,9 +97,12 @@ class StudyService:
         for item in path_stats.get("paths", []):
             progress = item.get("progress", {})
             study_time = item.get("study_time", {})
+            subject_name = str(item.get("subject") or "").strip()
+            if not subject_name:
+                continue
             subjects.append({
                 "id": item.get("path_id"),
-                "name": item.get("subject") or "未命名科目",
+                "name": subject_name,
                 "progress": progress.get("percentage", 0),
                 "completed_nodes": progress.get("completed_nodes", 0),
                 "total_nodes": progress.get("total_nodes", 0),
@@ -97,36 +111,56 @@ class StudyService:
 
         nodes = (current_path or {}).get("nodes", [])
         difficulty_trend = _build_path_difficulty_trend(nodes)
-        goals = [
-            {
+        goals = []
+        for node in nodes[:6]:
+            title = _node_title(node)
+            if not title:
+                continue
+            status = node.get("status") or ""
+            goals.append({
                 "id": node.get("id"),
-                "title": node.get("title") or "未命名学习节点",
-                "status": node.get("status", "locked"),
-                "progress": 100 if node.get("status") == "completed" else 0,
-            }
-            for node in nodes[:6]
-        ]
-        next_content = [
-            {
+                "title": title,
+                "status": status,
+                "progress": 100 if status == "completed" else 0,
+            })
+        next_content = []
+        for node in nodes:
+            title = _node_title(node)
+            if not title or node.get("status") not in ("in_progress", "unlocked"):
+                continue
+            next_content.append({
                 "id": node.get("id"),
-                "title": node.get("title") or "未命名学习节点",
-                "status": node.get("status", "locked"),
-            }
-            for node in nodes
-            if node.get("status") in ("in_progress", "unlocked")
-        ][:3]
+                "title": title,
+                "status": node.get("status") or "",
+            })
+            if len(next_content) >= 3:
+                break
 
         weak_points = []
         seen_tags = set()
         for point in stats.get("weak_points", []):
-            tag = str(point.get("tag") or "").strip()
+            if not isinstance(point, dict):
+                continue
+            tag = str(point.get("tag") or point.get("knowledge_tag") or "").strip()
             if not tag or tag in seen_tags:
+                continue
+            try:
+                accuracy_value = float(point.get("accuracy"))
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(accuracy_value):
+                continue
+            if 0 <= accuracy_value <= 1:
+                accuracy = round(accuracy_value * 100)
+            elif 0 <= accuracy_value <= 100:
+                accuracy = round(accuracy_value)
+            else:
                 continue
             seen_tags.add(tag)
             weak_points.append({
                 "tag": tag,
-                "accuracy": round(float(point.get("accuracy", 0)) * 100),
-                "level": point.get("level", "learning"),
+                "accuracy": accuracy,
+                "level": point.get("level") or "",
             })
         weak_points = weak_points[:6]
 
@@ -164,7 +198,11 @@ class StudyService:
         completed_nodes = sum(1 for node in nodes if node.get("status") == "completed")
         total_nodes = len(nodes)
         diagnosis = (current_path or {}).get("diagnosis") or {}
-        latest_score = round(sum(mastery_values) / len(mastery_values)) if mastery_values else diagnosis.get("latest_score")
+        answered_questions = (stats.get("exam_summary") or {}).get("completed_questions", 0)
+        diagnosis_score = diagnosis.get("latest_score")
+        latest_score = round(sum(mastery_values) / len(mastery_values)) if mastery_values else (
+            diagnosis_score if diagnosis_score is not None and answered_questions > 0 else None
+        )
         if not mastery_values and latest_score is None and radar and radar.get("dimensions"):
             latest_score = round(sum(item.get("score", 0) for item in radar["dimensions"]) / len(radar["dimensions"]))
         stage = "正在生成"
@@ -197,6 +235,7 @@ class StudyService:
                 "identity": onboarding.get("identity", ""),
                 "direction": onboarding.get("direction") or traits.get("learning_direction", ""),
                 "goal": onboarding.get("goal") or portrait.get("learning_goal", ""),
+                "learning_signals": traits.get("learning_signals", {}) if isinstance(traits.get("learning_signals"), dict) else {},
             },
             "path": {
                 "id": (current_path or {}).get("path_id"),
@@ -268,6 +307,17 @@ class StudyService:
             if duration_seconds > 0:
                 status.duration_seconds += duration_seconds
             await status.save()
+        # 首次打开或有实际阅读时长才记一次事件，避免页面轮询把画像事件刷爆。
+        if created or duration_seconds >= 10:
+            try:
+                await record_learning_event(
+                    user_id,
+                    "resource_read",
+                    evidence=f"阅读资源 {resource.topic or resource.id}",
+                    metadata={"resource_id": resource.id, "duration_seconds": max(duration_seconds, 0)},
+                )
+            except Exception:
+                logger.exception("资源学习事件记录失败 user_id=%s resource_id=%s", user_id, resource_id)
         return {"resource_id": resource_id, "is_read": True, "duration_seconds": status.duration_seconds}
 
     @staticmethod

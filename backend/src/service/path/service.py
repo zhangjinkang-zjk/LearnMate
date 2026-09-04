@@ -22,7 +22,12 @@ from backend.src.models.study_model import ResourceReadStatus
 from backend.src.models.usermodel import User
 from backend.src.utils.database import init_db
 from backend.src.utils.prompt_loader import load_prompt, fill_prompt
-from backend.src.service.portrait.service import format_portrait, PortraitRadarService, build_learning_guidance
+from backend.src.service.portrait.service import (
+    format_portrait,
+    PortraitRadarService,
+    build_learning_guidance,
+    record_learning_event,
+)
 from backend.src.service.exam.service import ExamService, _answer_matches, _display_answer
 from backend.src.service.resource.service import ResourceService
 from backend.src.service.resource.metadata import format_mindmap_content
@@ -1022,6 +1027,9 @@ class PathService:
                                 if data.get("type") == "file":
                                     _remember_generated_id(data.get("resource_id"))
                                     yield _resource_payload_sse(data, path_id=path_id, node_id=node_id)
+                                elif data.get("type") == "agent_event":
+                                    # Preserve zhiban-compatible agent lifecycle events for the UI.
+                                    yield event_str
                                 elif data.get("type") in {"stream_progress", "progress", "status"}:
                                     yield _path_status_sse(data.get("progress_msg") or data.get("message") or data.get("msg") or "学习路径资源生成中...")
                                 elif data.get("done"):
@@ -1310,36 +1318,44 @@ class PathService:
             except Exception:
                 logger.exception("收集笔记失败 path_id=%s node_id=%s user_id=%s", path_id, node_id, user_id)
 
-            # 流式生成并透传事件，截获 done 写 quiz_session_id
-            async for event in ExamService.generate_and_save_stream(
-                topic=node.topic,
-                user_id=user_id,
-                question_types=["single_choice"] * 5 + ["multi_choice"] + ["true_false"] * 2 + ["fill_blank"] * 2,
-                count=count,
-                difficulty=difficulty,
-                node_id=node_id,
-                user_notes=user_notes,
-            ):
-                if isinstance(event, str) and event.startswith("data:"):
-                    data_str = event[5:].strip()
-                    if data_str == "[DONE]":
-                        yield event
-                        continue
-                    try:
-                        payload = json.loads(data_str)
-                        if payload.get("type") == "done":
-                            session_id = payload.get("session_id")
-                            if session_id:
-                                await UserPathProgress.filter(id=progress.id).update(quiz_session_id=session_id)
-                            payload["quiz_config"] = quiz_config
-                            payload["difficulty"] = difficulty
-                            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            # 流式生成并透传事件，截获 done 写 quiz_session_id。生成器异常时
+            # 也收口为标准 SSE，前端可以展示可重试的原因而不是得到空白页面。
+            try:
+                async for event in ExamService.generate_and_save_stream(
+                    topic=node.topic,
+                    user_id=user_id,
+                    question_types=["single_choice"] * 5 + ["multi_choice"] + ["true_false"] * 2 + ["fill_blank"] * 2,
+                    count=count,
+                    difficulty=difficulty,
+                    node_id=node_id,
+                    user_notes=user_notes,
+                ):
+                    if isinstance(event, str) and event.startswith("data:"):
+                        data_str = event[5:].strip()
+                        if data_str == "[DONE]":
+                            yield event
                             continue
+                        try:
+                            payload = json.loads(data_str)
+                            if payload.get("type") == "done":
+                                session_id = payload.get("session_id")
+                                if session_id:
+                                    await UserPathProgress.filter(id=progress.id).update(quiz_session_id=session_id)
+                                payload["quiz_config"] = quiz_config
+                                payload["difficulty"] = difficulty
+                                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                                continue
+                            yield event
+                        except json.JSONDecodeError:
+                            yield event
+                    else:
                         yield event
-                    except json.JSONDecodeError:
-                        yield event
-                else:
-                    yield event
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("节点测验流式生成失败 path_id=%s node_id=%s user_id=%s", path_id, node_id, user_id)
+                yield f"data: {json.dumps({'type': 'error', 'detail': str(exc) or '检查题生成失败'}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
 
     @staticmethod
     async def _load_quiz_session_records(session_id: str, user_id: int, node_id: int) -> list[ExamRecord]:
@@ -1450,6 +1466,26 @@ class PathService:
 
         # 更新画像 traits
         await update_portrait_from_mastery(user_id)
+        try:
+            node_tags = json.loads(node.knowledge_tags) if node.knowledge_tags else []
+        except (json.JSONDecodeError, TypeError):
+            node_tags = []
+        try:
+            await record_learning_event(
+                user_id,
+                "node_quiz",
+                path_id=path_id,
+                node_id=node_id,
+                knowledge_tags=[str(tag).strip() for tag in node_tags if str(tag).strip()][:12],
+                score=score,
+                metadata={
+                    "passed": bool(passed),
+                    "threshold": round(float(threshold) * 100, 1),
+                    "total_questions": len(records),
+                },
+            )
+        except Exception:
+            logger.exception("节点测验学习事件记录失败 user_id=%s path_id=%s node_id=%s", user_id, path_id, node_id)
         try:
             await PortraitRadarService.compute(user_id)
             await PortraitRadarService.sync_to_portrait(user_id)

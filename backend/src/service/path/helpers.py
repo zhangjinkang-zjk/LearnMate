@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 
@@ -17,6 +18,7 @@ from backend.src.service.notification.service import check_and_create_node_unloc
 from backend.src.service.resource.document_quality import validate_document_chapter
 from backend.src.service.resource.persistence import is_failed_generation_content
 from backend.src.service.path.teaching_context import PATH_DEFAULT_RESOURCE_TYPES
+from backend.src.ai_core.ppt_planner import PPT_MAX_PAGES_PER_DECK
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,24 @@ GenerateQuiz = Callable[..., Awaitable[dict]]
 GenerateClassroom = Callable[[int, int, int], Awaitable[dict | None]]
 _CLASSROOM_WARMUP_TASKS: set[asyncio.Task] = set()
 _NODE_WARMUP_TASKS: set[asyncio.Task] = set()
+
+
+def _resource_page_count(content: str) -> int:
+    """Count PPT pages for stale-resource validation without parsing slide markup."""
+    text = str(content or "").strip()
+    if not text:
+        return 0
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return len(parsed)
+        if isinstance(parsed, dict):
+            slides = parsed.get("slides") or parsed.get("pages") or parsed.get("items")
+            if isinstance(slides, list):
+                return len(slides)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+    return len([item for item in re.split(r"\n\s*---+\s*\n", text) if item.strip()])
 
 
 async def check_existing_resources(
@@ -133,6 +153,15 @@ async def get_bound_node_resources(
                     quality_errors,
                 )
                 continue
+        if resource_type == "ppt" and _resource_page_count(record.content) > PPT_MAX_PAGES_PER_DECK:
+            rejected_ids.add(record.id)
+            logger.info(
+                "路径节点 PPT 超过页数上限，解除绑定 resource_id=%s pages=%s max=%s",
+                record.id,
+                _resource_page_count(record.content),
+                PPT_MAX_PAGES_PER_DECK,
+            )
+            continue
         if resource_type not in seen_types:
             existing_records.append(record)
             seen_types.add(resource_type)
@@ -361,3 +390,8 @@ async def update_portrait_from_mastery(user_id: int):
 
     picture.traits = json.dumps(existing, ensure_ascii=False)
     await picture.save()
+    try:
+        from backend.src.service.chat.service import invalidate_portrait_cache
+        invalidate_portrait_cache(user_id)
+    except Exception:
+        logger.debug("掌握度画像缓存刷新失败 user_id=%s", user_id, exc_info=True)

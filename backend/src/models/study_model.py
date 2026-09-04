@@ -57,3 +57,27 @@ class ResourceLike(Model):
     class Meta:
         table = "resource_likes"
         unique_together = [("user_id", "resource_id")]
+
+
+class LearningEvent(Model):
+    """学习行为事件，用于持续更新画像并追踪推荐依据。"""
+
+    id = fields.IntField(pk=True)
+    event_type = fields.CharField(max_length=32, description="事件类型: assessment/node_quiz/classroom_chat/chat/resource_read")
+    path_id = fields.IntField(null=True, description="关联学习路径")
+    node_id = fields.IntField(null=True, description="关联路径节点")
+    knowledge_tags = fields.TextField(null=True, description="关联知识点标签 JSON 数组")
+    score = fields.FloatField(null=True, description="本次行为得分 0-100")
+    evidence = fields.TextField(null=True, description="用户留下的学习证据摘要")
+    metadata = fields.TextField(null=True, description="事件附加信息 JSON")
+    created_at = fields.DatetimeField(auto_now_add=True)
+
+    user = fields.ForeignKeyField(
+        "models.User",
+        related_name="learning_events",
+        on_delete=fields.CASCADE,
+    )
+
+    class Meta:
+        table = "learning_events"
+        ordering = ["-created_at"]

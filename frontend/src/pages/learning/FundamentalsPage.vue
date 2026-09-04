@@ -120,6 +120,19 @@
           <main class="lesson-main">
             <div class="resource-toolbar" aria-label="章节材料视图">
               <span class="resource-status"><span class="status-dot"></span>{{ resourceStatusLabel }}</span>
+              <button
+                v-if="activeResource"
+                class="resource-download button button--quiet"
+                type="button"
+                :disabled="isResourceDownloading"
+                :title="resourceDownloadError || `下载${activeResourceLabel}`"
+                @click="downloadActiveResource"
+              >
+                <LoaderCircle v-if="isResourceDownloading" class="spin" :size="14" />
+                <Download v-else :size="14" />
+                {{ isResourceDownloading ? '下载中' : `下载${activeResourceLabel}` }}
+              </button>
+              <span v-if="resourceDownloadError" class="resource-download-error" role="status">{{ resourceDownloadError }}</span>
             </div>
 
             <ChapterCheck
@@ -284,7 +297,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, BookOpenText, CircleAlert, ListTree, LoaderCircle, Network, Presentation, Route, X } from 'lucide-vue-next'
+import { ArrowLeft, ArrowRight, BookOpenText, CircleAlert, Download, ListTree, LoaderCircle, Network, Presentation, Route, X } from 'lucide-vue-next'
 import ChapterCheck from '@/features/fundamentals/ChapterCheck.vue'
 import ChapterRail from '@/features/fundamentals/ChapterRail.vue'
 import LearningAssistant from '@/features/fundamentals/LearningAssistant.vue'
@@ -294,6 +307,8 @@ import PathPicker from '@/features/fundamentals/PathPicker.vue'
 import PptPreview from '@/features/fundamentals/PptPreview.vue'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { readPortrait } from '@/shared/api/portraitApi'
+import { applyWorkflowEvent, applyWorkflowProgress, finishWorkflow, resetWorkflow } from '@/entities/agent/agentWorkflowState'
+import { resourceApi } from '@/shared/api/resourceApi'
 
 const route = useRoute()
 const router = useRouter()
@@ -323,6 +338,8 @@ const documentError = ref('')
 const mindmapError = ref('')
 const pptError = ref('')
 const resourceGenerationError = ref('')
+const isResourceDownloading = ref(false)
+const resourceDownloadError = ref('')
 const isChecking = ref(false)
 let resourceController = null
 let nodeLoadVersion = 0
@@ -332,6 +349,12 @@ let readingIntervalId = null
 
 const activeNodeIndex = computed(() => learningPath.value?.nodes.findIndex((node) => node.id === activeNodeId.value) ?? -1)
 const activeNode = computed(() => learningPath.value?.nodes[activeNodeIndex.value] || null)
+const activeResource = computed(() => ({
+  document: documentResource.value,
+  ppt: pptResource.value,
+  mindmap: mindmapResource.value,
+}[resourceView.value] || null))
+const activeResourceLabel = computed(() => ({ document: '主讲文档', ppt: 'PPT', mindmap: '知识结构' }[resourceView.value] || '学习材料'))
 const completedNodeCount = computed(() => learningPath.value?.nodes.filter((node) => node.status === 'completed').length || 0)
 const previousNode = computed(() => {
   if (!learningPath.value || activeNodeIndex.value <= 0) return null
@@ -384,6 +407,29 @@ function errorDetail(error, fallback) {
 
 function normalizeResourceId(resource) {
   return resource?.resource_id || resource?.id || null
+}
+
+async function downloadActiveResource() {
+  const resourceId = normalizeResourceId(activeResource.value)
+  if (!resourceId || isResourceDownloading.value) return
+  isResourceDownloading.value = true
+  resourceDownloadError.value = ''
+  try {
+    const { blob, filename } = await resourceApi.download(resourceId)
+    const objectUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = filename
+    link.rel = 'noopener'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
+  } catch (error) {
+    resourceDownloadError.value = errorDetail(error, `${activeResourceLabel.value}下载失败，请稍后重试。`)
+  } finally {
+    isResourceDownloading.value = false
+  }
 }
 
 function mindmapTreeToMarkdown(tree) {
@@ -793,6 +839,7 @@ async function selectNode(nodeId, updateUrl = true) {
   if (activeNodeId.value && activeNodeId.value !== nodeId) await reportReadDuration(true)
   activeNodeId.value = nodeId
   resourceView.value = 'document'
+  resourceDownloadError.value = ''
   isChecking.value = false
   if (updateUrl) router.replace({ query: { ...route.query, node: nodeId } })
   await loadActiveNode()
@@ -810,6 +857,7 @@ async function loadActiveNode() {
   mindmapError.value = ''
   pptError.value = ''
   resourceGenerationError.value = ''
+  resourceDownloadError.value = ''
   nodeDetail.value = null
   documentResource.value = null
   documentContent.value = ''
@@ -821,6 +869,7 @@ async function loadActiveNode() {
 
   let resolveDocumentReady
   let documentReadyMarked = false
+  let workflowStarted = false
   const documentReady = new Promise((resolve) => { resolveDocumentReady = resolve })
   const markDocumentReady = () => {
     if (documentReadyMarked) return
@@ -855,11 +904,20 @@ async function loadActiveNode() {
       ...FUNDAMENTALS_RESOURCE_TYPES,
       ...(detail?.resource_types || activeNode.value.resource_types || []),
     ])]
+    resetWorkflow({
+      title: `${activeNode.value.title || '当前章节'} · 资源准备`,
+      pathId: learningPath.value.path_id,
+      nodeId: activeNode.value.id,
+      resourceTypes: requestedTypes,
+    })
+    workflowStarted = true
     const streamPromise = fundamentalsApi.generateResources(
       learningPath.value.path_id,
       activeNode.value.id,
       (event) => {
         if (loadVersion !== nodeLoadVersion) return
+        if (event?.type === 'agent_event') applyWorkflowEvent(event)
+        else applyWorkflowProgress(event)
         if (event?.type === 'status') {
           resourceLoadingMessage.value = event.msg || event.message || resourceLoadingMessage.value
         }
@@ -890,6 +948,7 @@ async function loadActiveNode() {
     void streamPromise
       .then(async () => {
         if (loadVersion !== nodeLoadVersion) return
+        if (workflowStarted) finishWorkflow(false)
         isResourceGenerating.value = false
         if (!documentContent.value && !documentError.value) {
           const refreshed = await fundamentalsApi.getNode(learningPath.value.path_id, activeNode.value.id).catch(() => null)
@@ -901,6 +960,7 @@ async function loadActiveNode() {
       })
       .catch((error) => {
         if (error?.name === 'AbortError' || loadVersion !== nodeLoadVersion) return
+        if (workflowStarted) finishWorkflow(true)
         isResourceGenerating.value = false
         if (!documentContent.value) {
           documentError.value = errorDetail(error, '本章学习材料加载失败。')
@@ -915,6 +975,7 @@ async function loadActiveNode() {
     if (documentContent.value && document.visibilityState === 'visible') openedAt = Date.now()
   } catch (error) {
     if (error.name !== 'AbortError' && loadVersion === nodeLoadVersion) {
+      if (workflowStarted) finishWorkflow(true)
       documentError.value = errorDetail(error, '本章学习材料加载失败。')
       isResourceLoading.value = false
       isResourceGenerating.value = false
@@ -928,6 +989,7 @@ async function showMindmap() {
   if (!mindmapResource.value || isMindmapLoading.value) return
   await reportReadDuration(true)
   resourceView.value = 'mindmap'
+  resourceDownloadError.value = ''
   openedAt = 0
   if (mindmapContent.value) return
   isMindmapLoading.value = true
@@ -948,6 +1010,7 @@ async function showPpt() {
   if (!pptResource.value || isPptLoading.value) return
   await reportReadDuration(true)
   resourceView.value = 'ppt'
+  resourceDownloadError.value = ''
   openedAt = 0
   if (pptContent.value) return
   isPptLoading.value = true
@@ -967,6 +1030,7 @@ async function showPpt() {
 function showDocument() {
   if (resourceView.value === 'document') return
   resourceView.value = 'document'
+  resourceDownloadError.value = ''
   if (documentContent.value && document.visibilityState === 'visible' && !isChecking.value) openedAt = Date.now()
 }
 
@@ -986,8 +1050,18 @@ async function reportReadDuration(force = false) {
 async function openChapterCheck() {
   await reportReadDuration(true)
   resourceView.value = 'document'
-  isChecking.value = true
   openedAt = 0
+
+  // 阅读完成后进入独立的基础测试页，题目测试和费曼反讲共用同一节点上下文。
+  const pathId = learningPath.value?.path_id
+  const nodeId = activeNode.value?.id
+  if (pathId && nodeId) {
+    await router.push({ path: '/learning/foundation-test', query: { pathId, node: nodeId } })
+    return
+  }
+
+  // 保留异常数据下的页内检查兜底，正常路径不会走到这里。
+  isChecking.value = true
 }
 
 function closeChapterCheck() {
@@ -1069,7 +1143,7 @@ onBeforeUnmount(() => {
 .workspace-rail button > small { position: absolute; top: 4px; right: 4px; display: grid; min-width: 14px; height: 14px; place-items: center; padding: 0 3px; border-radius: 7px; background: var(--soft); color: var(--accent-deep); font-size: 8px; font-weight: 800; }
 .workspace-rail__divider { width: 28px; height: 1px; margin: 3px auto; background: var(--line); }
 .lesson-main { display: grid; min-width: 0; gap: 12px; }
-.resource-toolbar { display: flex; min-height: 16px; align-items: center; justify-content: flex-end; gap: 12px; }
+.resource-toolbar { display: flex; min-height: 34px; align-items: center; gap: 10px; }
 .resource-tabs { display: flex; align-items: center; gap: 4px; }
 .resource-tabs button { display: inline-flex; min-height: 34px; align-items: center; gap: 7px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 11px; }
 .resource-tabs button:hover:not(:disabled) { background: #e9eeea; color: var(--ink); }
@@ -1079,8 +1153,10 @@ onBeforeUnmount(() => {
 .resource-tabs--rail button { display: grid; width: 40px; min-height: 57px; place-items: center; align-content: center; gap: 4px; margin: 0 auto; padding: 5px 2px; font-size: 9px; line-height: 1.25; }
 .resource-tabs--rail button span { max-width: 36px; text-align: center; }
 .resource-tabs--rail button.is-active { background: #e4ecdd; }
-.resource-status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; }
+.resource-status { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; color: var(--muted); font-size: 10px; }
 .resource-status .status-dot { width: 6px; height: 6px; }
+.resource-download { min-height: 30px; gap: 6px; padding: 0 10px; font-size: 10px; }
+.resource-download-error { max-width: 220px; overflow: hidden; color: #a66442; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .chapter-footer { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 15px 17px; }
 .chapter-footer__copy { display: grid; min-width: 0; gap: 4px; text-align: center; }
 .chapter-footer__copy strong { font-size: 11px; }

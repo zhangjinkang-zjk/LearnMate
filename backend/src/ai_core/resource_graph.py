@@ -18,6 +18,8 @@ from backend.src.ai_core.ppt_planner import (
     DOC_DEFAULT_SECTIONS,
     DOC_SECTION_COUNT_BY_DEPTH,
     PPT_DEFAULT_SECTIONS,
+    PPT_MAX_PAGES_PER_DECK,
+    PPT_MAX_PAGES_PER_SECTION,
     estimate_ppt_section_count,
     generate_formula_sheet,
     generate_learning_objectives,
@@ -64,6 +66,22 @@ PROMPT_MAP = {
     "reading": "resource/document",
     "image": "resource/image_prompt",
 }
+
+RESOURCE_AGENT_NAMES = {
+    "document": "文档生成智能体",
+    "ppt": "PPT生成智能体",
+    "mindmap": "思维导图生成智能体",
+    "exercise": "习题生成智能体",
+    "case": "案例资料生成智能体",
+    "reading": "阅读材料生成智能体",
+    "image": "图片生成智能体",
+}
+
+
+def resource_agent_name(resource_type: str) -> str:
+    """Return the user-facing LearnMate agent name for a resource type."""
+    normalized = str(resource_type or "").strip().lower()
+    return RESOURCE_AGENT_NAMES.get(normalized, f"{normalized or '资源'}生成智能体")
 
 # ═══════════════════════════════════════
 #  State
@@ -276,7 +294,7 @@ async def generate_ppt_parallel(
     ppt_theme_id: str = "",
     rag_mode: str = "reference",
 ) -> str:
-    """按章节并行生成 PPT：大纲（默认{section_count}章节） → N 条线并行（每条 2-5 页），共 2N-5N 页 + 2 页画像学习引入"""
+    """按章节并行生成 PPT：大纲（默认{section_count}章节） → N 条线并行（每条默认 1 页，复杂章节最多 2 页），并保留画像学习引入"""
     _t_total = time.perf_counter()
     _push_agent_event(stream_writer, "executor:ppt", "PPT生成智能体", "executor", "running", "正在启动 PPT 生成", resource_type="ppt")
     # 立即通知前端，避免长时间无反馈
@@ -555,6 +573,27 @@ async def generate_ppt_parallel(
                 content = content[first_title.start():].strip()
         return _repair_ppt_content(content, section_title)
 
+    def _limit_section_pages(
+        content: str,
+        section_title: str,
+        max_pages: int = PPT_MAX_PAGES_PER_SECTION,
+    ) -> str:
+        """限制单个章节的幻灯片数量，避免模型忽略页数约束生成超长 PPT。"""
+        slides = [
+            slide.strip()
+            for slide in re.split(r"\n\s*---+\s*\n", str(content or "").strip())
+            if slide.strip()
+        ]
+        if len(slides) <= max_pages:
+            return "\n---\n".join(slides)
+        logger.warning(
+            "[PPT-Gen] 章节页数超限，截取前 %d 页 section=%s original_pages=%d",
+            max_pages,
+            section_title,
+            len(slides),
+        )
+        return "\n---\n".join(slides[:max_pages])
+
     def _fallback_ppt_section(section_title: str) -> str:
         safe_title = re.sub(r"[#<>`$]", "", section_title or topic).strip() or "核心知识点"
         return (
@@ -800,17 +839,18 @@ async def generate_ppt_parallel(
             if feedback:
                 parts.append(f"\n\n## 额外反馈\n{feedback}")
             prompt_with_context = (
-                f"你是一个贴心的学习导师。为课程「{topic}」撰写 2 页学习引入幻灯片。"
+                f"你是一个贴心的学习导师。为课程「{topic}」撰写 1 页学习引入幻灯片；只有画像信息和课程预告无法在一页清晰承载时才增加第 2 页。"
                 f"\n\n## 输出格式"
-                f"\n直接输出 PPT Markdown，第一个字符必须是 #。用 --- 分隔两页。每页 4-6 条要点，每条 50-90 字，整页可见正文不低于 320 字。"
+                f"\n直接输出 PPT Markdown，第一个字符必须是 #；如生成第 2 页，用 --- 分隔页面。默认只输出 1 页，每页 4-6 条要点，每条 50-90 字，整页可见正文不低于 320 字。"
                 f"\n每页最后必须追加一行 `> 讲稿：...`，讲稿 120-220 个中文字符，用于补足课堂讲解和视频朗读。"
-                f"\n\n## 第1页：为什么这门课对你很重要"
+                f"\n\n## 第1页：为什么这门课对你很重要，以及你将学到什么"
                 f"\n- 用画像中的具体信息（专业、年级等）解释这门课和你的关联"
                 f"\n- 让你感受到'这课是为我准备的'"
                 f"\n- 语气亲切自然，像导师在课前和学生面对面聊天"
-                f"\n\n## 第2页：这门课你将学到什么"
+                f"\n\n## 第2页（仅在需要时）：课程学习地图与收获"
+                f"\n- 只有第一页无法同时清楚说明课程关联和学习收获时才输出本页"
                 f"\n- 简要预告本课程涵盖的核心内容（参考课程全景，不要展开讲）"
-                f"\n- 说明学完后你能收获什么"
+                f"\n- 说明学完后你能收获什么，避免重复第一页"
                 f"\n- 保持鼓励和温暖的语气"
                 f"\n\n## 用户画像\n{portrait}"
                 f"\n\n## 课程全景（供预告参考，不要展开讲）\n{course_overview}"
@@ -899,7 +939,10 @@ async def generate_ppt_parallel(
                     async with gen_sem:
                         async with _PPT_GLOBAL_GEN_SEM:
                             response = await llm.ainvoke(prompt_with_context, priority=llm_priority, user_id=user_id, pool="ppt")
-                    content = _normalize_ppt_content(response.content, section_title)
+                    content = _limit_section_pages(
+                        _normalize_ppt_content(response.content, section_title),
+                        section_title,
+                    )
                     gen_ok = True
                     break
                 except Exception as e:
@@ -1117,6 +1160,14 @@ async def generate_ppt_parallel(
             elif slide.startswith("# ") and not slide.startswith("## "):
                 slide = slide.replace("# ", "## ", 1)
             parts.append(slide)
+
+    if len(parts) > PPT_MAX_PAGES_PER_DECK:
+        logger.warning(
+            "[PPT-Parallel] 总页数超限，截取前 %d 页 original_pages=%d",
+            PPT_MAX_PAGES_PER_DECK,
+            len(parts),
+        )
+        parts = parts[:PPT_MAX_PAGES_PER_DECK]
 
     combined = "\n---\n".join(parts)
     logger.info("[PPT-Parallel] 章节生成完成 章节数=%d 总页数≈%d 耗时=%.1fs", len(sections), len(parts), time.perf_counter() - _t_total)
@@ -1526,7 +1577,8 @@ async def executor_node(state: ResourceState) -> dict:
 
     def gen_one_sync(rt: str) -> tuple[str, str]:
         t_start = time.perf_counter()
-        _push_agent_event(writer, f"executor:{rt}", f"{rt}生成智能体", "executor", "running", f"正在生成 {rt}", resource_type=rt)
+        agent_name = resource_agent_name(rt)
+        _push_agent_event(writer, f"executor:{rt}", agent_name, "executor", "running", f"正在生成 {rt}", resource_type=rt)
         max_attempts = 2 if rt == "mindmap" else 1
         last_error = None
         for attempt in range(max_attempts):
@@ -1536,7 +1588,7 @@ async def executor_node(state: ResourceState) -> dict:
                 if not content:
                     raise ValueError(f"{rt} 返回内容为空")
                 elapsed = time.perf_counter() - t_start
-                _push_agent_event(writer, f"executor:{rt}", f"{rt}生成智能体", "executor", "done", f"{rt} 生成完成", resource_type=rt, elapsed_ms=int(elapsed * 1000))
+                _push_agent_event(writer, f"executor:{rt}", agent_name, "executor", "done", f"{rt} 生成完成", resource_type=rt, elapsed_ms=int(elapsed * 1000))
                 logger.info("[Executor] %s 生成完成 耗时=%.2fs 尝试=%d", rt, elapsed, attempt + 1)
                 return rt, content
             except Exception as error:
@@ -1546,14 +1598,14 @@ async def executor_node(state: ResourceState) -> dict:
                     "timeout", "timed out", "incomplete", "connecterror", "readerror", "remoteprotocolerror",
                 ))
                 if rt == "mindmap" and attempt + 1 < max_attempts and transient:
-                    _push_agent_event(writer, f"executor:{rt}", f"{rt}生成智能体", "executor", "retrying", "思维导图请求超时，正在重试", resource_type=rt)
+                    _push_agent_event(writer, f"executor:{rt}", agent_name, "executor", "retrying", "思维导图请求超时，正在重试", resource_type=rt)
                     logger.warning("[Executor] mindmap 临时错误，准备重试：%s", error)
                     time.sleep(1.5)
                     continue
                 break
 
         elapsed = time.perf_counter() - t_start
-        _push_agent_event(writer, f"executor:{rt}", f"{rt}生成智能体", "executor", "failed", f"{rt} 生成失败", resource_type=rt, elapsed_ms=int(elapsed * 1000))
+        _push_agent_event(writer, f"executor:{rt}", agent_name, "executor", "failed", f"{rt} 生成失败", resource_type=rt, elapsed_ms=int(elapsed * 1000))
         logger.error("[Executor] %s 调用失败，错误内容不会入库，耗时=%.2fs：%s", rt, elapsed, last_error)
         return rt, ""
 
@@ -1784,19 +1836,20 @@ async def reviewer_node(state: ResourceState) -> dict:
     _push_agent_event(writer, "reviewer", "ReviewerAgent", "reviewer", "reviewing", "正在进行质量审核", total=len(generated))
 
     async def review_one(rt: str, content: str) -> dict:
-        _push_agent_event(writer, f"reviewer:{rt}", f"{rt}审核智能体", "reviewer", "reviewing", f"正在审核 {rt}", resource_type=rt)
+        reviewer_name = resource_agent_name(rt).replace("生成智能体", "审核智能体")
+        _push_agent_event(writer, f"reviewer:{rt}", reviewer_name, "reviewer", "reviewing", f"正在审核 {rt}", resource_type=rt)
         # PPT / 文档 已在 generate_*_parallel 内部逐章节审核（生成→审核→重生成循环），跳过全局审核
         if rt in ("ppt", "document", "case", "reading"):
-            _push_agent_event(writer, f"reviewer:{rt}", f"{rt}审核智能体", "reviewer", "done", f"{rt} 已通过内置审核", resource_type=rt, score=100)
+            _push_agent_event(writer, f"reviewer:{rt}", reviewer_name, "reviewer", "done", f"{rt} 已通过内置审核", resource_type=rt, score=100)
             return {"passed": True, "score": 100, "feedback": ""}
         # API 生成的图片跳过文本审核
         file_urls = state.get("file_urls", {})
         if file_urls.get(rt):
-            _push_agent_event(writer, f"reviewer:{rt}", f"{rt}审核智能体", "reviewer", "done", f"{rt} 自动通过审核", resource_type=rt, score=100)
+            _push_agent_event(writer, f"reviewer:{rt}", reviewer_name, "reviewer", "done", f"{rt} 自动通过审核", resource_type=rt, score=100)
             return {"passed": True, "score": 100, "feedback": "API 生成，自动通过"}
         reviewer_path = _REVIEWER_MAP.get(rt, "agent/reviewer_document")
         if not content:
-            _push_agent_event(writer, f"reviewer:{rt}", f"{rt}审核智能体", "reviewer", "done", f"{rt} 无需审核", resource_type=rt, score=100)
+            _push_agent_event(writer, f"reviewer:{rt}", reviewer_name, "reviewer", "done", f"{rt} 无需审核", resource_type=rt, score=100)
             return {"passed": True, "score": 100, "feedback": ""}
         try:
             content_snippet = content[:3000]
@@ -1811,7 +1864,7 @@ async def reviewer_node(state: ResourceState) -> dict:
             _push_agent_event(
                 writer,
                 f"reviewer:{rt}",
-                f"{rt}审核智能体",
+                reviewer_name,
                 "reviewer",
                 "done" if result.get("passed") else "retrying",
                 f"{rt} 审核{'通过' if result.get('passed') else '需要修订'}",
@@ -1822,7 +1875,7 @@ async def reviewer_node(state: ResourceState) -> dict:
             return result
         except Exception as e:
             logger.exception(f"[审核] {rt} 失败")
-            _push_agent_event(writer, f"reviewer:{rt}", f"{rt}审核智能体", "reviewer", "failed", f"{rt} 审核异常", resource_type=rt)
+            _push_agent_event(writer, f"reviewer:{rt}", reviewer_name, "reviewer", "failed", f"{rt} 审核异常", resource_type=rt)
             return {"passed": True, "score": 0, "feedback": f"审核异常: {e}"}
 
     tasks = [review_one(rt, content) for rt, content in generated.items()]

@@ -579,6 +579,7 @@ class AdvancedLearningService:
             "identity": onboarding.get("identity") or "学习者",
             "direction": onboarding.get("direction") or (current_path or {}).get("goal") or "",
             "goal": onboarding.get("goal") or "建立系统化知识基础",
+            "learning_signals": traits.get("learning_signals", {}) if isinstance(traits.get("learning_signals"), dict) else {},
         }
 
         if not current_path:

@@ -7,7 +7,7 @@ from collections import OrderedDict
 from backend.src.ai_core.brain import Brain
 from backend.src.models.chat_history_model import ChatHistory
 from backend.src.models.usermodel import User
-from backend.src.service.portrait.service import extract_portrait_from_chat
+from backend.src.service.portrait.service import extract_portrait_from_chat, record_learning_event
 from backend.src.utils.chat_utils import allocate_chat_group_id
 
 logger = logging.getLogger(__name__)
@@ -140,9 +140,23 @@ async def _extract_portrait_and_refresh(
     chat_group_id: int,
     *,
     portrait_minimum_records: int = 2,
+    event_type: str = "chat",
+    path_id: int | None = None,
+    node_id: int | None = None,
+    evidence: str | None = None,
 ):
-    """后台提取画像并刷新缓存"""
+    """后台记录学习行为、提取画像并刷新缓存。"""
     try:
+        try:
+            await record_learning_event(
+                user_id,
+                event_type,
+                path_id=path_id,
+                node_id=node_id,
+                evidence=evidence,
+            )
+        except Exception:
+            logger.exception("聊天学习事件记录失败 user_id=%s group=%s", user_id, chat_group_id)
         await extract_portrait_from_chat(
             user_id,
             chat_group_id,
@@ -168,8 +182,15 @@ def schedule_post_chat_enrichment(
     *,
     portrait_minimum_records: int = 2,
     persist_memory: bool = True,
+    event_type: str = "chat",
+    path_id: int | None = None,
+    node_id: int | None = None,
+    evidence: str | None = None,
 ) -> None:
-    """统一安排聊天结束后的画像更新；普通聊天可额外写入长期记忆。"""
+    """统一安排聊天结束后的学习事件、画像更新和长期记忆写入。"""
+    # 课堂对话关闭长期记忆写入，但仍然属于学习行为，需要进入画像流水线。
+    if not persist_memory and event_type == "chat":
+        event_type = "classroom_chat"
     logger.info(
         "[ChatEnrichment] scheduled user=%s group=%s portrait_min_records=%s persist_memory=%s",
         user_id,
@@ -182,6 +203,10 @@ def schedule_post_chat_enrichment(
             user_id,
             chat_group_id,
             portrait_minimum_records=portrait_minimum_records,
+            event_type=event_type,
+            path_id=path_id,
+            node_id=node_id,
+            evidence=evidence,
         )
     )
     if persist_memory:
@@ -240,7 +265,7 @@ async def create_new_history(user_id: int, user_req: str, agent_id: int | None =
     res = await bot.chat(user_req, path_context=path_context, portrait_context=portrait_context, memory_context=memory_context)
     message.res = res
     await message.save()
-    schedule_post_chat_enrichment(user_id, chat_group_id, agent_id)
+    schedule_post_chat_enrichment(user_id, chat_group_id, agent_id, evidence=user_req)
     return message, "新对话保存成功"
 
 async def create_message_into_history(user_id: int, chat_group_id: int, user_req: str, agent_id: int | None = None):
@@ -262,7 +287,7 @@ async def create_message_into_history(user_id: int, chat_group_id: int, user_req
     res = await bot.chat(user_req, path_context=path_context, portrait_context=portrait_context, memory_context=memory_context)
     message.res = res
     await message.save()
-    schedule_post_chat_enrichment(user_id, chat_group_id, agent_id)
+    schedule_post_chat_enrichment(user_id, chat_group_id, agent_id, evidence=user_req)
     return message, "问答保存成功"
 
 # ── 流式 ──
@@ -296,7 +321,7 @@ async def _stream_chat(user_id: int, chat_group_id: int, user_req: str, agent_id
 
     record.res = full_response
     await record.save()
-    schedule_post_chat_enrichment(user_id, chat_group_id, agent_id)
+    schedule_post_chat_enrichment(user_id, chat_group_id, agent_id, evidence=user_req)
     yield f"data: {json.dumps({'role': 'system', 'type': 'done', 'chat_group_id': chat_group_id}, ensure_ascii=False)}\n\n"
     yield "data: [DONE]\n\n"
 

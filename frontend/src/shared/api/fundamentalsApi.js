@@ -76,6 +76,12 @@ export const fundamentalsApi = {
     )
   },
 
+  async generateQuizNow(pathId, nodeId, forceRegenerate = false) {
+    return unwrap(await httpClient.post(`/path/${pathId}/node/${nodeId}/generate-quiz`, {
+      force_regenerate: Boolean(forceRegenerate),
+    }))
+  },
+
   async getQuizSession(sessionId) {
     return unwrap(await httpClient.get(`/exam/session/${sessionId}`))
   },

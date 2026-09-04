@@ -185,14 +185,30 @@ async function loadPage() {
   loading.value = true
   errorMessage.value = ''
   nodeError.value = ''
+
+  // 当前节点是基础测试的必要数据，路径目录只是切换科目的辅助数据。
+  // 不让目录接口的慢响应阻塞当前节点和题目组件的加载。
   try {
-    const [current, paths] = await Promise.all([fundamentalsApi.getCurrentPath(route.query.pathId), fundamentalsApi.listPaths()])
+    const current = await fundamentalsApi.getCurrentPath(route.query.pathId)
     learningPath.value = current
-    pathCatalog.value = Array.isArray(paths) ? paths : (paths?.paths || [])
+    pathCatalog.value = current ? [{
+      path_id: current.path_id,
+      subject: current.goal || current.subject || '当前科目',
+      node_count: current.nodes?.length || 0,
+      progress: current.progress || 0,
+    }] : []
     if (learningPath.value) {
       chooseNode(learningPath.value)
       await loadNode()
     }
+
+    // 目录加载失败不影响当前节点测试；成功后再补齐科目切换列表。
+    void fundamentalsApi.listPaths()
+      .then((paths) => {
+        const catalog = Array.isArray(paths) ? paths : (paths?.paths || [])
+        if (catalog.length) pathCatalog.value = catalog
+      })
+      .catch(() => {})
   } catch (error) {
     errorMessage.value = error.response?.data?.detail || error.message || '请检查后端服务后重试。'
   } finally {

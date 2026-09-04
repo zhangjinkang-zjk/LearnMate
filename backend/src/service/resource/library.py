@@ -13,6 +13,7 @@ from tortoise.expressions import F, Q
 from tortoise.exceptions import IntegrityError
 
 from backend.src.models.resource_model import GeneratedResource
+from backend.src.models.study_model import ResourceReadStatus
 from backend.src.models.usermodel import User
 from backend.src.service.resource.metadata import (
     FILE_EXT_MAP,
@@ -179,6 +180,11 @@ class ResourceLibraryService:
             records = await GeneratedResource.filter(user_id=user_id).order_by("-created_at").all()
 
         result = []
+        read_statuses = await ResourceReadStatus.filter(
+            user_id=user_id,
+            resource_id__in=[record.id for record in records],
+        ).all() if records else []
+        read_map = {status.resource_id: bool(status.is_read) for status in read_statuses}
         for record in records:
             ext = FILE_EXT_MAP.get(record.resource_type, "md")
             preview = record.content[:200] if record.content else ""
@@ -206,6 +212,7 @@ class ResourceLibraryService:
                 "visibility": record.visibility or "private",
                 "owner_user_id": record.user_id,
                 "is_owner": record.user_id == user_id,
+                "is_read": read_map.get(record.id, False),
             }
             if record.file_url:
                 item["file_url"] = record.file_url
