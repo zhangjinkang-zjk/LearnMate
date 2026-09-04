@@ -1,4 +1,4 @@
-# 知伴 — 系统架构
+# LearnMate — 系统架构
 
 ```mermaid
 flowchart TB

@@ -2,7 +2,7 @@
   <main class="diagnosis-page">
     <ImmersiveOnboardingBackdrop />
     <RouterLink class="back-link" to="/onboarding/direction"><span aria-hidden="true">←</span><span>BACK</span></RouterLink>
-    <header class="diagnosis-heading"><p class="eyebrow">能力诊断 · 学习起点</p><h1>和知伴聊聊你的起点</h1><p>系统会围绕你的学习方向逐步提问，回答会用于调整后续讲解深度和练习难度。</p></header>
+    <header class="diagnosis-heading"><p class="eyebrow">能力诊断 · 学习起点</p><h1>和 LearnMate 聊聊你的起点</h1><p>系统会围绕你的学习方向逐步提问，回答会用于调整后续讲解深度和练习难度。</p></header>
     <section class="surface diagnosis-card" aria-live="polite">
       <div class="diagnosis-meta">
         <span>{{ isFinished ? '诊断完成' : `第 ${Math.min(answeredCount + 1, totalQuestions)} / ${totalQuestions} 题` }}</span>
