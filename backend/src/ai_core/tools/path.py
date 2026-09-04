@@ -145,7 +145,7 @@ async def delete_path_node(path_id: int, node_id: int, user_id: str):
     from backend.src.service.path.service import PathService
 
     try:
-        ok = await PathService.delete_node(path_id, node_id)
+        ok = await PathService.delete_node(path_id, node_id, int(user_id))
         return "节点已删除。" if ok else "节点不存在。"
     except ValueError as exc:
         return str(exc)

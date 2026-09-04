@@ -146,7 +146,17 @@ function formatDuration(seconds) { const value = Number(seconds || 0); if (value
 
 async function loadOverview() {
   const results = await Promise.allSettled([learningApi.getCurrentPath(), learningApi.getStudyStats(), learningApi.getPathStats(), learningApi.getMastery(), learningApi.getLearningGuidance()])
-  const currentPathPayload = results[0].status === 'fulfilled' ? unwrap(results[0].value) : null
+  let currentPathPayload = results[0].status === 'fulfilled' ? unwrap(results[0].value) : null
+  // 首次诊断只保存学习画像，若尚无路径则按学习方向创建用户专属路径。
+  // 复用现有路径生成接口，避免在前端复制路径或节点入库逻辑。
+  if (!currentPathPayload) {
+    try {
+      await learningApi.generatePathsFromDirection(profile.direction, profile.goal)
+      currentPathPayload = unwrap(await learningApi.getCurrentPath())
+    } catch {
+      // 页面仍可展示画像和诊断状态，用户可稍后刷新重试路径生成。
+    }
+  }
   const currentPath = currentPathPayload && Array.isArray(currentPathPayload.nodes) ? currentPathPayload : null
   const studyStats = results[1].status === 'fulfilled' ? unwrap(results[1].value) : null
   const pathStatsResult = results[2].status === 'fulfilled' ? unwrap(results[2].value) : null

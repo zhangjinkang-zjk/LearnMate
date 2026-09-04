@@ -11,6 +11,10 @@ from typing import TypedDict, NotRequired
 from langgraph.graph import StateGraph, START, END
 
 from backend.src.ai_core.llm_config import llm
+from backend.src.service.path.teaching_context import (
+    PATH_DEFAULT_RESOURCE_TYPES,
+    attach_teaching_specs,
+)
 from backend.src.utils.prompt_loader import load_prompt, fill_prompt
 from backend.src.utils.json_parser import parse_llm_json
 
@@ -103,7 +107,7 @@ def _fallback_group_nodes(group: list[dict], group_start: int) -> list[dict]:
             "order_index": order_index,
             "knowledge_tags": key_points[:5],
             "prerequisites": [group_start + index - 1] if order_index > 1 else [],
-            "resource_types": ["document", "ppt", "mindmap"],
+            "resource_types": list(PATH_DEFAULT_RESOURCE_TYPES),
             "quiz_config": {"count": 5, "threshold": 0.7},
             "description": str(item.get("learning_goal") or f"掌握{topic}的核心概念、典型应用和常见误区").strip(),
         })
@@ -303,6 +307,7 @@ async def executor_node(state: PathState) -> dict:
     for group_nodes in results:
         all_nodes.extend(group_nodes)
     all_nodes.sort(key=lambda n: n.get("order_index", 0))
+    all_nodes = attach_teaching_specs(all_nodes, topic_outline)
 
     logger.info(f"[PathExecutor] 全部节点生成完成 total={len(all_nodes)} 耗时={time.perf_counter() - t0:.1f}s")
     return {"nodes": all_nodes}

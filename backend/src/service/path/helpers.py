@@ -15,6 +15,7 @@ from backend.src.models.resource_model import GeneratedResource
 from backend.src.models.usermodel import User
 from backend.src.service.notification.service import check_and_create_node_unlocked
 from backend.src.service.resource.persistence import is_failed_generation_content
+from backend.src.service.path.teaching_context import PATH_DEFAULT_RESOURCE_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ async def check_existing_resources(
 ):
     """Return existing resource records and missing resource types for a path node."""
     if resource_types is None:
-        resource_types = ["document", "ppt", "mindmap"]
+        resource_types = list(PATH_DEFAULT_RESOURCE_TYPES)
 
     existing_records = []
     missing_types = []
@@ -76,7 +77,7 @@ async def get_bound_node_resources(
 ):
     """Return resources already bound to this path node, not global same-topic resources."""
     if resource_types is None:
-        resource_types = ["document", "ppt", "mindmap"]
+        resource_types = list(PATH_DEFAULT_RESOURCE_TYPES)
 
     bound_ids = _load_resource_ids(getattr(progress, "resource_ids", None))
     if not bound_ids:

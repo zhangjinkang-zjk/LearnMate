@@ -88,7 +88,7 @@ function selectFromMenu(event) {
 .chapter-item__copy strong { overflow: hidden; font-size: 12px; line-height: 1.45; text-overflow: ellipsis; }
 .chapter-item__copy small { color: var(--muted); font-size: 10px; }
 .chapter-select { display: none; width: 100%; min-height: 42px; padding: 0 36px 0 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); color: var(--ink); outline: none; }
-@media (max-width: 1100px) {
+@media (max-width: 1280px) {
   .chapter-rail { padding: 0; border-right: 0; }
   .chapter-list, .chapter-rail__progress { display: none; }
   .chapter-rail__heading { margin-bottom: 10px; }

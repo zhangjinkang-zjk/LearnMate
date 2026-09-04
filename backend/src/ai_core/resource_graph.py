@@ -33,6 +33,11 @@ from backend.src.utils.knowledge_base import search as kb_search
 from backend.src.utils.prompt_loader import load_prompt, fill_prompt
 from backend.src.utils.json_parser import parse_llm_json
 from backend.src.utils.slide_schema import PPT_SPEAKER_NOTES_MAX_CHARS, limit_speaker_notes
+from backend.src.service.path.teaching_context import format_teaching_context
+from backend.src.service.resource.document_quality import (
+    validate_document_chapter,
+    validate_document_section,
+)
 from backend.src.service.resource.persistence import is_failed_generation_content
 
 logger = logging.getLogger(__name__)
@@ -89,6 +94,7 @@ class ResourceState(TypedDict):
     llm_priority: NotRequired[str]
     ppt_theme_id: NotRequired[str]
     rag_mode: NotRequired[str]
+    teaching_context: NotRequired[dict]
 
 
 # ═══════════════════════════════════════
@@ -183,38 +189,72 @@ def build_resource_prompt(
     formula_sheet: str = "",
     ppt_theme_id: str = "",
     rag_mode: str = "reference",
+    teaching_context: dict | None = None,
+    section_index: int = 1,
+    section_total: int = 1,
+    previous_section: str = "（无）",
+    next_section: str = "（无）",
+    document_outline: str = "",
 ) -> str:
     """构建单个资源类型的生成 prompt，可从 executor_node 或 generate_stream 直接调用"""
     custom_prompts = custom_prompts or {}
     custom = custom_prompts.get(rt, "")
-    if custom.strip():
+    protected_prompt_path = None
+    if rt == "document" and teaching_context:
+        protected_prompt_path = "resource/path_document"
+    elif rt == "document" and section:
+        protected_prompt_path = "resource/document_section"
+    elif rt == "mindmap" and teaching_context:
+        protected_prompt_path = "resource/path_mindmap"
+
+    should_append_custom = bool(custom.strip() and protected_prompt_path)
+    if should_append_custom:
+        prompt_path = protected_prompt_path
+        if prompt_path not in _template_cache:
+            _template_cache[prompt_path] = load_prompt(prompt_path)
+        template = _template_cache[prompt_path]
+    elif custom.strip():
         template = custom
     else:
-        prompt_path = PROMPT_MAP.get(rt, "resource/document")
+        prompt_path = protected_prompt_path or PROMPT_MAP.get(rt, "resource/document")
         if prompt_path not in _template_cache:
             _template_cache[prompt_path] = load_prompt(prompt_path)
         template = _template_cache[prompt_path]
     kb_limit = _int_env("RAG_PROMPT_CONTEXT_CHARS", 2500)
     rt_kb = kb[:kb_limit] if len(kb) > kb_limit else kb  # 截断，公式已由 formula_sheet 覆盖
     rt_kb = _format_kb_context(rt_kb, rag_mode)
-    base = fill_prompt(
-        template,
-        topic=topic,
-        resource_type=rt,
-        portrait_context=portrait,
-        kb_context=rt_kb,
-        learning_guidance=guidance,
-        user_notes=user_notes,
-        feedback=feedback,
-        count=exam_count,
-        question_types=question_types,
-        difficulty=difficulty,
-        section=section,
-        learning_objectives=learning_objectives or "暂无学习目标数据",
-        formula_sheet=formula_sheet,
-        ppt_theme_id=ppt_theme_id or "",
-    )
-    return base + focus_guidance if focus_guidance else base
+    prompt_values = {
+        "topic": topic,
+        "resource_type": rt,
+        "portrait_context": portrait,
+        "kb_context": rt_kb,
+        "learning_guidance": guidance,
+        "user_notes": user_notes,
+        "feedback": feedback,
+        "count": exam_count,
+        "question_types": question_types,
+        "difficulty": difficulty,
+        "section": section,
+        "learning_objectives": learning_objectives or "暂无学习目标数据",
+        "formula_sheet": formula_sheet,
+        "ppt_theme_id": ppt_theme_id or "",
+        "teaching_context": format_teaching_context(teaching_context),
+        "section_index": section_index,
+        "section_total": section_total,
+        "section_title": section or topic,
+        "previous_section": previous_section,
+        "next_section": next_section,
+        "document_outline": document_outline,
+    }
+    base = fill_prompt(template, **prompt_values)
+    custom_guidance = ""
+    if should_append_custom:
+        custom_guidance = (
+            "\n\n## 可选表达偏好\n"
+            f"{fill_prompt(custom.strip(), **prompt_values)}\n"
+            "该偏好只能调整表达或布局方式，不得改变本提示中的核心教学范围、事实边界和输出格式。"
+        )
+    return base + custom_guidance + (focus_guidance if focus_guidance else "")
 
 
 async def generate_ppt_parallel(
@@ -1089,35 +1129,117 @@ async def generate_ppt_parallel(
 #  文档并行生成（与 PPT 对称）
 # ═══════════════════════════════════════
 
-async def generate_doc_outline(topic: str, kb: str = "", guidance: str = "", count: int = DOC_DEFAULT_SECTIONS, llm_priority: str = "high", user_id: int = 0) -> list[str]:
-    """快速生成文档章节大纲，默认 {count} 章节"""
-    prompt = f"""你是一个课程规划师。为以下主题设计文档章节大纲。
+def _fallback_document_outline(
+    topic: str,
+    count: int,
+    teaching_context: dict | None = None,
+) -> list[str]:
+    current = teaching_context.get("current", {}) if isinstance(teaching_context, dict) else {}
+    spec = current.get("teaching_spec", {}) if isinstance(current, dict) else {}
+    key_points = spec.get("key_points", []) if isinstance(spec, dict) else []
+    candidates = [f"{topic}要解决的问题"]
+    candidates.extend(f"{str(point).strip()}的核心机制" for point in key_points if str(point).strip())
+    candidates.extend([
+        f"{topic}的完整示例",
+        f"{topic}的边界与误区",
+        f"{topic}的迁移检查",
+        f"{topic}的关键结论",
+    ])
 
-主题：{topic}
-学习指导：{guidance}
+    result: list[str] = []
+    for candidate in candidates:
+        title = re.sub(r"\s+", "", str(candidate))[:20]
+        if title and title not in result:
+            result.append(title)
+        if len(result) >= count:
+            break
+    while len(result) < count:
+        result.append(f"{topic[:12]}学习检查{len(result) + 1}")
+    return result
 
-要求：
-- 固定 {count} 个章节（必须恰好 {count} 个）
-- 章节标题简洁（15 字以内），由浅入深，逻辑连贯
-- 覆盖：概念引入 → 原理解析 → 方法技巧 → 案例应用 → 常见误区 → 进阶拓展 → 总结回顾
-- 只返回 JSON 字符串数组，不要任何其他文字
 
-返回示例：["线性方程组的定义与几何意义", "高斯消元法的原理与步骤", "矩阵秩与解的判定", "向量空间与线性无关性", "特征值与对角化", "线性变换的几何直观", "工程中的线性代数应用", "易错点辨析与总结"]"""
+def _normalize_document_outline(
+    value,
+    topic: str,
+    count: int,
+    teaching_context: dict | None = None,
+) -> list[str]:
+    sections: list[str] = []
+    if isinstance(value, list):
+        for item in value:
+            title = re.sub(
+                r"^\s*(?:(?:第[一二三四五六七八九十\d]+[章节])|"
+                r"(?:[一二三四五六七八九十\d]+[、.)：:])|(?:[-*+]\s+))\s*",
+                "",
+                str(item or ""),
+            ).strip()
+            title = re.sub(r"\s+", " ", title)[:20]
+            if title and title not in sections:
+                sections.append(title)
+            if len(sections) >= count:
+                break
+    for fallback in _fallback_document_outline(topic, count, teaching_context):
+        if len(sections) >= count:
+            break
+        if fallback not in sections:
+            sections.append(fallback)
+    return sections[:count]
+
+
+def _strip_outer_markdown_fence(content: str) -> str:
+    """Remove only a wrapper fence around the whole Markdown response."""
+    text = str(content or "").strip()
+    match = re.fullmatch(
+        r"```(?:markdown|md)?[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return match.group(1).strip() if match else text
+
+
+async def generate_doc_outline(
+    topic: str,
+    kb: str = "",
+    guidance: str = "",
+    count: int = DOC_DEFAULT_SECTIONS,
+    llm_priority: str = "high",
+    user_id: int = 0,
+    portrait: str = "",
+    user_notes: str = "",
+    teaching_context: dict | None = None,
+    rag_mode: str = "reference",
+) -> list[str]:
+    """Generate the internal section plan for one path-node document."""
+    outline_prompt = (
+        "resource/path_document_outline"
+        if teaching_context
+        else "resource/document_outline"
+    )
+    prompt = fill_prompt(
+        load_prompt(outline_prompt),
+        topic=topic,
+        count=count,
+        teaching_context=format_teaching_context(teaching_context),
+        portrait_context=portrait or "暂无画像数据",
+        learning_guidance=guidance or "暂无额外学习指导",
+        user_notes=user_notes or "暂无补充要求",
+        kb_context=_format_kb_context(kb, rag_mode),
+    )
 
     try:
         t0 = time.perf_counter()
         response = await llm.ainvoke(prompt, priority=llm_priority, user_id=user_id, pool="document")
-        sections = parse_llm_json(response.content)
-        if isinstance(sections, list) and len(sections) >= 1:
-            defaults = ["核心概念入门", "基本原理推导", "关键方法解析", "典型案例分析", "进阶知识拓展", "实际应用场景", "常见误区辨析", "总结与回顾"]
-            while len(sections) < count:
-                sections.append(defaults[len(sections) % len(defaults)])
-            sections = sections[:count]
-            logger.info("[Doc-Outline] 大纲生成 章节数=%d 耗时=%.2fs", len(sections), time.perf_counter() - t0)
-            return sections
+        sections = _normalize_document_outline(
+            parse_llm_json(response.content),
+            topic,
+            count,
+            teaching_context,
+        )
+        logger.info("[Doc-Outline] 小节规划完成 count=%d elapsed=%.2fs", len(sections), time.perf_counter() - t0)
+        return sections
     except Exception:
-        logger.exception("[Doc-Outline] 大纲生成失败，使用默认章节")
-    return ["核心概念入门", "基本原理推导", "关键方法解析", "典型案例分析", "进阶知识拓展", "实际应用场景", "常见误区辨析", "总结与回顾"][:count]
+        logger.exception("[Doc-Outline] 小节规划失败，使用教学契约兜底目录")
+        return _fallback_document_outline(topic, count, teaching_context)
 
 
 async def generate_document_parallel(
@@ -1134,8 +1256,9 @@ async def generate_document_parallel(
     llm_priority: str = "high",
     user_id: int = 0,
     rag_mode: str = "reference",
+    teaching_context: dict | None = None,
 ) -> str:
-    """按章节并行生成文档：大纲 → N 条线并行（每条约 400 字），最后按序拼接"""
+    """Generate one complete node chapter from a planned set of internal sections."""
     _t_total = time.perf_counter()
     _push_agent_event(stream_writer, "executor:document", "文档生成智能体", "executor", "running", "正在启动文档生成", resource_type="document")
     if stream_writer:
@@ -1151,10 +1274,22 @@ async def generate_document_parallel(
                 stream_writer({"type": "stream_progress", "file_type": "document", "message": "正在规划文档大纲..."})
             except Exception:
                 logger.exception("[Doc-Parallel] stream_progress 推送异常")
-        sections = await generate_doc_outline(topic, kb=kb, guidance=guidance, count=section_count, llm_priority=llm_priority, user_id=user_id)
+        sections = await generate_doc_outline(
+            topic,
+            kb=kb,
+            guidance=guidance,
+            count=section_count,
+            llm_priority=llm_priority,
+            user_id=user_id,
+            portrait=portrait,
+            user_notes=user_notes,
+            teaching_context=teaching_context,
+            rag_mode=rag_mode,
+        )
 
-    outline_lines = [f"第{i+1}章「{s}」" for i, s in enumerate(sections)]
-    course_overview = "\n".join(outline_lines)
+    sections = _normalize_document_outline(sections, topic, section_count, teaching_context)
+    outline_lines = [f"第{i + 1}节「{section}」" for i, section in enumerate(sections)]
+    document_outline = "\n".join(outline_lines)
     course_formula_sheet = build_formula_sheet(topic)
 
     total = len(sections)
@@ -1194,98 +1329,132 @@ async def generate_document_parallel(
             section_kb_result = await kb_search(f"{topic} {section_title}", top_k=3, user_id=user_id)
             if section_kb_result and "暂无" not in str(section_kb_result) and "No knowledge" not in str(section_kb_result):
                 section_kb = (
-                    f"【本章节知识库检索】\n{section_kb_result}\n\n"
-                    f"【课程级知识库检索】\n{kb}"
+                    f"【本小节知识库检索】\n{section_kb_result}\n\n"
+                    f"【节点级知识库检索】\n{kb}"
                 )
         except Exception:
             logger.exception("[Doc-RAG] section knowledge search failed idx=%d section=%s", idx, section_title)
-        kb_limit = _int_env("RAG_PROMPT_CONTEXT_CHARS", 2500)
-        section_kb_context = _format_kb_context(section_kb[:kb_limit], rag_mode)
-
-        section_prompt = f"""你是一个专业的学习文档撰写者。请为「{topic}」撰写一个章节。
-
-## 当前章节
-{section_title}
-
-## 课程全景
-{course_overview}
-
-## 上下文
-- 前一章：{prev_section}（自然承接）
-- 后一章：{next_section}（做好铺垫）
-- 严禁重复其他章节内容
-
-## 学习指导
-{guidance or '无特殊要求'}
-
-## 知识库参考策略与资料
-{section_kb_context}
-
-## 公式速查表（稳定模板，优先引用）
-{formula_guidance}
-
-## 公式使用规则
-- 如果上方公式速查表非空，优先逐字复用其中的 LaTeX 公式块，不要自行重写同类公式。
-- 公式必须使用 `$...$` 或 `$$...$$`，`\\begin{{...}}...\\end{{...}}` 必须完整放在 `$$...$$` 内。
-- 中文解释必须写在公式块外，每个核心公式后至少补 1-2 句解释变量含义、适用条件和常见错误。
-- 涉及矩阵、行列式、概率、积分、变换等公式密集主题时，优先使用 2x2、3x3 或单变量小例子展开。
-- 禁止用 `...`、`依此类推`、`类似可得` 省略推导；必要步骤要完整写出。
-
-直接输出该章节的 Markdown 内容，以 ### {section_title} 开头。"""
-
         t0 = time.perf_counter()
-        try:
-            response = await llm.ainvoke(section_prompt, priority=llm_priority, user_id=user_id, pool="document")
-            content = response.content.strip()
-            _push_text_stream(
-                stream_writer,
+        quality_feedback = feedback
+        last_error: Exception | None = None
+        for attempt in range(2):
+            section_prompt = build_resource_prompt(
                 "document",
-                content,
-                section_idx=idx,
-                section_title=section_title,
-                total=total,
+                topic,
+                portrait=portrait,
+                kb=section_kb,
+                guidance=guidance,
+                feedback=quality_feedback or "暂无修订反馈",
+                user_notes=user_notes,
+                custom_prompts=custom_prompts,
+                section=section_title,
+                formula_sheet=formula_guidance,
+                rag_mode=rag_mode,
+                teaching_context=teaching_context,
+                section_index=idx + 1,
+                section_total=total,
+                previous_section=prev_section,
+                next_section=next_section,
+                document_outline=document_outline,
             )
-            elapsed = time.perf_counter() - t0
-            completed_count[0] += 1
-            _push_agent_event(
-                stream_writer,
-                section_agent_id,
-                f"文档第 {idx + 1} 节",
-                "executor",
-                "done",
-                f"「{section_title}」已完成",
-                resource_type="document",
-                current=completed_count[0],
-                total=total,
-                elapsed_ms=int(elapsed * 1000),
-            )
-            logger.info("[Doc-Section] %d/%d idx=%d section=%s len=%d 耗时=%.2fs",
-                        completed_count[0], total, idx, section_title, len(content), elapsed)
-            return idx, content
-        except Exception:
-            elapsed = time.perf_counter() - t0
-            _push_agent_event(
-                stream_writer,
-                section_agent_id,
-                f"文档第 {idx + 1} 节",
-                "executor",
-                "failed",
-                f"「{section_title}」生成失败",
-                resource_type="document",
-                current=idx + 1,
-                total=total,
-                elapsed_ms=int(elapsed * 1000),
-            )
-            logger.exception("[Doc-Section] idx=%d section=%s 生成失败 耗时=%.2fs", idx, section_title, elapsed)
-            return idx, f"### {section_title}\n- 生成失败"
+            try:
+                response = await llm.ainvoke(
+                    section_prompt,
+                    priority=llm_priority,
+                    user_id=user_id,
+                    pool="document",
+                )
+                content = _strip_outer_markdown_fence(str(response.content or ""))
+                if teaching_context:
+                    quality_errors = validate_document_section(content, section_title)
+                elif not content or is_failed_generation_content(content):
+                    quality_errors = ["文档内容为空或包含生成失败信息"]
+                else:
+                    quality_errors = []
+                if not quality_errors:
+                    _push_text_stream(
+                        stream_writer,
+                        "document",
+                        content,
+                        section_idx=idx,
+                        section_title=section_title,
+                        total=total,
+                    )
+                    elapsed = time.perf_counter() - t0
+                    completed_count[0] += 1
+                    _push_agent_event(
+                        stream_writer,
+                        section_agent_id,
+                        f"文档第 {idx + 1} 节",
+                        "executor",
+                        "done",
+                        f"「{section_title}」已完成",
+                        resource_type="document",
+                        current=completed_count[0],
+                        total=total,
+                        elapsed_ms=int(elapsed * 1000),
+                    )
+                    logger.info(
+                        "[Doc-Section] %d/%d idx=%d section=%s len=%d elapsed=%.2fs",
+                        completed_count[0], total, idx, section_title, len(content), elapsed,
+                    )
+                    return idx, content
+
+                quality_feedback = (
+                    "上一次草稿未通过系统质量检查，请完整重写本小节。问题："
+                    + "；".join(quality_errors)
+                )
+                last_error = ValueError(quality_feedback)
+                logger.warning(
+                    "[Doc-Section] quality retry idx=%d attempt=%d errors=%s",
+                    idx, attempt + 1, quality_errors,
+                )
+            except Exception as error:
+                last_error = error
+                logger.warning(
+                    "[Doc-Section] generation retry idx=%d attempt=%d error=%s",
+                    idx, attempt + 1, error,
+                    exc_info=True,
+                )
+
+        elapsed = time.perf_counter() - t0
+        _push_agent_event(
+            stream_writer,
+            section_agent_id,
+            f"文档第 {idx + 1} 节",
+            "executor",
+            "failed",
+            f"「{section_title}」未通过质量检查",
+            resource_type="document",
+            current=idx + 1,
+            total=total,
+            elapsed_ms=int(elapsed * 1000),
+        )
+        raise RuntimeError(f"文档小节「{section_title}」生成失败") from last_error
 
     tasks = [gen_section(i, s) for i, s in enumerate(sections)]
     results = await asyncio.gather(*tasks)
     results.sort(key=lambda x: x[0])
 
     parts = [content for _, content in results if content]
-    combined = "\n\n".join(parts)
-    logger.info("[Doc-Parallel] 完成 章节数=%d 全程耗时=%.1fs", len(sections), time.perf_counter() - _t_total)
+    chapter_title = str(
+        (teaching_context or {}).get("current", {}).get("topic") or topic
+    ).strip()
+    combined = f"# {chapter_title}\n\n" + "\n\n".join(parts)
+    chapter_errors = validate_document_chapter(combined, teaching_context) if teaching_context else []
+    if chapter_errors:
+        _push_agent_event(
+            stream_writer,
+            "executor:document",
+            "文档生成智能体",
+            "executor",
+            "failed",
+            "完整文档未通过质量检查",
+            resource_type="document",
+        )
+        raise RuntimeError("完整文档未通过质量检查：" + "；".join(chapter_errors))
+
+    logger.info("[Doc-Parallel] 完成 小节数=%d 全程耗时=%.1fs", len(sections), time.perf_counter() - _t_total)
     _push_agent_event(stream_writer, "executor:document", "文档生成智能体", "executor", "done", "文档内容生成完成", resource_type="document", current=total, total=total, elapsed_ms=int((time.perf_counter() - _t_total) * 1000))
 
     if stream_writer:
@@ -1309,6 +1478,7 @@ async def executor_node(state: ResourceState) -> dict:
     focus_guidance = _build_focus_guidance(state.get("answers", {}) or {})
     user_notes = state.get("user_notes", "")
     rag_mode = _normalize_rag_mode(state.get("rag_mode", "reference"))
+    teaching_context = state.get("teaching_context", {}) or {}
 
     writer = _safe_stream_writer()
     _push_agent_event(
@@ -1344,6 +1514,7 @@ async def executor_node(state: ResourceState) -> dict:
             custom_prompts=custom_prompts, focus_guidance=focus_guidance,
             ppt_theme_id=state.get("ppt_theme_id", ""),
             rag_mode=rag_mode,
+            teaching_context=teaching_context,
         )
         for rt in thread_types
     }
@@ -1436,6 +1607,7 @@ async def executor_node(state: ResourceState) -> dict:
             llm_priority=llm_priority,
             user_id=user_id_int,
             rag_mode=rag_mode,
+            teaching_context=teaching_context,
         )
         _emit_resource_complete("document", content)
         return content
@@ -1450,6 +1622,7 @@ async def executor_node(state: ResourceState) -> dict:
             custom_prompts=custom_prompts, focus_guidance=focus_guidance,
             ppt_theme_id=state.get("ppt_theme_id", ""),
             rag_mode=rag_mode,
+            teaching_context=teaching_context,
         )
         try:
             response = await llm.ainvoke(img_prompt_text, priority=llm_priority, user_id=user_id_int, pool="thread")

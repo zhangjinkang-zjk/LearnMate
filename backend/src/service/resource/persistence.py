@@ -18,13 +18,22 @@ _GENERATION_FAILURE_RE = re.compile(
     r"read operation timed out|incomplete chunked read|peer closed connection",
     re.IGNORECASE,
 )
+_EMBEDDED_GENERATION_FAILURE_RE = re.compile(
+    r"(?im)^\s*(?:#{1,6}\s*)?(?:[-*+]\s*)?"
+    r"(?:生成失败|内容生成失败|generation failed|failed to generate)"
+    r"\s*[。.!！]?\s*$"
+)
 
 
 def is_failed_generation_content(content) -> bool:
     """识别上游超时等错误文本，避免把错误信息当成学习资源保存。"""
     if not isinstance(content, str):
         return False
-    return bool(_GENERATION_FAILURE_RE.search(content.strip()))
+    normalized = content.strip()
+    return bool(
+        _GENERATION_FAILURE_RE.search(normalized)
+        or _EMBEDDED_GENERATION_FAILURE_RE.search(normalized)
+    )
 
 
 def clean_generation_topic(topic: str | None) -> str:

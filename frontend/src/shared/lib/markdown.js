@@ -18,7 +18,9 @@ markdown.renderer.rules.link_open = (tokens, index, options, env, renderer) => {
 }
 
 export function renderMarkdown(source) {
-  return DOMPurify.sanitize(markdown.render(String(source || '')), {
+  const normalizedSource = String(source || '')
+    .replace(/(\*\*[^*\n]+?\*\*)(?=[\u3400-\u9fff])/g, '$1 ')
+  return DOMPurify.sanitize(markdown.render(normalizedSource), {
     USE_PROFILES: { html: true },
   })
 }

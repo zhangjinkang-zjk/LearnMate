@@ -39,6 +39,28 @@ from backend.src.service.path.helpers import (
     reconcile_completed_prerequisites,
 )
 from backend.src.service.path.generation_locks import get_node_generation_lock
+from backend.src.service.path.teaching_context import (
+    PATH_DEFAULT_RESOURCE_TYPES,
+    attach_teaching_specs,
+    build_node_teaching_context,
+    dump_teaching_spec,
+    teaching_spec_payload,
+)
+
+
+_RESOURCE_GENERATION_ERROR_MESSAGE = "本章学习材料生成失败，请重试"
+
+
+def _safe_resource_generation_error_detail(error: Exception) -> str:
+    """Expose deterministic quality failures, never provider/internal details."""
+    detail = " ".join(str(error or "").split())
+    quality_prefixes = (
+        "完整文档未通过质量检查：",
+        "路径节点文档未通过质量检查：",
+    )
+    if detail.startswith(quality_prefixes):
+        return detail[:300]
+    return _RESOURCE_GENERATION_ERROR_MESSAGE
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -215,8 +237,9 @@ class PathService:
                 knowledge_tags=json.dumps(nd.get("knowledge_tags", []), ensure_ascii=False),
                 order_index=order_index,
                 prerequisites=json.dumps(nd.get("prerequisites", []), ensure_ascii=False),
-                resource_types=json.dumps(nd.get("resource_types", ["document", "ppt", "mindmap"]), ensure_ascii=False),
+                resource_types=json.dumps(nd.get("resource_types", list(PATH_DEFAULT_RESOURCE_TYPES)), ensure_ascii=False),
                 quiz_config=json.dumps(nd.get("quiz_config", {"count": 5, "threshold": 0.7}), ensure_ascii=False),
+                teaching_spec=dump_teaching_spec(nd.get("teaching_spec"), node=nd),
             )
 
             status = "unlocked" if order_index == 1 else "locked"
@@ -235,6 +258,10 @@ class PathService:
                 "prerequisites": json.loads(node.prerequisites) if node.prerequisites else [],
                 "resource_types": json.loads(node.resource_types) if node.resource_types else [],
                 "quiz_config": json.loads(node.quiz_config) if node.quiz_config else {},
+                "teaching_spec": teaching_spec_payload(
+                    node.teaching_spec,
+                    node={"topic": node.topic, "knowledge_tags": json.loads(node.knowledge_tags or "[]")},
+                ),
                 "status": status,
             }
             return node, payload
@@ -373,7 +400,7 @@ class PathService:
                             "order_index": order_index,
                             "knowledge_tags": key_points[:5],
                             "prerequisites": [order_index - 1] if order_index > 1 else [],
-                            "resource_types": ["document", "ppt", "mindmap"],
+                            "resource_types": list(PATH_DEFAULT_RESOURCE_TYPES),
                             "quiz_config": {"count": 5, "threshold": 0.7},
                             "description": str(item.get("learning_goal") or f"掌握{topic}的核心概念、典型应用和常见误区").strip(),
                         })
@@ -383,11 +410,12 @@ class PathService:
                         group_idx + 1,
                         len(fallback_nodes),
                     )
-                    return fallback_nodes
+                    return attach_teaching_specs(fallback_nodes, topic_outline)
 
                 tasks = [asyncio.create_task(generate_group(i, group)) for i, group in enumerate(groups)]
                 for done in asyncio.as_completed(tasks):
                     group_nodes = await done
+                    group_nodes = attach_teaching_specs(group_nodes, topic_outline)
                     for nd in sorted(group_nodes, key=lambda item: item.get("order_index", 0)):
                         node, payload = await create_node(nd, len(emitted_nodes) + 1)
                         created_nodes.append(node)
@@ -559,8 +587,9 @@ class PathService:
                 knowledge_tags=json.dumps(nd.get("knowledge_tags", []), ensure_ascii=False),
                 order_index=nd.get("order_index", len(nodes) + 1),
                 prerequisites=json.dumps(nd.get("prerequisites", []), ensure_ascii=False),
-                resource_types=json.dumps(nd.get("resource_types", ["document", "ppt", "mindmap"]), ensure_ascii=False),
+                resource_types=json.dumps(nd.get("resource_types", list(PATH_DEFAULT_RESOURCE_TYPES)), ensure_ascii=False),
                 quiz_config=json.dumps(nd.get("quiz_config", {"count": 5, "threshold": 0.7}), ensure_ascii=False),
+                teaching_spec=dump_teaching_spec(nd.get("teaching_spec"), node=nd),
             )
             created_nodes.append(node)
             nodes.append({
@@ -571,6 +600,10 @@ class PathService:
                 "prerequisites": json.loads(node.prerequisites) if node.prerequisites else [],
                 "resource_types": json.loads(node.resource_types) if node.resource_types else [],
                 "quiz_config": json.loads(node.quiz_config) if node.quiz_config else {},
+                "teaching_spec": teaching_spec_payload(
+                    node.teaching_spec,
+                    node={"topic": node.topic, "knowledge_tags": json.loads(node.knowledge_tags or "[]")},
+                ),
             })
 
         # 自动 enroll 创建者：初始化进度 + 首节点解锁
@@ -673,6 +706,10 @@ class PathService:
                     "prerequisites": json.loads(n.prerequisites) if n.prerequisites else [],
                     "resource_types": json.loads(n.resource_types) if n.resource_types else [],
                     "quiz_config": json.loads(n.quiz_config) if n.quiz_config else {},
+                    "teaching_spec": teaching_spec_payload(
+                        getattr(n, "teaching_spec", None),
+                        node={"topic": n.topic, "knowledge_tags": json.loads(n.knowledge_tags or "[]")},
+                    ),
                 }
                 for n in nodes
             ], key=lambda x: x["order_index"]),
@@ -807,6 +844,10 @@ class PathService:
             "prerequisites": json.loads(node.prerequisites) if node.prerequisites else [],
             "resource_types": json.loads(node.resource_types) if node.resource_types else [],
             "quiz_config": json.loads(node.quiz_config) if node.quiz_config else {},
+            "teaching_spec": teaching_spec_payload(
+                getattr(node, "teaching_spec", None),
+                node={"topic": node.topic, "knowledge_tags": json.loads(node.knowledge_tags or "[]")},
+            ),
             "quiz_session_id": progress.quiz_session_id if progress else None,
             "progress": {
                 "status": progress.node_status if progress else "not_enrolled",
@@ -855,7 +896,7 @@ class PathService:
         """流式为节点生成学习资源（SSE）—— 生成好一个推送一个"""
         node = await PathNode.filter(id=node_id, path_id=path_id).first()
         if not node:
-            yield f"data: {json.dumps({'type': 'error', 'detail': '节点不存在'}, ensure_ascii=False)}\n\n"
+            yield _sse_error("节点不存在", path_id=path_id, node_id=node_id)
             return
 
         progress = await UserPathProgress.filter(user_id=user_id, path_id=path_id, node_id=node_id).first()
@@ -863,7 +904,7 @@ class PathService:
             # 用户可能未走 enroll 流程，但既然在生成该节点资料，补建进度记录避免生成被卡死
             progress = await PathService._ensure_node_progress(user_id, path_id, node_id)
             if progress is None:
-                yield f"data: {json.dumps({'type': 'error', 'detail': '未加入该路径，且无法创建进度记录'}, ensure_ascii=False)}\n\n"
+                yield _sse_error("未加入该路径，且无法创建进度记录", path_id=path_id, node_id=node_id)
                 return
 
         lock = await get_node_generation_lock(user_id, path_id, node_id, "resources")
@@ -872,7 +913,7 @@ class PathService:
 
         async with lock:
             topic = node.topic
-            node_resource_types = resource_types or ["document", "ppt", "mindmap"]
+            node_resource_types = resource_types or list(PATH_DEFAULT_RESOURCE_TYPES)
             existing_records, missing_types = await get_bound_node_resources(progress, user_id, node_resource_types)
 
             for r in existing_records:
@@ -901,6 +942,7 @@ class PathService:
 
                 if gen_types:
                     from backend.src.service.resource.service import ResourceService
+                    teaching_context = await build_node_teaching_context(path_id, node_id, user_id)
                     async for event_str in ResourceService.generate_stream(
                         topic=topic, user_id=user_id, resource_types=gen_types, skip_review=True,
                         ppt_prompt_key="ppt_video",
@@ -909,6 +951,7 @@ class PathService:
                         bind_chat_history=False,
                         include_request_in_history=False,
                         save_to_chat_history=False,
+                        teaching_context=teaching_context,
                     ):
                         if event_str.startswith("data:") and "[DONE]" not in event_str:
                             try:
@@ -927,10 +970,30 @@ class PathService:
                 all_ids = [r.id for r in existing_records] + generated_ids
                 await update_progress_resource_ids(progress, all_ids)
                 yield _sse_done(all_ids, path_id=path_id, node_id=node_id)
-            except Exception:
-                # 客户端断开或异常时，至少把已收集到的资源 ID 写回进度
+            except Exception as exc:
+                logger.exception(
+                    "学习路径资源流生成失败 path_id=%s node_id=%s user_id=%s",
+                    path_id,
+                    node_id,
+                    user_id,
+                )
+                # 生成中断时保留已经成功产出的资源，但不暴露供应商或内部异常。
                 all_ids = [r.id for r in existing_records] + generated_ids
-                await update_progress_resource_ids(progress, all_ids)
+                try:
+                    await update_progress_resource_ids(progress, all_ids)
+                except Exception:
+                    logger.exception(
+                        "学习路径资源流失败后写回进度失败 path_id=%s node_id=%s user_id=%s",
+                        path_id,
+                        node_id,
+                        user_id,
+                    )
+                yield _sse_error(
+                    _safe_resource_generation_error_detail(exc),
+                    path_id=path_id,
+                    node_id=node_id,
+                )
+                return
 
     @staticmethod
     async def generate_node_resources(path_id: int, node_id: int, user_id: int, resource_types: list[str] | None = None) -> dict:
@@ -948,7 +1011,7 @@ class PathService:
         lock = await get_node_generation_lock(user_id, path_id, node_id, "resources")
         async with lock:
             topic = node.topic
-            node_resource_types = resource_types or ["document", "ppt", "mindmap"]
+            node_resource_types = resource_types or list(PATH_DEFAULT_RESOURCE_TYPES)
             existing_records, missing_types = await get_bound_node_resources(progress, user_id, node_resource_types)
 
             gen_types = [t for t in missing_types if t != "exercise"]
@@ -956,6 +1019,7 @@ class PathService:
             generated_ids = []
             if gen_types:
                 try:
+                    teaching_context = await build_node_teaching_context(path_id, node_id, user_id)
                     saved = await ResourceService.generate_and_save(
                         topic=topic,
                         user_id=user_id,
@@ -966,6 +1030,7 @@ class PathService:
                         bind_chat_history=False,
                         include_request_in_history=False,
                         save_to_chat_history=False,
+                        teaching_context=teaching_context,
                     )
                     generated_ids = [r.get("resource_id") or r.get("id") for r in saved if r]
                 except Exception:
@@ -1367,21 +1432,52 @@ class PathService:
         }
 
     @staticmethod
+    async def _get_owned_path(path_id: int, user_id: int):
+        """Load a path only when the current user owns it, hiding existence otherwise."""
+        path = await LearningPath.filter(id=path_id, user_id=user_id).first()
+        if not path or path.user_id != user_id:
+            raise ValueError("路径不存在")
+        return path
+
+    @staticmethod
     async def update_node(path_id: int, node_id: int, user_id: int, **fields) -> dict:
         """更新节点属性：topic, knowledge_tags, resource_types, quiz_config, order_index 等"""
+        await PathService._get_owned_path(path_id, user_id)
         node = await PathNode.filter(id=node_id, path_id=path_id).first()
         if not node:
             raise ValueError("节点不存在")
 
-        allowed = {"topic", "knowledge_tags", "resource_types", "quiz_config", "order_index"}
+        allowed = {"topic", "knowledge_tags", "resource_types", "quiz_config", "teaching_spec", "order_index"}
         updates = {}
         for k, v in fields.items():
             if k in allowed and v is not None:
                 updates[k] = json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v
 
+        current_tags = json.loads(node.knowledge_tags) if node.knowledge_tags else []
+        next_tags = fields.get("knowledge_tags", current_tags)
+        topic_changed = "topic" in updates and updates["topic"] != node.topic
+        tags_changed = "knowledge_tags" in updates and next_tags != current_tags
+        teaching_scope_changed = topic_changed or tags_changed
+        if teaching_scope_changed and "teaching_spec" not in updates:
+            updates["teaching_spec"] = dump_teaching_spec(
+                None,
+                node={
+                    "topic": fields.get("topic", node.topic),
+                    "knowledge_tags": next_tags,
+                },
+            )
+
         if updates:
-            await PathNode.filter(id=node_id).update(**updates)
+            await PathNode.filter(id=node_id, path_id=path_id).update(**updates)
             await node.refresh_from_db()
+
+        if teaching_scope_changed:
+            # 旧资源和旧测验均基于原教学范围；只解除绑定，不删除可审计的资源记录。
+            await UserPathProgress.filter(path_id=path_id, node_id=node_id).update(
+                resource_ids=None,
+                narration_status="",
+                quiz_session_id=None,
+            )
 
         return {
             "node_id": node.id,
@@ -1389,12 +1485,17 @@ class PathService:
             "knowledge_tags": json.loads(node.knowledge_tags) if node.knowledge_tags else [],
             "resource_types": json.loads(node.resource_types) if node.resource_types else [],
             "quiz_config": json.loads(node.quiz_config) if node.quiz_config else {},
+            "teaching_spec": teaching_spec_payload(
+                getattr(node, "teaching_spec", None),
+                node={"topic": node.topic, "knowledge_tags": json.loads(node.knowledge_tags or "[]")},
+            ),
             "order_index": node.order_index,
         }
 
     @staticmethod
-    async def delete_node(path_id: int, node_id: int) -> bool:
+    async def delete_node(path_id: int, node_id: int, user_id: int) -> bool:
         """删除节点（后续节点的 order_index 自动前移）"""
+        await PathService._get_owned_path(path_id, user_id)
         node = await PathNode.filter(id=node_id, path_id=path_id).first()
         if not node:
             return False
@@ -1409,16 +1510,14 @@ class PathService:
 
         # 更新路径的 node_count
         count = await PathNode.filter(path_id=path_id).count()
-        await LearningPath.filter(id=path_id).update(node_count=count)
+        await LearningPath.filter(id=path_id, user_id=user_id).update(node_count=count)
 
         return True
 
     @staticmethod
     async def add_node(path_id: int, topic: str, user_id: int, **fields) -> dict:
         """在路径末尾追加一个新节点"""
-        path = await LearningPath.filter(id=path_id).first()
-        if not path:
-            raise ValueError("路径不存在")
+        path = await PathService._get_owned_path(path_id, user_id)
 
         max_order = await PathNode.filter(path_id=path_id).order_by("-order_index").first()
         next_order = (max_order.order_index + 1) if max_order else 1
@@ -1429,11 +1528,14 @@ class PathService:
             knowledge_tags=json.dumps(fields.get("knowledge_tags", []), ensure_ascii=False),
             order_index=fields.get("order_index", next_order),
             prerequisites=json.dumps(fields.get("prerequisites", []), ensure_ascii=False),
-            resource_types=json.dumps(fields.get("resource_types", ["document", "ppt", "mindmap"]), ensure_ascii=False),
+            resource_types=json.dumps(fields.get("resource_types", list(PATH_DEFAULT_RESOURCE_TYPES)), ensure_ascii=False),
             quiz_config=json.dumps(fields.get("quiz_config", {"count": 5, "threshold": 0.7}), ensure_ascii=False),
+            teaching_spec=dump_teaching_spec(fields.get("teaching_spec"), node={"topic": topic, **fields}),
         )
 
-        await LearningPath.filter(id=path_id).update(node_count=await PathNode.filter(path_id=path_id).count())
+        await LearningPath.filter(id=path_id, user_id=user_id).update(
+            node_count=await PathNode.filter(path_id=path_id).count()
+        )
 
         # 为新节点自动生成资源
         try:
@@ -1656,7 +1758,7 @@ class PathService:
                 for rid in resource_ids_map.get(node.id, [])
             )
 
-            resource_types = json.loads(node.resource_types) if node.resource_types else ["document", "ppt", "mindmap"]
+            resource_types = json.loads(node.resource_types) if node.resource_types else list(PATH_DEFAULT_RESOURCE_TYPES)
             nodes.append({
                 "id": node.id,
                 "title": node.topic,
@@ -1664,6 +1766,10 @@ class PathService:
                 "status": status,
                 "summary": summary,
                 "knowledge_tags": knowledge_tags,
+                "teaching_spec": teaching_spec_payload(
+                    getattr(node, "teaching_spec", None),
+                    node={"topic": node.topic, "knowledge_tags": knowledge_tags},
+                ),
                 "resource_types": resource_types,
                 "resources": node_resources,
                 "session_id": p.quiz_session_id,
@@ -1796,6 +1902,18 @@ class PathService:
 
 def _path_status_sse(message: str) -> str:
     data = {"type": "status", "source": "learning_path", "msg": message}
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _sse_error(detail: str, path_id: int = 0, node_id: int = 0) -> str:
+    data = {
+        "type": "error",
+        "source": "learning_path",
+        "path_id": path_id,
+        "node_id": node_id,
+        "detail": detail,
+        "done": True,
+    }
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
