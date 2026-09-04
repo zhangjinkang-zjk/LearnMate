@@ -113,7 +113,7 @@ async def get_chat_agent(
     chat_group_id: int,
     user_id: int = Depends(get_user_id_from_token),
 ):
-    """查询某个聊天组绑定的智能体（返回 null 表示默认小知）"""
+    """查询某个聊天组绑定的智能体（返回 null 表示默认 LearnMate）"""
     from backend.src.models.chat_history_model import ChatHistory
     record = await ChatHistory.filter(
         user_id=user_id, chat_group_id=chat_group_id

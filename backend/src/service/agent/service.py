@@ -22,7 +22,7 @@ _ALLOWED_TOOLS = {
 }
 
 # 系统内置智能体的保留名称：用户不得自建同名智能体，避免身份劫持
-_RESERVED_AGENT_NAMES = {"课堂小知"}
+_RESERVED_AGENT_NAMES = {"LearnMate"}
 
 
 def _now_iso() -> str:

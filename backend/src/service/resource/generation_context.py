@@ -98,6 +98,7 @@ async def make_generation_state(
     ppt_prompt_key: str = "ppt",
     llm_priority: str = "high",
     ppt_theme_id: str | None = None,
+    teaching_context: dict | None = None,
 ) -> dict:
     t0 = time.perf_counter()
     topic, user_notes = split_internal_generation_notes(topic, user_notes)
@@ -201,4 +202,5 @@ async def make_generation_state(
         "ppt_prompt_key": ppt_prompt_key,
         "llm_priority": llm_priority,
         "ppt_theme_id": normalize_ppt_theme_id(ppt_theme_id),
+        "teaching_context": teaching_context or {},
     }

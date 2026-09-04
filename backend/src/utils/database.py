@@ -51,6 +51,27 @@ async def _ensure_classroom_lesson_schema():
         # SQLite and already-compatible MySQL schemas both land here harmlessly.
         _log.debug("课堂表协议版本迁移跳过", exc_info=True)
 
+
+async def _ensure_path_node_teaching_spec_column():
+    """Backfill the additive teaching contract column for existing MySQL tables."""
+    import logging
+
+    _log = logging.getLogger(__name__)
+    conn = Tortoise.get_connection("default")
+    try:
+        await conn.execute_query(
+            "ALTER TABLE path_nodes ADD COLUMN teaching_spec TEXT NULL "
+            "COMMENT '节点教学规格 JSON'"
+        )
+    except Exception as exc:
+        error_text = str(exc).lower()
+        is_duplicate_column = "1060" in error_text or "duplicate column" in error_text
+        if is_duplicate_column:
+            _log.debug("路径节点教学规格字段已存在")
+            return
+        _log.exception("路径节点教学规格字段迁移失败")
+        raise
+
 async def init_db():
     global _DB_INITIALIZED
     if _DB_INITIALIZED :
@@ -65,6 +86,7 @@ async def init_db():
         await Tortoise.generate_schemas()
         await _ensure_generated_resource_visibility_column()
         await _ensure_classroom_lesson_schema()
+        await _ensure_path_node_teaching_spec_column()
         _DB_INITIALIZED = True
 
 async def close_db():

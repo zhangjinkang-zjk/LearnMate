@@ -34,6 +34,10 @@ class PathNode(Model):
     prerequisites = fields.TextField(null=True, description="前置节点 ID JSON 数组")
     resource_types = fields.TextField(default="[]", description="资源类型 JSON 数组")
     quiz_config = fields.TextField(null=True, description="测验配置 JSON，含 threshold 等")
+    teaching_spec = fields.TextField(
+        null=True,
+        description="节点教学规格 JSON，含模块、认知层级、学习目标、关键知识点和最小示例",
+    )
 
     path = fields.ForeignKeyField(
         "models.LearningPath",

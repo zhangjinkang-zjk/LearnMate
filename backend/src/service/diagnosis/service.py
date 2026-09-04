@@ -267,6 +267,14 @@ async def answer(user_id: int, session_id: str, question_id: int, answer_text: s
     if len(answered) >= max_steps:
         summary = result.get("session_summary") or {}
         percentage = summary.get("percentage")
+        user = await User.filter(id=user_id).first()
+        picture = await user.picture if user else None
+        onboarding = parse_traits(picture.traits if picture else None).get("onboarding") or {}
+        asyncio.create_task(_generate_paths_after_diagnosis(
+            user_id,
+            onboarding.get("direction", ""),
+            onboarding.get("goal", ""),
+        ))
         return {"finished": True, "feedback": result, "result": {"session_id": session_id, "percentage": percentage, "correct_count": summary.get("correct_count", 0), "total_questions": len(records), "message": _result_message(percentage)}}
 
     user = await User.filter(id=user_id).first()
@@ -288,3 +296,24 @@ def _result_message(percentage: float | None) -> str:
     if score >= 60:
         return "已经具备部分基础，建议先补齐关键方法，再进入项目练习。"
     return "目前处于起步阶段，建议先完成基础讲解，再用小任务建立理解。"
+
+
+async def _generate_paths_after_diagnosis(user_id: int, direction: str, goal: str) -> None:
+    """诊断完成后立即拆解方向并创建科目路径，失败不阻塞诊断结果返回。"""
+    try:
+        from backend.src.service.curriculum.service import sync_direction_subjects
+        from backend.src.service.path.service import PathService
+
+        subjects = await sync_direction_subjects(user_id, direction, goal, 4)
+        logger.info("诊断完成，开始生成学习路径 user_id=%s direction=%s subjects=%s", user_id, direction, subjects)
+        results = await asyncio.gather(
+            *[PathService.generate_path(subject, user_id, "medium", 0) for subject in subjects],
+            return_exceptions=True,
+        )
+        failed = [str(item) for item in results if isinstance(item, Exception)]
+        if failed:
+            logger.error("学习路径生成部分失败 user_id=%s failed=%s", user_id, failed)
+        else:
+            logger.info("学习路径生成完成 user_id=%s path_count=%s", user_id, len(results))
+    except Exception:
+        logger.exception("诊断后学习路径生成失败 user_id=%s direction=%s", user_id, direction)

@@ -14,6 +14,7 @@ from backend.src.schemas.path import (
     SubmitNodeQuizRequest,
     RegeneratePathRequest,
     GenerateFromProfileRequest,
+    GenerateFromDirectionRequest,
     GenerateClassroomRequest,
     ClassroomNarrationRequest,
     ClassroomChatRequest,
@@ -53,6 +54,37 @@ async def generate_path_stream(data: GeneratePathRequest, user_id: int = Depends
         PathService.generate_path_stream(data.subject, user_id, data.difficulty, data.node_count),
         media_type="text/event-stream",
     )
+
+
+@router.post("/generate-from-direction")
+async def generate_paths_from_direction(data: GenerateFromDirectionRequest, user_id: int = Depends(get_user_id_from_token)):
+    """拆解用户学习方向，保存相关科目并为每个科目生成学习路径。"""
+    from backend.src.service.curriculum.service import sync_direction_subjects
+    direction = data.direction.strip()
+    goal = data.goal.strip()
+    if not direction:
+        from backend.src.models.usermodel import User
+        from backend.src.service.portrait.service import parse_traits
+        user = await User.filter(id=user_id).first()
+        picture = await user.picture if user else None
+        onboarding = parse_traits(picture.traits if picture else None).get("onboarding") or {}
+        direction = str(onboarding.get("direction") or "").strip()
+        goal = goal or str(onboarding.get("goal") or "").strip()
+    if not direction:
+        raise HTTPException(status_code=400, detail="请先完成学习定向")
+    subjects = await sync_direction_subjects(user_id, direction, goal, data.subject_limit)
+    import asyncio
+    results = await asyncio.gather(
+        *[PathService.generate_path(subject, user_id, data.difficulty, data.node_count) for subject in subjects],
+        return_exceptions=True,
+    )
+    paths = []
+    for subject, result in zip(subjects, results):
+        if isinstance(result, Exception):
+            paths.append({"subject": subject, "status": "failed", "message": str(result)})
+            continue
+        paths.append({"subject": subject, "status": "cached" if result.get("cached") else "created", "path_id": result.get("path_id"), "node_count": result.get("node_count", len(result.get("nodes", [])))})
+    return {"code": 200, "msg": "success", "data": {"direction": direction, "subjects": subjects, "paths": paths}}
 
 
 @router.get("/list")
@@ -172,7 +204,7 @@ async def get_node_classroom_transition(path_id: int, node_id: int, user_id: int
 
 @router.post("/classroom/narrate")
 async def narrate_classroom(data: ClassroomNarrationRequest, user_id: int = Depends(get_user_id_from_token)):
-    """生成互动课堂小知旁白音频"""
+    """生成互动课堂 LearnMate 旁白音频"""
     try:
         result = await generate_classroom_audio(data.text, user_id, data.voice, data.rate)
     except ValueError as e:
@@ -189,6 +221,7 @@ async def classroom_chat(data: ClassroomChatRequest, user_id: int = Depends(get_
             user_id=user_id,
             path_id=data.path_id,
             node_id=data.node_id,
+            resource_id=data.resource_id,
             segment=data.segment,
             scenario=data.scenario,
             text=data.text,

@@ -149,9 +149,9 @@ async function loadOverview() {
   let currentPathPayload = results[0].status === 'fulfilled' ? unwrap(results[0].value) : null
   // 首次诊断只保存学习画像，若尚无路径则按学习方向创建用户专属路径。
   // 复用现有路径生成接口，避免在前端复制路径或节点入库逻辑。
-  if (!currentPathPayload && profile.direction) {
+  if (!currentPathPayload) {
     try {
-      await learningApi.generatePath(profile.direction)
+      await learningApi.generatePathsFromDirection(profile.direction, profile.goal)
       currentPathPayload = unwrap(await learningApi.getCurrentPath())
     } catch {
       // 页面仍可展示画像和诊断状态，用户可稍后刷新重试路径生成。

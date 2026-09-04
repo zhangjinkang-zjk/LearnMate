@@ -57,6 +57,69 @@ async def sync_to_portrait(user_id: int, major: str, grade: str) -> list[str] | 
     return courses
 
 
+async def get_direction_subjects(direction: str, goal: str = "", limit: int = 4) -> list[str]:
+    """将宽泛学习方向拆解为可独立学习的科目/能力模块。"""
+    from backend.src.ai_core.llm_config import llm
+    from backend.src.utils.json_parser import parse_llm_json
+
+    direction = str(direction or "").strip()
+    goal = str(goal or "").strip()
+    if not direction:
+        return []
+    limit = max(2, min(int(limit or 4), 6))
+    prompt = (
+        "你是一名课程架构师。请把用户的学习方向拆解为可独立学习、边界清晰的相关科目或能力模块。\n"
+        f"学习方向：{direction}\n学习目标：{goal or '建立系统能力'}\n"
+        f"请输出 {limit} 个模块，按学习依赖从基础到综合排序。不要输出泛泛的‘综合实践’或‘其他’，"
+        "每个名称应是 4-20 字的具体知识领域或方法。严格只输出 JSON："
+        '{"subjects":["模块1","模块2"]}'
+    )
+    try:
+        response = await llm.ainvoke(prompt, user_id=0, pool="path")
+        parsed = parse_llm_json(str(getattr(response, "content", "") or ""))
+        raw_subjects = parsed.get("subjects", []) if isinstance(parsed, dict) else []
+    except Exception:
+        logger.exception("学习方向拆解失败 direction=%s", direction)
+        raw_subjects = []
+
+    subjects = []
+    seen = set()
+    for item in raw_subjects:
+        value = str(item or "").strip()
+        if value and value not in seen and value not in {direction, "其他", "综合实践"}:
+            seen.add(value)
+            subjects.append(value[:128])
+        if len(subjects) >= limit:
+            break
+    if subjects:
+        return subjects
+    # LLM 不可用时仍保留可执行的分层入口，避免方向拆解失败导致学习空间为空。
+    return [f"{direction}基础", f"{direction}核心方法", f"{direction}应用实践"][:limit]
+
+
+async def sync_direction_subjects(user_id: int, direction: str, goal: str = "", limit: int = 4) -> list[str]:
+    """生成方向科目并写入用户画像，便于概览和后续路径复用。"""
+    from backend.src.models.usermodel import User
+    from backend.src.models.portraitmodel import User_picture
+    from backend.src.service.portrait.service import parse_traits, dump_traits
+
+    subjects = await get_direction_subjects(direction, goal, limit)
+    user = await User.filter(id=user_id).first()
+    if not user:
+        return subjects
+    picture = await user.picture
+    if not picture:
+        picture = await User_picture.create()
+        user.picture = picture
+        await user.save()
+    traits = parse_traits(picture.traits)
+    traits["learning_direction_subjects"] = subjects
+    traits["learning_direction"] = direction[:120]
+    picture.traits = dump_traits(traits)
+    await picture.save()
+    return subjects
+
+
 async def _query_from_db(major: str, grade_priority: list[str], total_limit: int) -> list[str]:
     """按年级优先级从表查询课程，上限 total_limit 门"""
     result: list[str] = []

@@ -33,6 +33,15 @@ class GenerateFromProfileRequest(BaseModel):
     node_count: int = Field(default=0, description="节点数，0=自动")
 
 
+class GenerateFromDirectionRequest(BaseModel):
+    """根据用户学习方向拆解相关科目并生成路径"""
+    direction: str = Field(default="", max_length=120, description="学习方向；为空时从用户画像读取")
+    goal: str = Field(default="", max_length=160, description="学习目标，用于调整科目侧重")
+    subject_limit: int = Field(default=4, ge=2, le=6, description="相关科目数量")
+    difficulty: str = Field(default="medium", description="难度: easy/medium/hard")
+    node_count: int = Field(default=0, description="节点数，0=自动")
+
+
 class GenerateClassroomRequest(BaseModel):
     """生成节点互动课堂脚本"""
     node: dict = Field(default_factory=dict, description="前端当前节点快照")
@@ -42,7 +51,7 @@ class GenerateClassroomRequest(BaseModel):
 
 
 class ClassroomNarrationRequest(BaseModel):
-    """生成互动课堂小知旁白"""
+    """生成互动课堂 LearnMate 助教旁白"""
     text: str = Field(description="需要朗读的课堂讲稿")
     voice: str = Field(default="zh-CN-XiaoxiaoNeural", description="EdgeTTS 音色")
     rate: str = Field(default="+0%", description="语速，例如 +0%、+8%、-5%")
@@ -52,6 +61,11 @@ class ClassroomChatRequest(BaseModel):
     """互动课堂对话（流式）"""
     path_id: int = Field(description="路径 ID")
     node_id: int = Field(description="节点 ID")
+    resource_id: int | None = Field(
+        default=None,
+        gt=0,
+        description="当前章节绑定的文档资源 ID；不传时兼容旧课堂上下文",
+    )
     segment: dict = Field(default_factory=dict, description="前端当前幕快照（title/script/board_items/points/example/question）")
     scenario: str = Field(default="free", description="open | feynman | free")
     text: str = Field(default="", description="学生的话：选择结果 / 费曼反讲文本 / 自由提问")

@@ -47,6 +47,7 @@ export async function streamJsonEvents(path, payload, onEvent, options = {}) {
   const decoder = new TextDecoder()
   let buffer = ''
   let lastEvent = null
+  let didComplete = false
 
   const consumeFrame = (frame) => {
     const rawData = frame
@@ -55,7 +56,11 @@ export async function streamJsonEvents(path, payload, onEvent, options = {}) {
       .map((line) => line.slice(5).trim())
       .join('\n')
 
-    if (!rawData || rawData === '[DONE]') return
+    if (!rawData) return
+    if (rawData === '[DONE]') {
+      didComplete = true
+      return
+    }
     let event
     try {
       event = JSON.parse(rawData)
@@ -64,6 +69,7 @@ export async function streamJsonEvents(path, payload, onEvent, options = {}) {
       return
     }
     lastEvent = event
+    if (event?.type === 'done' || event?.done === true) didComplete = true
     onEvent?.(event)
   }
 
@@ -84,5 +90,8 @@ export async function streamJsonEvents(path, payload, onEvent, options = {}) {
     consume(decoder.decode(value, { stream: true }))
   }
   consume(decoder.decode(), true)
+  if (options.requireDone !== false && !didComplete) {
+    throw new Error('流式连接提前中断，请重试')
+  }
   return lastEvent
 }

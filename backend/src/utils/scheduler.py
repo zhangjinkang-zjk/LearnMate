@@ -130,7 +130,7 @@ async def _execute_scheduled_agents():
                         agent.id, agent.name, agent.user_id, cron_expr)
 
             # 构建 system prompt（用户自定义 persona 或默认）
-            system = agent.persona or "你是小知，一个 AI 学习导师。"
+            system = agent.persona or "你是 LearnMate，一个 AI 学习导师。"
             full_prompt = f"{system}\n\n当前时间：{now_shanghai.isoformat()}\n\n{prompt}"
 
             try:

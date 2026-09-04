@@ -32,9 +32,17 @@
       <p class="eyebrow">{{ result.passed ? '本章已完成' : '还需要再巩固' }}</p>
       <h2>{{ result.score }} 分</h2>
       <p>{{ result.passed ? '你的理解已经达到本章要求，下一章现已解锁。' : `本章通过线为 ${passScore} 分。回到正文梳理薄弱点后，可以重新作答。` }}</p>
+      <div v-if="!result.passed && incorrectResults.length" class="result-review">
+        <h3>需要回看的问题</h3>
+        <article v-for="item in incorrectResults" :key="item.question_id">
+          <strong>{{ questionContent(item.question_id) }}</strong>
+          <p>你的回答：{{ displayAnswer(item.user_answer) || '未作答' }}</p>
+          <p>正确答案：{{ displayAnswer(item.correct_answer) }}</p>
+        </article>
+      </div>
       <div class="result-actions">
         <button v-if="!result.passed" class="button button--quiet" type="button" @click="retryQuiz">重新作答</button>
-        <button class="button button--primary" type="button" @click="finishResult">{{ result.passed ? '进入下一章' : '返回正文' }}</button>
+        <button class="button button--primary" type="button" @click="finishResult">{{ result.passed ? '进入下一章' : '回到正文复习' }}</button>
       </div>
     </div>
 
@@ -103,6 +111,7 @@ const questionProgress = computed(() => questions.value.length ? Math.round((cur
 const passScore = computed(() => Math.round(Number(props.quizConfig?.threshold ?? 0.7) * 100))
 const hasCurrentAnswer = computed(() => hasAnswer(currentQuestion.value))
 const allAnswered = computed(() => questions.value.length > 0 && questions.value.every(hasAnswer))
+const incorrectResults = computed(() => result.value?.quiz_result?.judged_questions?.filter((item) => !item.is_correct) || [])
 
 function hasAnswer(question) {
   if (!question) return false
@@ -141,6 +150,14 @@ function isOptionSelected(question, value) {
   return Array.isArray(answer) ? answer.includes(value) : answer === value
 }
 
+function questionContent(questionId) {
+  return questions.value.find((question) => String(question.question_id) === String(questionId))?.content || '本章知识点'
+}
+
+function displayAnswer(answer) {
+  return Array.isArray(answer) ? answer.join('、') : String(answer || '')
+}
+
 function prepareAnswers() {
   questions.value.forEach((question) => {
     if (answers[question.question_id] === undefined) {
@@ -158,14 +175,12 @@ async function loadQuiz() {
   currentIndex.value = 0
 
   try {
-    if (!activeSessionId.value) {
-      await fundamentalsApi.generateQuiz(props.pathId, props.nodeId, (event) => {
-        if (event?.type === 'status') loadingMessage.value = event.msg || event.message || loadingMessage.value
-        if (event?.type === 'blocked') throw new Error(event.reason || '请先完成本章阅读')
-        if (event?.type === 'error') throw new Error(event.detail || event.message || '检查题生成失败')
-        if (event?.type === 'done' && event.session_id) activeSessionId.value = event.session_id
-      }, requestController.signal)
-    }
+    await fundamentalsApi.generateQuiz(props.pathId, props.nodeId, (event) => {
+      if (event?.type === 'status') loadingMessage.value = event.msg || event.message || loadingMessage.value
+      if (event?.type === 'blocked') throw new Error(event.reason || '请先完成本章阅读')
+      if (event?.type === 'error') throw new Error(event.detail || event.message || '检查题生成失败')
+      if (event?.type === 'done' && event.session_id) activeSessionId.value = event.session_id
+    }, requestController.signal)
 
     if (!activeSessionId.value) throw new Error('检查题生成完成，但没有返回有效会话')
     const session = await fundamentalsApi.getQuizSession(activeSessionId.value)
@@ -241,6 +256,12 @@ onBeforeUnmount(() => requestController?.abort())
 .result-mark.is-passed { background: #e8f2de; color: var(--accent-deep); }
 .result-state .eyebrow { margin: 8px 0 0; }
 .result-state h2 { margin: 0; font-size: 42px; }
+.result-review { display: grid; width: min(560px, 100%); max-height: 260px; gap: 0; margin-top: 12px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; background: #fbfcfa; text-align: left; }
+.result-review h3 { margin: 0; padding: 13px 15px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.result-review article { padding: 13px 15px; border-top: 1px solid var(--line); }
+.result-review article:first-of-type { border-top: 0; }
+.result-review article strong { display: block; margin-bottom: 7px; font-size: 11px; line-height: 1.55; }
+.result-review article p { margin: 3px 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .result-actions { display: flex; gap: 9px; margin-top: 16px; }
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

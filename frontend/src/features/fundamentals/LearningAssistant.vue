@@ -64,6 +64,7 @@ const props = defineProps({
   chapterTitle: { type: String, default: '' },
   chapterContent: { type: String, default: '' },
   knowledgeTags: { type: Array, default: () => [] },
+  resourceId: { type: [Number, String], default: null },
 })
 
 const draft = ref('')
@@ -116,6 +117,7 @@ async function sendMessage() {
     await fundamentalsApi.streamAssistantReply({
       path_id: Number(props.pathId),
       node_id: Number(props.nodeId),
+      resource_id: props.resourceId ? Number(props.resourceId) : null,
       scenario: 'free',
       text: question,
       segment: {
@@ -136,7 +138,11 @@ async function sendMessage() {
     if (!responseMessage.text.trim()) throw new Error('LearnMate 暂时没有返回有效内容')
   } catch (error) {
     if (error.name === 'AbortError') return
-    messages.value = messages.value.filter((message) => message !== responseMessage)
+    if (responseMessage.text.trim()) {
+      responseMessage.text += '\n\n> 回复在传输中断开了，你可以重新发送问题。'
+    } else {
+      messages.value = messages.value.filter((message) => message !== responseMessage)
+    }
     errorMessage.value = error.response?.data?.detail || error.message || '回复失败，请稍后重试。'
   } finally {
     isStreaming.value = false
@@ -150,7 +156,7 @@ onBeforeUnmount(() => requestController?.abort())
 </script>
 
 <style scoped>
-.learning-assistant { position: sticky; top: 84px; display: flex; flex-direction: column; height: calc(100vh - 108px); min-height: 540px; overflow: hidden; }
+.learning-assistant { position: sticky; top: 84px; display: flex; flex-direction: column; width: 100%; height: 680px; min-height: 500px; max-height: calc(100vh - 220px); overflow: hidden; }
 .assistant-header { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; padding: 17px 18px; border-bottom: 1px solid var(--line); }
 .assistant-mark, .message-avatar { display: grid; flex: 0 0 auto; place-items: center; border-radius: 50%; background: var(--accent); color: #294234; }
 .assistant-mark { width: 31px; height: 31px; }
@@ -188,5 +194,6 @@ onBeforeUnmount(() => requestController?.abort())
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 @keyframes pulse { 0%, 70%, 100% { opacity: .3; transform: translateY(0); } 35% { opacity: 1; transform: translateY(-2px); } }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (max-width: 840px) { .learning-assistant { position: relative; top: auto; height: 560px; min-height: 0; } }
+@media (max-width: 1280px) and (min-width: 1081px) { .learning-assistant { height: 680px; min-height: 430px; max-height: calc(100vh - 330px); } }
+@media (max-width: 1080px) { .learning-assistant { position: relative; top: auto; height: 560px; min-height: 0; max-height: none; } }
 </style>
