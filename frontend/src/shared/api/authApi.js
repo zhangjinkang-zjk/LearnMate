@@ -8,6 +8,14 @@ export const authApi = {
     return body.data
   },
 
+  async register(username, password) {
+    const response = await httpClient.post('/user/create_user', { username, password })
+    const body = response?.data || {}
+    const token = body.data?.token || body.data?.id
+    if (body.code !== 200 || !token) throw new Error(body.msg || '注册失败，请稍后重试')
+    return { ...body.data, token }
+  },
+
   async readUser() {
     const response = await httpClient.get('/user/read_user')
     const body = response?.data || {}
