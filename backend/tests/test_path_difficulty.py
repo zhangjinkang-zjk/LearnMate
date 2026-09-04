@@ -3,6 +3,7 @@ from backend.src.service.path.difficulty import (
     derive_difficulty_score,
     normalize_relative_difficulty,
 )
+from backend.src.service.resource.matching import build_resource_difficulty_match
 from backend.src.service.study.service import _build_path_difficulty_trend
 
 
@@ -46,3 +47,45 @@ def test_overview_trend_keeps_first_node_as_baseline_and_exposes_status_separate
     assert trend[0]["difficulty_score"] == 1.0
     assert trend[0]["relative_difficulty"] < trend[1]["relative_difficulty"]
     assert trend[0]["status"] == "completed"
+
+
+def test_resource_difficulty_match_uses_bound_node_difficulty_and_user_level():
+    points = build_resource_difficulty_match(
+        [
+            {
+                "id": 11,
+                "title": "基础概念",
+                "order_index": 1,
+                "difficulty_score": 1.0,
+                "resources": [{"id": 101, "title": "概念讲义", "resource_type": "document"}],
+            },
+            {
+                "id": 12,
+                "title": "综合练习",
+                "order_index": 2,
+                "difficulty_score": 4.0,
+                "resources": [{"id": 102, "title": "迁移练习", "resource_type": "exercise"}],
+            },
+        ],
+        user_level=25,
+    )
+
+    assert [point["resource_id"] for point in points] == [101, 102]
+    assert points[0]["difficulty_score"] < points[1]["difficulty_score"]
+    assert points[0]["user_level"] == 25
+    assert points[0]["status"] == "well_matched"
+    assert points[1]["status"] == "too_hard"
+
+
+def test_resource_difficulty_match_is_unknown_without_user_level_and_deduplicates_resources():
+    points = build_resource_difficulty_match(
+        [
+            {"order_index": 1, "resources": [{"resource_id": 7, "title": "同一资源"}]},
+            {"order_index": 2, "resources": [{"resource_id": 7, "title": "重复绑定"}]},
+        ],
+        user_level=None,
+    )
+
+    assert len(points) == 1
+    assert points[0]["status"] == "unknown"
+    assert points[0]["match_score"] is None

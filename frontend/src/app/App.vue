@@ -4,10 +4,10 @@
       <component :is="Component" />
     </component>
   </RouterView>
-  <XiaozhiAssistant />
+  <RobertAssistant />
 </template>
 
 <script setup>
 import AppShell from '@/layouts/AppShell.vue'
-import XiaozhiAssistant from '@/features/xiaozhi/XiaozhiAssistant.vue'
+import RobertAssistant from '@/features/xiaozhi/RobertAssistant.vue'
 </script>

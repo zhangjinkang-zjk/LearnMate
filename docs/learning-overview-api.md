@@ -74,6 +74,9 @@ GET /study/overview
     "difficulty_trend": [
       {"id": 101, "order_index": 1, "title": "文档切分", "status": "completed", "difficulty_score": 1.0, "relative_difficulty": 20},
       {"id": 102, "order_index": 2, "title": "召回结果排查", "status": "unlocked", "difficulty_score": 1.8, "relative_difficulty": 90}
+    ],
+    "resource_difficulty_match": [
+      {"resource_id": 201, "title": "Resource example", "resource_type": "document", "node_id": 101, "difficulty_score": 20, "user_level": 58, "match_score": 5, "status": "too_easy"}
     ]
   },
   "subjects": [
