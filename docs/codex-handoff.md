@@ -5,7 +5,7 @@
 ## 当前分支与提交
 
 - 分支：`main`
-- 当前 HEAD：`36e55f1e refactor(learning): remove redundant task analysis module`
+- 当前 HEAD：`5586c01f fix(frontend): proxy learning api requests`
 - 主要基线：`46f39e5e refactor(frontend): remove legacy ppt workspace`
 - 本地没有推送远程。远程 `main` 曾与本地分叉，未经确认不要强推。
 
@@ -107,7 +107,7 @@ frontend/src/
 - 修改：`DiagnosisPage.vue` 迁移到同一绿色沉浸式背景
 - 修改：`frontend/src/app/router/index.js` 将诊断和诊断结果标记为 `layout: immersive`
 
-前端新增登录页、JWT 请求拦截器和路由守卫，学习定向、诊断和学习区均要求有效 token。
+前端新增登录页、JWT 请求拦截器和路由守卫，学习定向、诊断和学习区均要求有效 token；Vite 开发代理已补充 `/learning`，可直接联调诊断接口。
 
 当前工作区可能仍有其他任务产生的未跟踪文档，处理时不要删除或覆盖。
 
