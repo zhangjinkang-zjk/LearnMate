@@ -8,11 +8,23 @@ export const authApi = {
     return body.data
   },
 
-  async register(username, password) {
-    const response = await httpClient.post('/user/create_user', { username, password })
+  async sendEmailCode(email) {
+    const response = await httpClient.post('/user/send_email_code', { email, purpose: 'register' })
+    const body = response?.data || {}
+    if (body.code !== 200) throw new Error(body.msg || '验证码发送失败，请稍后重试')
+    return body
+  },
+
+  async registerByEmail(username, email, password, code) {
+    const response = await httpClient.post('/user/register_by_email', {
+      username,
+      email,
+      password,
+      code,
+    })
     const body = response?.data || {}
     const token = body.data?.token || body.data?.id
-    if (body.code !== 200 || !token) throw new Error(body.msg || '注册失败，请稍后重试')
+    if (body.code !== 200 || !token) throw new Error(body.msg || '注册失败，请检查邮箱验证码')
     return { ...body.data, token }
   },
 
