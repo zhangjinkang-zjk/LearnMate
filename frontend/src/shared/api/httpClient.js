@@ -3,7 +3,7 @@ import { clearAuthSession } from '@/shared/auth/session'
 
 const httpClient = axios.create({
   // Use the same-origin Vite/Nginx proxy by default; deployments may override it explicitly.
-  baseURL: import.meta.env.VITE_API_BASE_URL || '',
+  baseURL: "http://10.170.5.72:2221",
   timeout: 15000,
   headers: { 'Content-Type': 'application/json' },
 })

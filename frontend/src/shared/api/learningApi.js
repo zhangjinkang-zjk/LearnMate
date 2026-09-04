@@ -10,6 +10,7 @@ export const learningApi = {
   getPathStats: () => httpClient.get('/study/path-stats'),
   getMastery: () => httpClient.get('/exam/mastery'),
   getLearningGuidance: () => httpClient.get('/study/learning-guidance'),
+  getExamWeekly: () => httpClient.get('/study/exam-weekly'),
   submitDiagnosis: (payload) => httpClient.post('/learning/diagnosis', payload),
   saveDecision: (payload) => httpClient.post('/learning/decisions', payload),
 }
