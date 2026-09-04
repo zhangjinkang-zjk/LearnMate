@@ -2,7 +2,7 @@
   <main class="result-page">
     <ImmersiveOnboardingBackdrop />
     <RouterLink class="back-link" to="/onboarding/diagnosis"><span aria-hidden="true">←</span><span>BACK</span></RouterLink>
-    <header class="result-heading"><p class="eyebrow">诊断结果确认</p><h1>你的学习起点已经生成</h1><p>结果会作为后续任务分析和课程难度的基线，你也可以返回重新诊断。</p></header>
+    <header class="result-heading"><p class="eyebrow">诊断结果确认</p><h1>你的学习起点已经生成</h1><p>结果会作为学习概览和课程难度的基线，你也可以返回重新诊断。</p></header>
     <div class="result-grid">
       <section class="result-card score-card">
         <span class="score-label">当前综合起点</span>

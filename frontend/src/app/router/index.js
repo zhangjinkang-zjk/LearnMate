@@ -5,7 +5,6 @@ import DirectionSetupPage from '@/pages/onboarding/DirectionSetupPage.vue'
 import DiagnosisPage from '@/pages/onboarding/DiagnosisPage.vue'
 import DiagnosisResultPage from '@/pages/onboarding/DiagnosisResultPage.vue'
 import OverviewPage from '@/pages/learning/OverviewPage.vue'
-import TaskAnalysisPage from '@/pages/learning/TaskAnalysisPage.vue'
 import FundamentalsPage from '@/pages/learning/FundamentalsPage.vue'
 import AdvancedLearningPage from '@/pages/learning/AdvancedLearningPage.vue'
 import NavigationPage from '@/pages/learning/NavigationPage.vue'
@@ -22,7 +21,7 @@ const router = createRouter({
     { path: '/onboarding/diagnosis', name: 'diagnosis', component: DiagnosisPage, meta: { layout: 'immersive' } },
     { path: '/onboarding/diagnosis/result', name: 'diagnosisResult', component: DiagnosisResultPage, meta: { layout: 'immersive' } },
     { path: '/learning/overview', name: 'learningOverview', component: OverviewPage },
-    { path: '/learning/task-analysis', name: 'taskAnalysis', component: TaskAnalysisPage },
+    { path: '/learning/task-analysis', redirect: '/learning/overview' },
     { path: '/learning/fundamentals', name: 'fundamentals', component: FundamentalsPage },
     { path: '/learning/advanced', name: 'advancedLearning', component: AdvancedLearningPage },
     { path: '/learning/navigation', name: 'learningNavigation', component: NavigationPage },
