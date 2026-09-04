@@ -11,10 +11,10 @@
 
       <div class="conversation-list">
         <div v-for="(message, index) in messages" :key="`${message.role}-${index}`" class="chat-message" :class="`chat-message--${message.role}`">
-          <span v-if="message.role === 'assistant'" class="message-avatar">知</span>
+          <span v-if="message.role === 'assistant'" class="message-avatar">LM</span>
           <p>{{ message.text }}</p>
         </div>
-        <div v-if="isLoading" class="chat-message chat-message--assistant"><span class="message-avatar">知</span><p class="typing">正在分析你的回答<span>·</span><span>·</span><span>·</span></p></div>
+        <div v-if="isLoading" class="chat-message chat-message--assistant"><span class="message-avatar">LM</span><p class="typing">{{ loadingMessage }}<span>·</span><span>·</span><span>·</span></p></div>
       </div>
 
       <div v-if="currentQuestion && !isFinished" class="answer-panel">
@@ -49,6 +49,7 @@ const selectedAnswer = ref('')
 const currentQuestion = ref(null)
 const messages = ref([])
 const sessionId = ref('')
+const loadingMessage = ref('正在分析你的回答')
 
 const progress = computed(() => isFinished.value ? 100 : Math.round((answeredCount.value / totalQuestions) * 100))
 const context = computed(() => ({
@@ -73,9 +74,10 @@ async function startDiagnosis() {
   answeredCount.value = 0
   selectedAnswer.value = ''
   currentQuestion.value = null
+  loadingMessage.value = '正在根据你的学习方向生成第一道诊断题'
   messages.value = [{ role: 'assistant', text: '我会根据你的学习方向，从基础理解开始了解你的起点。每次只回答一个问题即可。' }]
   try {
-    const result = await diagnosisApi.start({ ...context.value, max_steps: totalQuestions })
+    const result = await diagnosisApi.startStream({ ...context.value, max_steps: totalQuestions }, handleStreamEvent)
     sessionId.value = result.session_id
     currentQuestion.value = result.question
     messages.value.push({ role: 'assistant', text: questionText(result.question) })
@@ -91,14 +93,15 @@ async function submitAnswer() {
   const selectedOption = currentQuestion.value.options?.find((option, index) => answerKey(option, index) === selectedAnswer.value) || selectedAnswer.value
   messages.value.push({ role: 'user', text: selectedOption })
   isLoading.value = true
+  loadingMessage.value = '正在结合你的回答调整下一道题'
   errorMessage.value = ''
   try {
-    const result = await diagnosisApi.answer({
+    const result = await diagnosisApi.answerStream({
       session_id: sessionId.value,
       question_id: currentQuestion.value.question_id,
       answer: selectedAnswer.value,
       max_steps: totalQuestions,
-    })
+    }, handleStreamEvent)
     answeredCount.value += 1
     const feedback = result.feedback || {}
     messages.value.push({ role: 'assistant', text: feedback.is_correct ? '这道题回答正确，我继续确认你在实际应用中的判断。' : (feedback.analysis || '这道题能看出你已经接触过相关概念，我们换一个角度继续确认。') })
@@ -118,6 +121,11 @@ async function submitAnswer() {
   } finally {
     isLoading.value = false
   }
+}
+
+function handleStreamEvent(event) {
+  if (event?.type === 'status' && event.message) loadingMessage.value = event.message
+  if (event?.type === 'keepalive') loadingMessage.value = '仍在分析中，请稍候'
 }
 
 onMounted(startDiagnosis)
