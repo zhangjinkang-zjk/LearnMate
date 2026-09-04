@@ -16,11 +16,11 @@
 
 * { box-sizing: border-box; }
 html, body, #app { min-height: 100%; margin: 0; }
-body { min-width: 320px; background: var(--stage); }
+body { min-width: 320px; overflow-x: hidden; background: var(--stage); }
 button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
 
-.app-shell { display: flex; min-height: 100vh; background: var(--stage); }
+.app-shell { display: flex; width: 100%; min-height: 100vh; overflow-x: hidden; background: var(--stage); }
 .app-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 20; display: flex; flex-direction: column; width: 112px; padding: 26px 0 22px; background: transparent; color: #eff3e8; pointer-events: none; }
 .brand-lockup { display: flex; align-items: center; justify-content: flex-start; width: 96px; margin: 0 0 0 14px; padding: 0; pointer-events: auto; }
 .brand-name { display: block; color: #ffffff; font-family: Georgia, serif; font-size: 16px; letter-spacing: .01em; white-space: nowrap; }
@@ -45,7 +45,7 @@ button { cursor: pointer; }
 .logout-button { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; border: 1px solid rgba(30,60,52,.2); border-radius: 5px; background: transparent; color: rgba(30,60,52,.68); cursor: pointer; transition: background .15s ease, color .15s ease, border-color .15s ease; }
 .logout-button:hover { border-color: rgba(30,60,52,.6); background: rgba(30,60,52,.08); color: #1e3c34; }
 .logout-button:focus-visible { outline: 2px solid #d5f242; outline-offset: 2px; }
-.app-content { width: 100%; min-width: 0; min-height: 100vh; margin-left: 112px; border-radius: 30px 0 0 0; background: #ffffff; overflow: hidden; }
+.app-content { width: calc(100% - 112px); min-width: 0; min-height: 100vh; margin-left: 112px; border-radius: 30px 0 0 0; background: #ffffff; overflow: hidden; }
 .app-header { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; min-height: 64px; padding: 0 42px; border-bottom: 1px solid #edf1ed; background: rgba(255,255,255,.94); color: var(--ink); }
 .header-context { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; }
 .header-kicker { color: var(--ink); font-weight: 800; }
@@ -116,7 +116,7 @@ button { cursor: pointer; }
   .sidebar-footer { width: auto; margin-top: auto; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
   .profile-chip { display: flex; justify-items: initial; gap: 9px; margin-top: 13px; padding: 12px 9px 0; }
   .sidebar-backdrop { position: fixed; inset: 0; z-index: 15; display: block; background: rgba(8, 20, 15, .45); }
-  .app-content { margin-left: 0; }
+  .app-content { width: 100%; margin-left: 0; }
   .app-content { border-radius: 0; }
   .app-header { padding: 0 20px; }
   .menu-button { display: inline-flex; }

@@ -1,4 +1,4 @@
-import { BookOpen, Gauge, Library, MessageCircle, Settings, Sparkles, SquareCheck } from 'lucide-vue-next'
+import { BookOpen, Gauge, Library, Settings, Sparkles, SquareCheck } from 'lucide-vue-next'
 
 export const primaryNavigation = [
   { label: '学习概览', to: '/learning/overview', icon: Gauge },
@@ -16,7 +16,6 @@ export const learningNavigationGroups = [
     label: '应用实践',
     items: [
       { label: '进阶学习', to: '/learning/advanced', icon: Sparkles },
-      { label: '学习巩固', to: '/learning/consolidation', icon: MessageCircle },
     ],
   },
 ]

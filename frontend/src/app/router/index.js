@@ -10,7 +10,6 @@ import OverviewPage from '@/pages/learning/OverviewPage.vue'
 import FundamentalsPage from '@/pages/learning/FundamentalsPage.vue'
 import FoundationTestPage from '@/pages/learning/FoundationTestPage.vue'
 import AdvancedLearningPage from '@/pages/learning/AdvancedLearningPage.vue'
-import LearningConsolidationPage from '@/pages/learning/LearningConsolidationPage.vue'
 import ResourceLibraryPage from '@/pages/resources/ResourceLibraryPage.vue'
 import SettingsPage from '@/pages/settings/SettingsPage.vue'
 import ProfilePage from '@/pages/profile/ProfilePage.vue'
@@ -39,9 +38,9 @@ const router = createRouter({
     },
     { path: '/learning/foundation-test', name: 'foundationTest', component: FoundationTestPage, meta: { requiresAuth: true } },
     { path: '/learning/advanced', name: 'advancedLearning', component: AdvancedLearningPage, meta: { requiresAuth: true } },
-    { path: '/learning/consolidation', name: 'learningConsolidation', component: LearningConsolidationPage, meta: { requiresAuth: true } },
+    { path: '/learning/consolidation', redirect: (to) => ({ path: '/learning/advanced', query: to.query }) },
     { path: '/learning/navigation', name: 'learningNavigation', redirect: '/learning/overview' },
-    { path: '/learning/workspace', name: 'learningWorkspace', redirect: (to) => ({ path: '/learning/consolidation', query: to.query }) },
+    { path: '/learning/workspace', name: 'learningWorkspace', redirect: (to) => ({ path: '/learning/advanced', query: to.query }) },
     { path: '/resources', name: 'resourceLibrary', component: ResourceLibraryPage, meta: { requiresAuth: true } },
     { path: '/settings', name: 'settings', component: SettingsPage, meta: { requiresAuth: true } },
     { path: '/profile', name: 'profile', component: ProfilePage, meta: { requiresAuth: true } },
