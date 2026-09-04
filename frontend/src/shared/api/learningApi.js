@@ -1,6 +1,7 @@
 import httpClient from './httpClient'
 
 export const learningApi = {
+  getOverview: () => httpClient.get('/study/overview'),
   getCurrentPath: () => httpClient.get('/learning_path/current'),
   generatePath: (subject, forceRegenerate = false) => httpClient.post('/path/generate', { subject, difficulty: 'medium', node_count: 0, force_regenerate: forceRegenerate }),
   regeneratePath: (pathId) => httpClient.post('/path/regenerate', { path_id: pathId }),
