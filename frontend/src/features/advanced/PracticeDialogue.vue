@@ -1,0 +1,163 @@
+<template>
+  <section class="practice-dialogue surface" aria-label="学习巩固对话">
+    <header class="practice-dialogue__header">
+      <div>
+        <p class="eyebrow">学习巩固 · {{ task.kind_label || '实践任务' }}</p>
+        <h2>先想清楚，再给方案</h2>
+        <p>LearnMate 会根据你的回答追问证据、假设和取舍，不会直接替你完成任务。</p>
+      </div>
+      <span class="practice-phase">{{ currentPhase.label }}</span>
+    </header>
+
+    <div class="practice-dialogue__body">
+      <div ref="messageList" class="practice-messages" aria-live="polite">
+        <template v-for="(message, index) in messages" :key="`${message.role}-${index}`">
+          <div v-if="message.text || message.role === 'user'" class="practice-message" :class="`is-${message.role}`">
+            <span v-if="message.role === 'assistant'" class="practice-avatar">LM</span>
+            <div class="practice-bubble" v-html="renderMarkdown(message.text)"></div>
+          </div>
+        </template>
+        <div v-if="isStreaming" class="practice-message is-assistant">
+          <span class="practice-avatar">LM</span>
+          <div class="practice-bubble typing" aria-label="正在回复"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+
+      <aside class="practice-guide">
+        <div class="guide-block"><p class="eyebrow">当前任务</p><strong>{{ task.title }}</strong><p>{{ task.problem }}</p></div>
+        <div class="guide-block"><p class="eyebrow">阶段</p>
+          <button v-for="phase in phases" :key="phase.id" type="button" :class="{ 'is-active': phase.id === currentPhase.id }" @click="selectPhase(phase)">{{ phase.label }}<small>{{ phase.hint }}</small></button>
+        </div>
+        <div class="guide-block"><p class="eyebrow">需要留下</p><ul><li v-for="item in task.deliverables || []" :key="item.id">{{ item.label }}</li></ul></div>
+      </aside>
+    </div>
+
+    <p v-if="errorMessage" class="practice-error" role="status">{{ errorMessage }}</p>
+    <form class="practice-composer" @submit.prevent="sendMessage()">
+      <label class="sr-only" for="practice-answer">你的方案思考</label>
+      <textarea id="practice-answer" v-model="draft" rows="4" maxlength="1800" :disabled="isStreaming" :placeholder="`围绕“${currentPhase.label}”写下你的判断…`" @keydown.ctrl.enter.prevent="sendMessage()" @keydown.meta.enter.prevent="sendMessage()"></textarea>
+      <div class="practice-actions">
+        <span>{{ draft.length }} / 1800</span>
+        <div>
+          <button class="button button--quiet" type="button" :disabled="isStreaming" @click="requestHint">请求一个提示</button>
+          <button class="button button--quiet" type="button" :disabled="isStreaming" @click="$emit('end')">结束本次巩固</button>
+          <button class="button button--primary" type="submit" :disabled="!draft.trim() || isStreaming"><LoaderCircle v-if="isStreaming" class="spin" :size="16" /><Send v-else :size="16" />发送</button>
+        </div>
+      </div>
+    </form>
+  </section>
+</template>
+
+<script setup>
+import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { LoaderCircle, Send } from 'lucide-vue-next'
+import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
+import { renderMarkdown } from '@/shared/lib/markdown'
+
+const props = defineProps({
+  pathId: { type: [Number, String], required: true },
+  nodeId: { type: [Number, String], required: true },
+  task: { type: Object, required: true },
+  chapterContent: { type: String, default: '' },
+  resourceId: { type: [Number, String], default: null },
+})
+defineEmits(['end'])
+
+const phases = [
+  { id: 'understand', label: '理解问题', hint: '界定目标与限制' },
+  { id: 'evidence', label: '寻找证据', hint: '从材料提取依据' },
+  { id: 'hypothesis', label: '提出假设', hint: '说明可能原因' },
+  { id: 'compare', label: '比较方案', hint: '解释取舍关系' },
+  { id: 'verify', label: '验证结果', hint: '设计检查方法' },
+  { id: 'review', label: '总结复盘', hint: '留下可复查结论' },
+]
+const currentPhase = ref(phases[0])
+const messages = ref([])
+const draft = ref('')
+const errorMessage = ref('')
+const isStreaming = ref(false)
+const messageList = ref(null)
+let requestController = null
+
+function createWelcome() {
+  return { role: 'assistant', text: `我们从“${currentPhase.value.label}”开始。先说说这个任务要解决的核心问题，以及你准备依据哪些信息判断。` }
+}
+
+function resetConversation() {
+  requestController?.abort()
+  requestController = null
+  currentPhase.value = phases[0]
+  messages.value = [createWelcome()]
+  draft.value = ''
+  errorMessage.value = ''
+  isStreaming.value = false
+}
+
+function selectPhase(phase) {
+  currentPhase.value = phase
+}
+
+function requestHint() {
+  sendMessage(`请围绕“${currentPhase.value.label}”给我一个不直接泄露答案的提示。`)
+}
+
+async function scrollToLatest() {
+  await nextTick()
+  if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight
+}
+
+async function sendMessage(forcedText = '') {
+  const text = String(forcedText || draft.value).trim()
+  if (!text || isStreaming.value) return
+  messages.value.push({ role: 'user', text })
+  const responseMessage = reactive({ role: 'assistant', text: '' })
+  messages.value.push(responseMessage)
+  draft.value = ''
+  errorMessage.value = ''
+  isStreaming.value = true
+  requestController = new AbortController()
+  await scrollToLatest()
+  try {
+    await fundamentalsApi.streamAssistantReply({
+      path_id: Number(props.pathId),
+      node_id: Number(props.nodeId),
+      resource_id: props.resourceId ? Number(props.resourceId) : null,
+      scenario: 'practice',
+      text,
+      segment: {
+        id: `practice-${props.task.id}`,
+        type: 'practice',
+        title: props.task.title,
+        phase: currentPhase.value.label,
+        script: [props.task.brief, props.task.problem, `当前阶段：${currentPhase.value.label}`, `重点能力：${props.task.focus}`, `验收标准：${(props.task.criteria || []).join('；')}`].filter(Boolean).join('\n'),
+        points: (props.task.constraints || []).slice(0, 6),
+        question: { prompt: `请围绕${currentPhase.value.label}推进任务。` },
+      },
+    }, (event) => {
+      if (event?.error) throw new Error(event.error)
+      if ((event?.type === 'chunk' || event?.type === 'content') && event.content) {
+        responseMessage.text += String(event.content)
+        scrollToLatest()
+      }
+    }, requestController.signal)
+    if (!responseMessage.text.trim()) throw new Error('LearnMate 暂时没有返回有效追问')
+  } catch (error) {
+    if (error.name === 'AbortError') return
+    if (responseMessage.text.trim()) responseMessage.text += '\n\n> 回复中断了，你可以继续补充。'
+    else messages.value = messages.value.filter((message) => message !== responseMessage)
+    errorMessage.value = error.response?.data?.detail || error.message || '巩固对话失败，请稍后重试。'
+  } finally {
+    isStreaming.value = false
+    requestController = null
+    scrollToLatest()
+  }
+}
+
+watch(() => props.task?.id, resetConversation, { immediate: true })
+onBeforeUnmount(() => requestController?.abort())
+</script>
+
+<style scoped>
+.practice-dialogue { display: grid; min-height: 700px; grid-template-rows: auto minmax(360px, 1fr) auto auto; overflow: hidden; }.practice-dialogue__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 24px; border-bottom: 1px solid var(--line); background: #fbfcfa; }.practice-dialogue__header .eyebrow { margin-bottom: 6px; }.practice-dialogue__header h2 { margin: 0; font-size: 20px; }.practice-dialogue__header p:last-child { max-width: 640px; margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }.practice-phase { flex: 0 0 auto; padding: 7px 10px; border: 1px solid #d7e3c9; border-radius: 4px; background: #f3f8ea; color: var(--accent-deep); font-size: 11px; font-weight: 800; }.practice-dialogue__body { display: grid; grid-template-columns: minmax(0, 1fr) 260px; min-height: 0; }.practice-messages { display: grid; align-content: start; gap: 15px; overflow-y: auto; padding: 24px; border-right: 1px solid var(--line); }.practice-message { display: flex; align-items: flex-start; gap: 9px; max-width: min(720px, 90%); }.practice-message.is-user { justify-self: end; flex-direction: row-reverse; }.practice-avatar { display: grid; flex: 0 0 28px; width: 28px; height: 28px; place-items: center; border-radius: 50%; background: var(--accent); color: var(--accent-deep); font-size: 10px; font-weight: 900; }.practice-bubble { padding: 11px 14px; border-radius: 5px 12px 12px 12px; background: #edf3ed; color: var(--ink); font-size: 13px; line-height: 1.7; }.practice-message.is-user .practice-bubble { border-radius: 12px 5px 12px 12px; background: var(--ink); color: #fff; }.practice-bubble :deep(p) { margin: 0 0 8px; }.practice-bubble :deep(p:last-child) { margin-bottom: 0; }.practice-bubble :deep(ul), .practice-bubble :deep(ol) { margin: 7px 0 0; padding-left: 20px; }.typing { display: flex; gap: 4px; padding: 14px; }.typing span { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); animation: pulse 1s infinite ease-in-out; }.typing span:nth-child(2) { animation-delay: .15s; }.typing span:nth-child(3) { animation-delay: .3s; }.practice-guide { padding: 20px 18px; background: #fbfcfa; }.guide-block { padding: 0 0 18px; margin-bottom: 18px; border-bottom: 1px solid var(--line); }.guide-block:last-child { margin-bottom: 0; border-bottom: 0; }.guide-block .eyebrow { margin-bottom: 7px; }.guide-block > strong { display: block; font-size: 13px; line-height: 1.5; }.guide-block > p:last-child { margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.65; }.guide-block button { display: grid; width: 100%; gap: 3px; padding: 8px 9px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); text-align: left; font-size: 11px; }.guide-block button:hover, .guide-block button.is-active { background: #e8efdf; color: var(--accent-deep); }.guide-block button small { font-size: 10px; }.guide-block ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 11px; line-height: 1.5; }.guide-block li::before { margin-right: 6px; color: var(--accent-deep); content: '•'; }.practice-error { margin: 0; padding: 0 24px 10px; color: #a66442; font-size: 11px; }.practice-composer { padding: 14px 24px 20px; border-top: 1px solid var(--line); }.practice-composer textarea { width: 100%; min-height: 105px; resize: vertical; padding: 12px 13px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); outline: none; font-size: 13px; line-height: 1.7; }.practice-composer textarea:focus { border-color: var(--accent-deep); }.practice-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; color: var(--muted); font-size: 10px; }.practice-actions > div { display: flex; flex-wrap: wrap; gap: 8px; }.practice-actions .button { gap: 7px; }@keyframes pulse { 0%, 60%, 100% { opacity: .3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }@keyframes spin { to { transform: rotate(360deg); } }.spin { animation: spin .8s linear infinite; }
+@media (max-width: 780px) { .practice-dialogue__header { flex-direction: column; padding: 18px; }.practice-dialogue__body { grid-template-columns: 1fr; }.practice-messages { min-height: 360px; border-right: 0; border-bottom: 1px solid var(--line); }.practice-guide { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 16px 18px; }.guide-block { margin: 0; padding: 0; border: 0; }.guide-block:last-child { grid-column: 1 / -1; }.practice-composer { padding: 12px 18px 18px; }.practice-actions { align-items: flex-start; flex-direction: column; }.practice-actions > div { width: 100%; }.practice-actions .button { flex: 1; } }
+</style>

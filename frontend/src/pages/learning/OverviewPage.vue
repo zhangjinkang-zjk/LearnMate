@@ -1,7 +1,7 @@
 <template>
   <div>
     <PageTitle eyebrow="学习概览" title="把下一步学习说清楚" :description="`围绕“${profile.goal || '正在生成'}”，这里汇总你正在学习的内容、当前掌握情况和最值得先做的行动。`">
-      <template #actions><RouterLink class="button button--quiet" to="/learning/navigation">查看学习导航</RouterLink></template>
+      <template #actions><RouterLink class="button button--quiet" to="/learning/foundation-test">开始基础测试</RouterLink></template>
     </PageTitle>
 
     <div v-if="loading" class="surface surface-pad loading-state">正在同步你的学习状态…</div>

@@ -16,9 +16,19 @@
           </nav>
         </div>
 
+        <div v-for="group in learningNavigationGroups" :key="group.label" class="sidebar-section sidebar-nav-group">
+          <p class="sidebar-group-label">{{ group.label }}</p>
+          <nav class="sidebar-nav" :aria-label="group.label">
+            <RouterLink v-for="item in group.items" :key="item.to" :to="item.to" class="sidebar-link">
+              <component :is="item.icon" :size="17" stroke-width="1.8" />
+              <span>{{ item.label }}</span>
+            </RouterLink>
+          </nav>
+        </div>
+
         <div class="sidebar-section sidebar-section--secondary">
-          <p class="sidebar-label">工具</p>
-          <nav class="sidebar-nav" aria-label="学习工具">
+          <p class="sidebar-label">资料</p>
+          <nav class="sidebar-nav" aria-label="资料工具">
             <RouterLink v-for="item in secondaryNavigation" :key="item.to" :to="item.to" class="sidebar-link">
               <component :is="item.icon" :size="17" stroke-width="1.8" />
               <span>{{ item.label }}</span>
@@ -76,13 +86,12 @@
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Bell, ClipboardList, LogOut, Moon, Sun } from 'lucide-vue-next'
-import { primaryNavigation, secondaryNavigation, utilityNavigation } from '@/shared/config/navigation'
+import { allNavigation, learningNavigationGroups, primaryNavigation, secondaryNavigation, utilityNavigation } from '@/shared/config/navigation'
 import { clearAuthSession } from '@/shared/auth/session'
 
 const route = useRoute()
 const router = useRouter()
 const sidebarOpen = ref(false)
-const allNavigation = [...primaryNavigation, ...secondaryNavigation, ...utilityNavigation]
 const currentTitle = computed(() => allNavigation.find((item) => route.path.startsWith(item.to))?.label || '学习概览')
 const displayName = computed(() => localStorage.getItem('learnmate_username') || '我的学习者')
 const avatarLetter = computed(() => displayName.value.trim().slice(0, 1).toUpperCase() || '学')
