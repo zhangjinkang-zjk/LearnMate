@@ -1,125 +1,278 @@
 <template>
   <main class="home-cover">
-    <section class="hero" aria-label="知伴首页">
-      <div class="hero-background" aria-hidden="true">
-        <span class="sweep sweep-one"></span>
-        <span class="sweep sweep-two"></span>
+    <section
+      class="hero"
+      :class="{ 'is-open': isOpen }"
+      aria-label="LearnMate home"
+    >
+      <div class="background-word" aria-hidden="true">
+        <span>LEARN</span>
+        <span>MATE</span>
       </div>
 
-      <div class="center-title">
-        <p class="eyebrow">Personal Learning Companion</p>
-        <h1>
-          <span>AI学习助手</span>
-          <span>知伴</span>
-        </h1>
-        <span class="sun-mark" aria-hidden="true"></span>
-        <div class="hero-actions">
-          <router-link class="primary-action" to="/chat">开始 AI 对话</router-link>
-        </div>
+      <div class="hero-copy">
+        <p class="kicker">PERSONAL LEARNING COMPANION</p>
+        <h1>LearnMate</h1>
+        <p class="tagline">
+          Make every study session feel a little more alive.
+        </p>
       </div>
 
-      <button
-        v-for="tile in featureTiles"
-        :key="tile.title || tile.className"
-        class="feature-tile"
-        :class="tile.className"
-        type="button"
-        :aria-label="tile.title"
-        @click="openFeatureTile(tile)"
-      >
-        <img :src="tile.image" :alt="tile.title" />
-        <span v-if="tile.title" class="tile-copy">
-          <strong>{{ tile.title }}</strong>
-          <small v-if="tile.subtitle">{{ tile.subtitle }}</small>
-        </span>
-      </button>
+      <router-link class="login-link" to="/profile">
+        <span>LOGIN</span>
+        <span class="login-arrow" aria-hidden="true">↗</span>
+      </router-link>
 
-      <div class="quick-panel">
-        <router-link to="/resources">
-          <strong>资源中心</strong>
-          <span>讲义、题库、课件统一管理</span>
-        </router-link>
-        <router-link to="/learning-resources">
-          <strong>我的资源</strong>
-          <span>收藏与生成内容随时回看</span>
-        </router-link>
-        <router-link to="/learning-situation">
-          <strong>学习情况</strong>
-          <span>进度、薄弱点、活跃趋势</span>
-        </router-link>
+      <div class="object-field" aria-label="Learning tools">
+        <button
+          v-for="item in floatingItems"
+          :key="item.file"
+          class="floating-item"
+          :class="{ 'is-link': item.to }"
+          type="button"
+          :aria-label="item.label"
+          :title="item.label"
+          :style="item.style"
+          @click="openItem(item)"
+        >
+          <img :src="item.image" :alt="item.label" draggable="false" />
+        </button>
       </div>
+
+      <div class="backpack-stage" :class="{ 'is-open': isOpen }">
+        <button
+          class="backpack-trigger"
+          type="button"
+          aria-label="Replay the backpack animation"
+          @click="replayAnimation"
+        >
+          <img
+            class="backpack-image"
+            :src="backpackImage"
+            alt="LearnMate backpack"
+            draggable="false"
+          />
+        </button>
+      </div>
+
+      <div class="platform" aria-hidden="true">
+        <span class="platform-top"></span>
+        <span class="platform-edge"></span>
+      </div>
+
+      <router-link class="enter-link" to="/select-identity">
+        <span>LET'S GO</span>
+        <span class="enter-arrow" aria-hidden="true">↗</span>
+      </router-link>
     </section>
   </main>
 </template>
 
 <script setup>
-import { useRouter } from 'vue-router'
-import resourceImage from '../assets/pic/a5e56fcc-c654-437a-a2cb-a71a7a5ec871.png'
-import originalPathImage from '../assets/pic/8fa2bb78-91c9-4ac9-991a-00c9c43408dd.png'
-import studyPathImage from '../assets/pic/学习路径.png'
-import createResourceImage from '../assets/pic/资源生成.png'
-import situationImage from '../assets/pic/屏幕截图 2026-05-30 182715.png'
-import petImage from '../assets/pic/24d45e90-dddc-4df5-bb2b-e866c3ed6344.png'
-const router = useRouter()
+import { onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
 
-const featureTiles = [
-  {
-    title: '资源中心',
-    subtitle: '',
-    to: '/resources',
-    image: resourceImage,
-    className: 'tile-chat',
-  },
-  {
-    title: 'AI 对话',
-    subtitle: '',
-    to: '/chat',
-    image: createResourceImage,
-    className: 'tile-resource',
-  },
-  {
-    title: '学习情况',
-    subtitle: '',
-    to: '/learning-situation',
-    image: originalPathImage,
-    className: 'tile-path',
-  },
-  {
-    title: 'AI 对话',
-    subtitle: '',
-    to: '/chat',
-    image: situationImage,
-    className: 'tile-situation',
-  },
-  {
-    title: '小知对话',
-    subtitle: '',
-    action: 'pet-chat',
-    image: petImage,
-    className: 'tile-pet',
-  },
-  {
-    title: '学习路径',
-    subtitle: '',
-    to: '/learning-path',
-    image: studyPathImage,
-    className: 'tile-profile',
-  },
-]
+import tabletImage from "../assets/homepic/kr-100.png";
+import laptopImage from "../assets/homepic/kr-65.png";
+import monitorImage from "../assets/homepic/kr-68.png";
+import headsetImage from "../assets/homepic/kr-75.png";
+import routerImage from "../assets/homepic/kr-76.png";
+import keyboardImage from "../assets/homepic/kr-84.png";
+import mouseImage from "../assets/homepic/kr-89.png";
+import penTabletImage from "../assets/homepic/kr-93.png";
+import gpuImage from "../assets/homepic/kr-94.png";
+import fanImage from "../assets/homepic/kr-95.png";
+import backpackImage from "../assets/homepic/65f0199b0fe8d.png";
 
-const openPetChat = () => {
-  window.dispatchEvent(new CustomEvent('zhiban-pet-open-chat', { detail: { expanded: true } }))
-}
+const router = useRouter();
+const isOpen = ref(false);
 
-const openFeatureTile = tile => {
-  if (tile.action === 'pet-chat') {
-    openPetChat()
-    return
-  }
-  if (tile.to) {
-    router.push(tile.to)
-  }
-}
+const item = (image, file, label, x, y, rotate, size, delay, to = "") => ({
+  image,
+  file,
+  label,
+  to,
+  style: {
+    "--x": x,
+    "--y": y,
+    "--r": `${rotate}deg`,
+    "--size": `${size}px`,
+    "--delay": `${delay}ms`,
+  },
+});
+
+const floatingItems = [
+  item(
+    tabletImage,
+    "kr-100-a.png",
+    "Learning path",
+    "-26vw",
+    "-19vh",
+    -16,
+    112,
+    80,
+    "/learning-path"
+  ),
+  item(
+    laptopImage,
+    "kr-65-a.png",
+    "AI chat",
+    "-16vw",
+    "-25vh",
+    12,
+    108,
+    150,
+    "/chat"
+  ),
+  item(
+    monitorImage,
+    "kr-68-a.png",
+    "Resource center",
+    "16vw",
+    "-24vh",
+    11,
+    114,
+    220,
+    "/resources"
+  ),
+  item(
+    headsetImage,
+    "kr-75-a.png",
+    "Study room",
+    "27vw",
+    "-17vh",
+    18,
+    110,
+    290,
+    "/study-room"
+  ),
+  item(
+    routerImage,
+    "kr-76-a.png",
+    "LearnMate network",
+    "-29vw",
+    "-2vh",
+    -11,
+    108,
+    360
+  ),
+  item(
+    keyboardImage,
+    "kr-84-a.png",
+    "Practice keyboard",
+    "-20vw",
+    "13vh",
+    -8,
+    126,
+    430,
+    "/chat"
+  ),
+  item(
+    mouseImage,
+    "kr-89-a.png",
+    "Learning situation",
+    "24vw",
+    "2vh",
+    12,
+    106,
+    500,
+    "/learning-situation"
+  ),
+  item(
+    penTabletImage,
+    "kr-93-a.png",
+    "Notes and review",
+    "18vw",
+    "15vh",
+    -12,
+    116,
+    570,
+    "/learning-resources"
+  ),
+  item(
+    gpuImage,
+    "kr-94-a.png",
+    "Resource generation",
+    "-4vw",
+    "-29vh",
+    7,
+    112,
+    640,
+    "/resources"
+  ),
+  item(
+    fanImage,
+    "kr-95-a.png",
+    "Focus mode",
+    "4vw",
+    "21vh",
+    -8,
+    116,
+    710,
+    "/study-room"
+  ),
+  item(
+    tabletImage,
+    "kr-100-b.png",
+    "Learning path detail",
+    "-12vw",
+    "-3vh",
+    9,
+    92,
+    780,
+    "/learning-path"
+  ),
+  item(
+    monitorImage,
+    "kr-68-b.png",
+    "Resource preview",
+    "12vw",
+    "-4vh",
+    -9,
+    94,
+    850,
+    "/resources"
+  ),
+  item(
+    laptopImage,
+    "kr-65-b.png",
+    "Study notes",
+    "-11vw",
+    "16vh",
+    -13,
+    94,
+    920,
+    "/learning-resources"
+  ),
+  item(
+    headsetImage,
+    "kr-75-b.png",
+    "Focus listening",
+    "11vw",
+    "17vh",
+    14,
+    96,
+    990,
+    "/study-room"
+  ),
+];
+
+const openItem = (target) => {
+  if (target.to) router.push(target.to);
+};
+
+onMounted(() => {
+  window.setTimeout(() => {
+    isOpen.value = true;
+  }, 420);
+});
+
+const replayAnimation = () => {
+  isOpen.value = false;
+  window.setTimeout(() => {
+    isOpen.value = true;
+  }, 180);
+};
 </script>
 
 <style scoped>
@@ -132,454 +285,551 @@ const openFeatureTile = tile => {
 }
 
 .home-cover {
-  min-height: 100vh;
-  color: #143761;
-  font-family:
-    Inter,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    "PingFang SC",
-    "Microsoft YaHei",
-    sans-serif;
+  min-height: 100%;
   overflow: hidden;
+  color: #f3f0e7;
+  background: #1e3c34 !important;
+  font-family: Inter, "Helvetica Neue", Arial, sans-serif;
 }
 
 .hero {
   position: relative;
-  min-height: calc(100vh - 64px);
-  padding: 28px clamp(18px, 4vw, 70px) 34px;
+  min-height: 100vh;
+  overflow: hidden;
+  isolation: isolate;
   display: grid;
   place-items: center;
-  isolation: isolate;
+  padding: 34px 28px 38px;
 }
 
-.hero-background {
+.hero::before {
+  content: "";
   position: absolute;
   inset: 0;
   z-index: -2;
-  background: #f1f7fb;
-  overflow: hidden;
+  pointer-events: none;
+  background: radial-gradient(
+      ellipse 72% 86% at -5% 104%,
+      rgba(121, 162, 126, 0.36),
+      transparent 68%
+    ),
+    radial-gradient(
+      ellipse 62% 76% at 106% -4%,
+      rgba(6, 25, 19, 0.62),
+      transparent 70%
+    ),
+    radial-gradient(
+      circle at 50% 42%,
+      rgba(107, 151, 119, 0.2),
+      transparent 31%
+    ),
+    linear-gradient(124deg, rgba(124, 161, 129, 0.22), transparent 38%), #1e3c34;
 }
 
-.hero-background::before,
-.hero-background::after {
+.hero::after {
   content: "";
   position: absolute;
-  background: #e9eff3;
-  border-radius: 50%;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+  opacity: 0.18;
+  background-image: radial-gradient(
+    rgba(226, 244, 82, 0.18) 0.7px,
+    transparent 0.7px
+  );
+  background-size: 6px 6px;
+  mix-blend-mode: screen;
 }
 
-.hero-background::before {
-  width: clamp(540px, 62vw, 760px);
-  height: clamp(540px, 62vw, 760px);
-  left: 50%;
-  top: -96px;
-  transform: translateX(-50%);
-}
-
-.hero-background::after {
-  width: clamp(420px, 48vw, 620px);
-  height: clamp(420px, 48vw, 620px);
-  right: clamp(-280px, -18vw, -170px);
-  bottom: clamp(-310px, -24vw, -210px);
-}
-
-.sweep {
+.background-word {
   position: absolute;
+  inset: 8% 0 0;
+  z-index: -1;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  color: rgba(173, 198, 178, 0.35);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(116px, 17.5vw, 282px);
+  font-weight: 400;
+  letter-spacing: -0.045em;
+  line-height: 0.76;
+  user-select: none;
+}
+
+.background-word span {
   display: block;
-  width: clamp(320px, 34vw, 520px);
-  height: clamp(320px, 34vw, 520px);
-  border-radius: 50%;
-  background: #e9eff3;
+  transform: scaleX(1.08);
 }
 
-.sweep-one {
-  left: clamp(-250px, -14vw, -140px);
-  top: 118px;
-}
-
-.sweep-two {
-  right: clamp(-220px, -12vw, -130px);
-  top: -92px;
-}
-
-.sun-mark {
-  position: relative;
-  display: block;
-  width: clamp(34px, 3.9vw, 48px);
-  height: clamp(34px, 3.9vw, 48px);
-  margin: 22px auto 0;
-  background:
-    linear-gradient(#f0a73a, #f0a73a) center / 100% 2px no-repeat,
-    linear-gradient(#f0a73a, #f0a73a) center / 2px 100% no-repeat;
-}
-
-.sun-mark::before,
-.sun-mark::after {
-  content: "";
+.hero-copy {
   position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 100%;
-  height: 2px;
-  background: #f0a73a;
-  transform-origin: center;
-}
-
-.sun-mark::before {
-  transform: translate(-50%, -50%) rotate(45deg);
-}
-
-.sun-mark::after {
-  transform: translate(-50%, -50%) rotate(-45deg);
-}
-
-.center-title {
-  position: relative;
-  z-index: 3;
-  width: min(900px, 88vw);
-  margin-top: -38px;
+  top: 8%;
+  z-index: 4;
   text-align: center;
   pointer-events: none;
 }
 
-.eyebrow {
-  margin: -10px 0 40px;
-  color: #6da3d2;
-  font-size: 13px;
+.kicker {
+  margin: 0 0 10px;
+  color: #e2f452;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+}
+
+.hero-copy h1 {
+  margin: 0;
+  color: #f3f0e7;
+  font-family: "Smiley Sans", Georgia, serif;
+  font-size: clamp(42px, 5vw, 76px);
   font-weight: 800;
   letter-spacing: 0;
-}
-
-.center-title h1 {
-  margin: 0;
-  color: #143761;
-  font-family:
-    "Smiley Sans",
-    "PingFang SC",
-    "Microsoft YaHei",
-    sans-serif;
-  font-size: clamp(64px, 9.8vw, 148px);
   line-height: 0.9;
-  letter-spacing: 0;
-  font-weight: 900;
-  -webkit-text-stroke: 1.2px #143761;
-  text-shadow:
-    0.8px 0 #143761,
-    -0.8px 0 #143761,
-    0 0.8px #143761,
-    0 -0.8px #143761;
 }
 
-.center-title h1 span {
-  display: block;
-  transform: scaleY(0.88);
-  transform-origin: center;
+.tagline {
+  margin: 12px 0 0;
+  color: rgba(243, 240, 231, 0.72);
+  font-size: 12px;
+  letter-spacing: 0.02em;
 }
 
-.center-title h1 span:first-child {
-  margin-bottom: clamp(10px, 1.2vw, 18px);
-  white-space: nowrap;
-}
-
-.hero-actions {
-  margin-top: 28px;
-  display: flex;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 12px;
-  pointer-events: auto;
-}
-
-.primary-action {
-  height: 44px;
-  padding: 0 22px;
-  border-radius: 999px;
-  text-decoration: none;
+.login-link {
+  position: absolute;
+  top: 28px;
+  right: clamp(22px, 5vw, 74px);
+  z-index: 10;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  font-weight: 800;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  gap: 8px;
+  color: #e2f452;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.14em;
+  text-decoration: none;
+  transition: color 0.2s ease, transform 0.2s ease;
 }
 
-.primary-action {
-  background: #143761;
-  color: #ffffff;
-  box-shadow: 0 12px 24px rgba(20, 55, 97, 0.18);
+.login-link:hover {
+  color: #fff8c2;
+  transform: translateY(-2px);
 }
 
-.primary-action:hover,
-.feature-tile:hover,
-.quick-panel a:hover {
-  transform: translateY(-3px);
+.login-arrow {
+  font-size: 18px;
+  line-height: 0.7;
 }
 
-.feature-tile {
+.object-field {
   position: absolute;
+  inset: 6% 0 10%;
   z-index: 5;
-  overflow: hidden;
+  pointer-events: none;
+  transform: translateY(9vh);
+}
+
+.floating-item {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--size);
+  height: var(--size);
   padding: 0;
   border: 0;
-  text-decoration: none;
-  color: #143761;
-  background: #dcebf2;
-  box-shadow: 0 18px 38px rgba(31, 68, 103, 0.13);
-  transition: transform 0.22s ease, box-shadow 0.22s ease;
-  cursor: pointer;
-  font: inherit;
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) translate(0, 38px) scale(0.08) rotate(0deg);
+  transition: transform 1.15s cubic-bezier(0.17, 0.84, 0.35, 1.16) var(--delay),
+    opacity 0.5s ease var(--delay);
 }
 
-.feature-tile:hover {
-  box-shadow: 0 24px 44px rgba(31, 68, 103, 0.18);
-}
-
-.feature-tile img {
+.floating-item img {
+  display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  display: block;
+  object-fit: contain;
+  filter: drop-shadow(0 16px 14px rgba(4, 20, 15, 0.34));
+  user-select: none;
 }
 
-.tile-copy {
-  position: absolute;
-  left: 14px;
-  right: 14px;
-  bottom: 12px;
-  min-height: 52px;
-  padding: 9px 12px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  display: grid;
-  align-content: center;
-  gap: 3px;
+.is-open .floating-item img {
+  animation: item-drift 5.6s ease-in-out infinite;
+  animation-delay: calc(var(--delay) + 1.35s);
 }
 
-.tile-copy strong {
-  font-size: 15px;
-  line-height: 1.2;
+.is-open .floating-item {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, -50%) translate(var(--x), var(--y)) scale(1)
+    rotate(var(--r));
 }
 
-.tile-copy small {
-  color: #5d7d97;
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.tile-chat {
-  left: clamp(18px, 5vw, 74px);
-  top: 7vh;
-  width: clamp(118px, 13vw, 176px);
-  aspect-ratio: 1;
-  border-radius: 50%;
-}
-
-.tile-chat .tile-copy {
-  display: none;
-}
-
-.tile-resource {
-  left: clamp(86px, 13vw, 214px);
-  top: 34vh;
-  width: clamp(150px, 17vw, 240px);
-  aspect-ratio: 1.28;
-  border-radius: 42px 0 42px 0;
-}
-
-.tile-resource img {
-  object-position: center;
-}
-
-.tile-resource .tile-copy {
-  display: none;
-}
-
-.tile-path {
-  left: clamp(22px, 7vw, 130px);
-  top: 60vh;
-  bottom: auto;
-  width: clamp(140px, 17vw, 232px);
-  aspect-ratio: 1.45;
-  border-radius: 46px 46px 0 0;
-}
-
-.tile-path .tile-copy {
-  display: none;
-}
-
-.tile-situation {
-  right: 19vw;
-  top: 32vh;
-  width: clamp(138px, 16vw, 220px);
-  aspect-ratio: 1.08;
-  border-radius: 54px 0 0 0;
-}
-
-.tile-situation .tile-copy {
-  display: none;
-}
-
-.tile-pet {
-  right: clamp(18px, 5vw, 78px);
-  top: 7vh;
-  width: clamp(124px, 13vw, 182px);
-  aspect-ratio: 1;
-  border-radius: 50%;
-  background: #ffffff;
-}
-
-.tile-pet img {
-  object-fit: cover;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-.tile-pet .tile-copy {
-  display: none;
-}
-
-.tile-profile {
-  right: clamp(18px, 9vw, 130px);
-  top: 64vh;
-  bottom: auto;
-  width: clamp(150px, 17vw, 236px);
-  aspect-ratio: 1.28;
-  border-radius: 0 42px 0 42px;
-}
-
-.tile-profile .tile-copy {
-  display: none;
-}
-
-.quick-panel {
-  position: absolute;
+.floating-item:hover {
   z-index: 2;
-  right: clamp(18px, 4vw, 62px);
-  bottom: 32px;
-  display: none;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  transform: translate(-50%, -50%) translate(var(--x), var(--y)) scale(1.08)
+    rotate(var(--r));
 }
 
-.quick-panel a {
-  min-width: 0;
-  padding: 14px 16px;
-  border-radius: 8px;
-  border: 1px solid rgba(181, 205, 220, 0.8);
-  background: rgba(255, 255, 255, 0.72);
-  color: #143761;
-  text-decoration: none;
+@keyframes item-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+
+  50% {
+    transform: translate3d(0, -7px, 0) rotate(1.5deg);
+  }
+}
+
+.backpack-stage {
+  position: absolute;
+  left: 50%;
+  bottom: 23%;
+  z-index: 6;
+  width: min(360px, 40vw);
+  height: min(250px, 28vh);
+  transform: translateX(-50%);
+  perspective: 900px;
+  pointer-events: none;
+}
+
+.backpack-trigger {
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  width: min(460px, 45vw);
+  height: min(340px, 38vh);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  transform: translateX(-50%) translateY(18px) scale(0.08);
+  cursor: pointer;
+  pointer-events: auto;
+  filter: drop-shadow(0 24px 18px rgba(3, 16, 12, 0.46));
+  opacity: 0;
+  transition: transform 1.25s cubic-bezier(0.17, 0.84, 0.35, 1.1),
+    opacity 0.55s ease;
+}
+
+.backpack-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+}
+
+.backpack-stage.is-open .backpack-trigger {
+  opacity: 1;
+  transform: translateX(-50%) translateY(-28px) scale(1);
+}
+
+.backpack-stage.is-open .backpack-image {
+  animation: backpack-drift 5.8s ease-in-out 1.3s infinite;
+}
+
+@keyframes backpack-drift {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+
+  50% {
+    transform: translateY(-8px) rotate(-1deg);
+  }
+}
+
+.box-shell {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 212px;
+  height: 156px;
+  display: block;
+  transform: translateX(-50%) rotateX(9deg) rotateZ(-4deg);
+  transform-style: preserve-3d;
+}
+
+.box-body {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 112px;
+  display: block;
+  overflow: hidden;
+  border: 2px solid #0d241e;
+  border-radius: 6px 6px 12px 12px;
+  background: linear-gradient(145deg, #bacd4a 0%, #8da32d 56%, #50671e 100%);
+  box-shadow: inset 8px 0 0 rgba(237, 248, 145, 0.2),
+    inset -13px -10px 0 rgba(32, 57, 20, 0.22), 0 10px 0 #31471a;
+  transform: translateZ(0);
+}
+
+.box-inner-glow {
+  position: absolute;
+  left: 15px;
+  right: 15px;
+  top: 9px;
+  height: 23px;
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse,
+    rgba(23, 48, 35, 0.95),
+    rgba(23, 48, 35, 0.2) 72%,
+    transparent 73%
+  );
+  opacity: 0.9;
+  transition: opacity 0.45s ease 0.3s;
+}
+
+.is-open .box-inner-glow {
+  opacity: 1;
+}
+
+.box-front-face {
+  position: absolute;
+  inset: 0;
   display: grid;
-  gap: 5px;
-  transition: transform 0.2s ease, background 0.2s ease;
+  place-items: end center;
+  padding-bottom: 20px;
+  color: rgba(27, 51, 30, 0.76);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.24em;
 }
 
-.quick-panel strong {
-  font-size: 14px;
+.box-side-face {
+  position: absolute;
+  right: -17px;
+  top: 10px;
+  width: 17px;
+  height: 99px;
+  border-radius: 0 5px 9px 0;
+  background: linear-gradient(180deg, #789021, #3a5119);
+  transform: skewY(-24deg);
+  transform-origin: left top;
 }
 
-.quick-panel span {
-  color: #5d7d97;
-  font-size: 12px;
-  line-height: 1.45;
+.box-lid {
+  position: absolute;
+  left: -1px;
+  top: 5px;
+  z-index: 2;
+  width: 214px;
+  height: 52px;
+  display: block;
+  border: 2px solid #0d241e;
+  border-radius: 7px;
+  transform-origin: 12% 92%;
+  transform-style: preserve-3d;
+  transition: transform 0.95s cubic-bezier(0.2, 0.82, 0.25, 1),
+    box-shadow 0.95s ease;
 }
 
-@media (min-width: 1180px) and (max-height: 780px) {
-  .quick-panel {
-    display: grid;
-    width: min(520px, 45vw);
-  }
-
-  .tile-profile {
-    display: none;
-  }
+.box-lid-face {
+  position: absolute;
+  inset: 0;
+  display: block;
+  border-radius: 5px;
+  background: linear-gradient(145deg, #d9eb67 0%, #a7ba3a 60%, #718723 100%);
+  box-shadow: inset 0 4px 0 rgba(248, 255, 174, 0.36),
+    inset -10px -8px 0 rgba(39, 64, 19, 0.16);
 }
 
-@media (max-width: 980px) {
+.box-lid-highlight {
+  position: absolute;
+  left: 12px;
+  right: 34px;
+  top: 8px;
+  height: 5px;
+  display: block;
+  border-radius: 50%;
+  background: rgba(255, 255, 208, 0.42);
+  transform: skewX(-22deg);
+}
+
+.is-open .box-lid {
+  transform: translate(-7px, -42px) rotate(-34deg) rotateX(16deg);
+  box-shadow: -9px 22px 10px rgba(3, 16, 12, 0.25);
+}
+
+.box-mark {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 1;
+  color: #1e3c34;
+  font-family: Georgia, serif;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  transform: translate(-50%, -50%);
+}
+
+.platform {
+  position: absolute;
+  left: 50%;
+  bottom: 6%;
+  z-index: 3;
+  width: min(420px, 44vw);
+  height: 54px;
+  transform: translateX(-50%);
+  filter: drop-shadow(0 24px 18px rgba(3, 16, 12, 0.42));
+}
+
+.platform-top,
+.platform-edge {
+  position: absolute;
+  left: 50%;
+  display: block;
+  transform: translateX(-50%);
+}
+
+.platform-top {
+  top: 0;
+  width: 90%;
+  height: 38px;
+  border-radius: 50%;
+  background: #e2f452;
+  box-shadow: inset 0 -9px 0 rgba(123, 143, 22, 0.28),
+    0 0 0 1px rgba(238, 255, 125, 0.2);
+}
+
+.platform-edge {
+  top: 25px;
+  width: 84%;
+  height: 24px;
+  border-radius: 0 0 50% 50%;
+  background: #a3b92c;
+  z-index: -1;
+}
+
+.enter-link {
+  position: absolute;
+  right: clamp(22px, 5vw, 74px);
+  bottom: 30px;
+  z-index: 7;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 48px;
+  padding: 0 20px 0 22px;
+  border-radius: 5px;
+  background: #e2f452;
+  color: #1e3c34;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-decoration: none;
+  box-shadow: 0 12px 26px rgba(4, 20, 15, 0.3), inset 0 1px 0 rgba(255, 255, 210, 0.62);
+  transition: color 0.2s ease, background 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.enter-link:hover {
+  background: #f0ff75;
+  color: #152f28;
+  transform: translateY(-2px);
+  box-shadow: 0 16px 30px rgba(4, 20, 15, 0.38), inset 0 1px 0 rgba(255, 255, 210, 0.72);
+}
+
+.enter-arrow {
+  font-size: 20px;
+  line-height: 0.65;
+}
+
+@media (max-width: 840px) {
   .hero {
-    min-height: auto;
-    padding: 54px 22px 36px;
-    align-content: start;
-    gap: 18px;
+    min-height: 100vh;
+    padding-inline: 16px;
   }
 
-  .hero-background::before {
-    width: 86vw;
-    height: 86vw;
-    min-width: 0;
-    min-height: 0;
-    top: -8vw;
+  .background-word {
+    font-size: 22vw;
   }
 
-  .center-title {
-    width: 100%;
-    margin: 0 0 12px;
+  .hero-copy {
+    top: 7%;
   }
 
-  .feature-tile {
-    position: relative;
-    left: auto;
-    right: auto;
-    top: auto;
-    bottom: auto;
-    width: min(100%, 420px);
-    border-radius: 18px;
-    aspect-ratio: 1.75;
-    justify-self: center;
+  .login-link {
+    top: 20px;
+    right: 22px;
   }
 
-  .feature-tile img {
-    object-fit: cover;
+  .tagline {
+    font-size: 11px;
   }
 
-  .tile-pet img {
-    padding: 10px 10px 56px;
+  .floating-item {
+    --size: 110px !important;
   }
 
-  .quick-panel {
-    position: relative;
-    right: auto;
-    bottom: auto;
-    display: grid;
-    width: min(100%, 420px);
-    grid-template-columns: 1fr;
-    margin-top: 4px;
+  .platform {
+    width: min(360px, 58vw);
+    bottom: 9%;
+  }
+
+  .backpack-stage {
+    width: min(330px, 56vw);
+    bottom: 24%;
+  }
+
+  .enter-link {
+    right: 50%;
+    bottom: 20px;
+    transform: translateX(50%);
+  }
+
+  .enter-link:hover {
+    transform: translate(50%, -2px);
   }
 }
 
-@media (max-width: 640px) {
-  .hero {
-    padding: 34px 16px 28px;
+@media (max-width: 560px) {
+  .hero-copy h1 {
+    font-size: 48px;
   }
 
-  .center-title h1 {
-    font-size: clamp(48px, 17vw, 76px);
+  .kicker {
+    font-size: 8px;
   }
 
-  .lead {
-    font-size: 15px;
+  .background-word {
+    inset: 14% 0 0;
+    font-size: 25vw;
   }
 
-  .hero-actions {
-    justify-content: stretch;
+  .object-field {
+    inset: 10% -10% 14%;
   }
 
-  .primary-action,
-  .secondary-action {
-    width: 100%;
+  .floating-item {
+    --size: 84px !important;
   }
 
-  .tile-chat,
-  .tile-pet {
-    aspect-ratio: 1.55;
+  .platform {
+    width: 270px;
+    bottom: 12%;
   }
 
-  .sun-mark {
-    top: 30%;
+  .backpack-stage {
+    width: 260px;
+    height: 220px;
+    bottom: 26%;
+  }
+
+  .backpack-trigger {
+    transform: translateX(-50%) scale(0.82);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .floating-item,
+  .enter-link {
+    transition-duration: 0.01ms !important;
   }
 }
 </style>

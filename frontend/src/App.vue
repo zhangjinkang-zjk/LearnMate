@@ -1,9 +1,11 @@
 <template>
-  <TopNav />
+  <TopNav v-if="!immersiveRoute" />
 
   <HomeNoticePopup />
 
-  <div class="slide-stage">
+  <div v-if="fadeActive" class="fade-transition" aria-hidden="true"></div>
+
+  <div class="slide-stage" :class="{ 'slide-stage--home': immersiveRoute }">
     <!-- Current page -->
     <div
       class="slide-pane"
@@ -28,7 +30,7 @@
 </template>
 
 <script setup>
-import { ref, watch, nextTick, shallowRef, onMounted } from 'vue'
+import { computed, ref, watch, nextTick, shallowRef, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import TopNav from './components/TopNav.vue'
 import StudyPet from './components/StudyPet.vue'
@@ -36,6 +38,7 @@ import HomeNoticePopup from './features/homeNotice/HomeNoticePopup.vue'
 
 const route = useRoute()
 const router = useRouter()
+const immersiveRoute = computed(() => route.path === '/' || route.path === '/select-identity')
 
 // ---- route-name → component map ----
 const compByRouteName = Object.create(null)
@@ -87,11 +90,36 @@ const nextPane = shallowRef(null)
 const currentX = ref(0)
 const nextX = ref(100)
 const isSliding = ref(false)
+const fadeActive = ref(false)
 
 let lastPath = null
 let locked = false
 
 const DURATION = 550  // ms, must match CSS
+const FADE_DURATION = 760
+
+async function animateFade(fromPath, toPath) {
+  locked = true
+
+  const comp = resolveComponent(route)
+  if (!comp) { locked = false; return }
+
+  const key = toPath + '::' + Date.now()
+  isSliding.value = false
+  nextPane.value = null
+  fadeActive.value = true
+
+  await new Promise(resolve => setTimeout(resolve, FADE_DURATION / 2))
+
+  currentPane.value = { key, component: comp }
+  currentX.value = 0
+  nextX.value = 100
+  await new Promise(resolve => setTimeout(resolve, FADE_DURATION / 2))
+
+  fadeActive.value = false
+  lastPath = toPath
+  locked = false
+}
 
 async function animate(fromPath, toPath) {
   if (locked) return
@@ -99,6 +127,11 @@ async function animate(fromPath, toPath) {
 
   const comp = resolveComponent(route)
   if (!comp) { locked = false; return }
+
+  if (fromPath === '/' && toPath === '/select-identity') {
+    await animateFade(fromPath, toPath)
+    return
+  }
 
   const key = toPath + '::' + Date.now()
 
@@ -186,6 +219,10 @@ watch(
   background: var(--color-stage-bg, #f1f7fb);
 }
 
+.slide-stage--home {
+  inset: 0;
+}
+
 /* ---- pane: absolutely positioned, GPU-composited ---- */
 .slide-pane {
   position: absolute;
@@ -208,8 +245,21 @@ watch(
   transition: transform 0.55s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+.fade-transition {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  pointer-events: none;
+  background: #1e3c34;
+  animation: fadeVeil 0.76s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+@keyframes fadeVeil {
+  0%, 100% { opacity: 0; }
+  42%, 58% { opacity: 1; }
+}
+
 /* ---- transparent page backgrounds → stage background shows through ---- */
-.slide-pane .home-cover,
 .slide-pane .chat-page,
 .slide-pane .resource-center-page,
 .slide-pane .resource-page,
@@ -234,6 +284,10 @@ watch(
 @media (prefers-reduced-motion: reduce) {
   .slide-pane.moving {
     transition: none;
+  }
+
+  .fade-transition {
+    animation: none;
   }
 }
 </style>

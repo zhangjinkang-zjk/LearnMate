@@ -148,8 +148,7 @@ html[data-theme="dark"] .question-bank-page,
 html[data-theme="dark"] .quiz-runner-page,
 html[data-theme="dark"] .import-page,
 html[data-theme="dark"] .presentation-player,
-html[data-theme="dark"] .admin-page,
-html[data-theme="dark"] .home-cover {
+html[data-theme="dark"] .admin-page {
   background: #0f1724 !important;
   color: #c8d6e5 !important;
 }
@@ -439,10 +438,6 @@ html[data-theme="dark"] .center-title h1 span {
 
 html[data-theme="dark"] .center-title .eyebrow {
   color: #7a8ba0 !important;
-}
-
-html[data-theme="dark"] .home-cover {
-  color: #c8d6e5 !important;
 }
 
 /* ============================================================
