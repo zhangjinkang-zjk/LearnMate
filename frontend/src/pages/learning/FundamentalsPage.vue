@@ -101,6 +101,19 @@
                 <Network :size="16" />
                 <span>{{ isMindmapLoading ? '读取中' : mindmapError ? '重试结构' : '知识结构' }}</span>
               </button>
+              <button
+                v-if="pptResource"
+                type="button"
+                role="tab"
+                :aria-selected="resourceView === 'ppt'"
+                :class="{ 'is-active': resourceView === 'ppt' }"
+                :disabled="isPptLoading"
+                :title="pptError || '查看本章 PPT 辅助材料'"
+                @click="showPpt"
+              >
+                <Presentation :size="16" />
+                <span>{{ isPptLoading ? '读取中' : pptError ? '重试 PPT' : 'PPT 辅助' }}</span>
+              </button>
             </div>
           </nav>
 
@@ -136,15 +149,15 @@
               </div>
 
               <MarkdownDocument
-                v-else
+                v-else-if="resourceView === 'document'"
                 wide
-                :paginate="resourceView === 'document'"
+                :paginate="true"
                 :show-title="false"
-                :title="resourceView === 'mindmap' ? `${activeNode.title} · 知识结构` : activeNode.title"
-                :content="visibleResourceContent"
+                :title="activeNode.title"
+                :content="documentContent"
                 :tags="activeNode.knowledge_tags || []"
                 :chapter-number="activeNodeIndex + 1"
-                :empty-message="resourceView === 'mindmap' ? '本章暂时没有知识结构材料。' : '本章文档尚未生成。'"
+                empty-message="本章文档尚未生成。"
               >
                 <template #pagination-action="{ isLastPage }">
                   <button
@@ -159,6 +172,30 @@
                   </button>
                 </template>
               </MarkdownDocument>
+
+              <div v-else-if="resourceView === 'ppt' && isPptLoading" class="document-loading surface" aria-live="polite">
+                <LoaderCircle class="spin" :size="25" />
+                <strong>正在读取 PPT 辅助材料</strong>
+                <p>主讲文档不受影响，材料读取完成后会自动显示。</p>
+              </div>
+
+              <PptPreview
+                v-else-if="resourceView === 'ppt'"
+                :content="pptContent"
+                :title="activeNode.title"
+              />
+
+              <div v-else-if="resourceView === 'mindmap' && isMindmapLoading" class="document-loading surface" aria-live="polite">
+                <LoaderCircle class="spin" :size="25" />
+                <strong>正在读取知识结构</strong>
+                <p>主讲文档不受影响，结构材料读取完成后会自动显示。</p>
+              </div>
+
+              <MindmapPreview
+                v-else-if="resourceView === 'mindmap'"
+                :content="mindmapContent"
+                :title="activeNode.title"
+              />
 
               <footer v-if="resourceView !== 'document'" class="chapter-footer surface">
                 <button class="button button--quiet" type="button" :disabled="!previousNode" @click="previousNode && selectNode(previousNode.id)">
@@ -247,12 +284,14 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, BookOpenText, CircleAlert, ListTree, LoaderCircle, Network, Route, X } from 'lucide-vue-next'
+import { ArrowLeft, ArrowRight, BookOpenText, CircleAlert, ListTree, LoaderCircle, Network, Presentation, Route, X } from 'lucide-vue-next'
 import ChapterCheck from '@/features/fundamentals/ChapterCheck.vue'
 import ChapterRail from '@/features/fundamentals/ChapterRail.vue'
 import LearningAssistant from '@/features/fundamentals/LearningAssistant.vue'
 import MarkdownDocument from '@/features/fundamentals/MarkdownDocument.vue'
+import MindmapPreview from '@/features/fundamentals/MindmapPreview.vue'
 import PathPicker from '@/features/fundamentals/PathPicker.vue'
+import PptPreview from '@/features/fundamentals/PptPreview.vue'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { readPortrait } from '@/shared/api/portraitApi'
 
@@ -269,15 +308,21 @@ const activeNodeId = ref(null)
 const nodeDetail = ref(null)
 const documentResource = ref(null)
 const documentContent = ref('')
+const pptResource = ref(null)
+const pptContent = ref('')
 const mindmapResource = ref(null)
 const mindmapContent = ref('')
 const resourceView = ref('document')
 const isResourceLoading = ref(false)
+const isResourceGenerating = ref(false)
 const isMindmapLoading = ref(false)
+const isPptLoading = ref(false)
 const navigationDrawer = ref(null)
 const resourceLoadingMessage = ref('正在读取本章文档')
 const documentError = ref('')
 const mindmapError = ref('')
+const pptError = ref('')
+const resourceGenerationError = ref('')
 const isChecking = ref(false)
 let resourceController = null
 let nodeLoadVersion = 0
@@ -297,12 +342,13 @@ const nextNode = computed(() => {
   const candidate = learningPath.value.nodes[activeNodeIndex.value + 1]
   return candidate && candidate.status !== 'locked' ? candidate : null
 })
-const visibleResourceContent = computed(() => resourceView.value === 'mindmap' ? mindmapContent.value : documentContent.value)
 const estimatedReadMinutes = computed(() => Math.max(3, Math.ceil(documentContent.value.replace(/\s/g, '').length / 420)))
 const resourceStatusLabel = computed(() => {
   if (isResourceLoading.value) return '正在准备本章'
-  if (documentError.value) return '同步异常'
-  if (documentContent.value) return '内容已同步'
+  if (documentError.value) return '主讲文档异常'
+  if (resourceGenerationError.value) return '部分辅助材料异常'
+  if (isResourceGenerating.value) return '主讲文档已就绪，辅助材料生成中'
+  if (documentContent.value) return '本章材料已同步'
   return '等待内容'
 })
 const primaryActionLabel = computed(() => {
@@ -356,7 +402,9 @@ function mindmapTreeToMarkdown(tree) {
 
 function normalizeResourceContent(content, resourceType = 'document') {
   if (content && typeof content === 'object') {
-    if (resourceType === 'mindmap' || Array.isArray(content.children)) return mindmapTreeToMarkdown(content)
+    if (resourceType === 'mindmap') return content
+    if (resourceType === 'ppt' && (Array.isArray(content.slides) || Array.isArray(content.pages) || Array.isArray(content.items))) return content
+    if (Array.isArray(content.children)) return resourceType === 'mindmap' ? content : mindmapTreeToMarkdown(content)
     const nestedContent = content.markdown ?? content.content ?? content.document ?? content.body
     return nestedContent === undefined ? '' : normalizeResourceContent(nestedContent, resourceType)
   }
@@ -365,6 +413,7 @@ function normalizeResourceContent(content, resourceType = 'document') {
   if (!trimmed.startsWith('{')) return trimmed
   try {
     const parsed = JSON.parse(trimmed)
+    if (resourceType === 'mindmap' || (resourceType === 'ppt' && (Array.isArray(parsed?.slides) || Array.isArray(parsed?.pages) || Array.isArray(parsed?.items)))) return parsed
     return normalizeResourceContent(parsed, resourceType) || trimmed
   } catch {
     return trimmed
@@ -373,6 +422,74 @@ function normalizeResourceContent(content, resourceType = 'document') {
 
 function findResource(resources, type) {
   return (resources || []).find((resource) => resource.resource_type === type) || null
+}
+
+const FUNDAMENTALS_RESOURCE_TYPES = ['document', 'ppt', 'mindmap']
+
+function resourceSummaryFromEvent(event) {
+  if (!event?.resource_type) return null
+  return {
+    ...event,
+    id: event.resource_id || event.id || null,
+    resource_id: event.resource_id || event.id || null,
+    topic: event.topic || event.title || activeNode.value?.title || '',
+    resource_type: event.resource_type,
+  }
+}
+
+function assignResourceSummary(summary) {
+  if (!summary?.resource_type) return
+  if (summary.resource_type === 'document') documentResource.value = { ...documentResource.value, ...summary }
+  if (summary.resource_type === 'ppt') pptResource.value = { ...pptResource.value, ...summary }
+  if (summary.resource_type === 'mindmap') mindmapResource.value = { ...mindmapResource.value, ...summary }
+}
+
+function setResourceContent(type, resource, content) {
+  if (type === 'document') {
+    documentResource.value = { ...documentResource.value, ...resource }
+    documentContent.value = normalizeResourceContent(content, 'document')
+  } else if (type === 'ppt') {
+    pptResource.value = { ...pptResource.value, ...resource }
+    pptContent.value = normalizeResourceContent(content, 'ppt')
+  } else if (type === 'mindmap') {
+    mindmapResource.value = { ...mindmapResource.value, ...resource }
+    mindmapContent.value = normalizeResourceContent(content, 'mindmap')
+  }
+}
+
+function resourceContent(type) {
+  if (type === 'document') return documentContent.value
+  if (type === 'ppt') return pptContent.value
+  if (type === 'mindmap') return mindmapContent.value
+  return ''
+}
+
+function setResourceError(type, message) {
+  if (type === 'document') documentError.value = message
+  if (type === 'ppt') pptError.value = message
+  if (type === 'mindmap') mindmapError.value = message
+}
+
+async function hydrateResource(type, summary, loadVersion) {
+  if (!summary || loadVersion !== nodeLoadVersion) return false
+  assignResourceSummary(summary)
+  const suppliedContent = summary.content
+  if (suppliedContent !== undefined && suppliedContent !== null && suppliedContent !== '') {
+    setResourceContent(type, summary, suppliedContent)
+    return Boolean(resourceContent(type))
+  }
+  const resourceId = normalizeResourceId(summary)
+  if (!resourceId || resourceContent(type)) return Boolean(resourceContent(type))
+  try {
+    const resource = await fundamentalsApi.getResource(resourceId)
+    if (loadVersion !== nodeLoadVersion) return false
+    setResourceContent(type, resource || summary, resource?.content)
+    if (!resourceContent(type)) throw new Error(type === 'document' ? '本章文档内容为空' : '辅助材料内容为空')
+    return true
+  } catch (error) {
+    if (loadVersion === nodeLoadVersion) setResourceError(type, errorDetail(error, '资源内容读取失败。'))
+    return false
+  }
 }
 
 function progressSummary(path, progress = null) {
@@ -687,69 +804,123 @@ async function loadActiveNode() {
   resourceController?.abort()
   resourceController = new AbortController()
   isResourceLoading.value = true
+  isResourceGenerating.value = true
   resourceLoadingMessage.value = '正在读取本章文档'
   documentError.value = ''
   mindmapError.value = ''
+  pptError.value = ''
+  resourceGenerationError.value = ''
   nodeDetail.value = null
   documentResource.value = null
   documentContent.value = ''
+  pptResource.value = null
+  pptContent.value = ''
   mindmapResource.value = null
   mindmapContent.value = ''
   openedAt = 0
 
+  let resolveDocumentReady
+  let documentReadyMarked = false
+  const documentReady = new Promise((resolve) => { resolveDocumentReady = resolve })
+  const markDocumentReady = () => {
+    if (documentReadyMarked) return
+    documentReadyMarked = true
+    isResourceLoading.value = false
+    resolveDocumentReady(true)
+  }
+
   try {
-    let detail = await fundamentalsApi.getNode(learningPath.value.path_id, activeNode.value.id)
+    const detail = await fundamentalsApi.getNode(learningPath.value.path_id, activeNode.value.id)
     if (loadVersion !== nodeLoadVersion) return
     nodeDetail.value = detail
-    let resources = detail?.progress?.resources || activeNode.value.resources || []
-    let documentSummary = findResource(resources, 'document')
+    const resources = detail?.progress?.resources || activeNode.value.resources || []
+    const documentSummary = findResource(resources, 'document')
+    const pptSummary = findResource(resources, 'ppt')
+    const mindmapSummary = findResource(resources, 'mindmap')
+    assignResourceSummary(pptSummary)
+    assignResourceSummary(mindmapSummary)
+
+    if (documentSummary) {
+      resourceLoadingMessage.value = '正在读取本章文档'
+      if (await hydrateResource('document', documentSummary, loadVersion)) markDocumentReady()
+    }
 
     // Always pass through the idempotent path-node resource endpoint.  The
     // backend decides whether to reuse a validated binding or generate a
     // missing/stale chapter; the page must not infer that from a summary row.
-    resourceLoadingMessage.value = documentSummary
-      ? '正在校验本章资源'
-      : '正在调用资源生成服务'
-    await fundamentalsApi.generateResources(
+    resourceLoadingMessage.value = documentContent.value
+      ? '主讲文档已就绪，正在准备辅助材料'
+      : documentSummary ? '正在校验本章资源' : '正在调用资源生成服务'
+    const requestedTypes = [...new Set([
+      ...FUNDAMENTALS_RESOURCE_TYPES,
+      ...(detail?.resource_types || activeNode.value.resource_types || []),
+    ])]
+    const streamPromise = fundamentalsApi.generateResources(
       learningPath.value.path_id,
       activeNode.value.id,
       (event) => {
+        if (loadVersion !== nodeLoadVersion) return
         if (event?.type === 'status') {
           resourceLoadingMessage.value = event.msg || event.message || resourceLoadingMessage.value
         }
         if (event?.type === 'resource') {
-          resourceLoadingMessage.value = event.resource_type === 'document'
+          const summary = resourceSummaryFromEvent(event)
+          if (!summary) return
+          assignResourceSummary(summary)
+          const type = summary.resource_type
+          resourceLoadingMessage.value = type === 'document'
             ? '主讲文档已准备，正在读取正文'
-            : '章节资源已准备'
+            : `${type === 'ppt' ? 'PPT' : '知识结构'} 已准备，正在同步`
+          void hydrateResource(type, summary, loadVersion).then((loaded) => {
+            if (type === 'document' && loaded) markDocumentReady()
+          })
         }
         if (event?.type === 'error') {
-          documentError.value = event.detail || event.message || '本章资源生成失败'
+          const message = event.detail || event.message || '本章资源生成失败'
+          if (!documentContent.value) documentError.value = message
+          else resourceGenerationError.value = message
         }
       },
       resourceController.signal,
-      detail?.resource_types || activeNode.value.resource_types,
+      requestedTypes,
     )
-    if (documentError.value) throw new Error(documentError.value)
-    detail = await fundamentalsApi.getNode(learningPath.value.path_id, activeNode.value.id)
-    if (loadVersion !== nodeLoadVersion) return
-    nodeDetail.value = detail
-    resources = detail?.progress?.resources || []
-    documentSummary = findResource(resources, 'document')
 
-    if (!documentSummary) throw new Error('资源生成完成，但没有找到本章主讲文档')
-    const fullDocument = await fundamentalsApi.getResource(normalizeResourceId(documentSummary))
+    // The stream stays alive while PPT and mind-map resources are generated.
+    // Only the primary document gates the reading view.
+    void streamPromise
+      .then(async () => {
+        if (loadVersion !== nodeLoadVersion) return
+        isResourceGenerating.value = false
+        if (!documentContent.value && !documentError.value) {
+          const refreshed = await fundamentalsApi.getNode(learningPath.value.path_id, activeNode.value.id).catch(() => null)
+          const refreshedDocument = findResource(refreshed?.progress?.resources, 'document')
+          if (refreshedDocument && await hydrateResource('document', refreshedDocument, loadVersion)) markDocumentReady()
+        }
+        if (!documentContent.value && !documentError.value) documentError.value = '资源生成完成，但没有找到本章主讲文档'
+        if (!documentContent.value) isResourceLoading.value = false
+      })
+      .catch((error) => {
+        if (error?.name === 'AbortError' || loadVersion !== nodeLoadVersion) return
+        isResourceGenerating.value = false
+        if (!documentContent.value) {
+          documentError.value = errorDetail(error, '本章学习材料加载失败。')
+          isResourceLoading.value = false
+        } else {
+          resourceGenerationError.value = errorDetail(error, '辅助材料生成失败，主讲文档仍可继续学习。')
+        }
+      })
+
+    if (!documentReadyMarked) await Promise.race([documentReady, streamPromise])
     if (loadVersion !== nodeLoadVersion) return
-    documentResource.value = fullDocument
-    documentContent.value = normalizeResourceContent(fullDocument?.content, 'document')
-    mindmapResource.value = findResource(resources, 'mindmap')
-    if (!documentContent.value) throw new Error('本章文档内容为空，请重新生成后再试')
-    if (document.visibilityState === 'visible') openedAt = Date.now()
+    if (documentContent.value && document.visibilityState === 'visible') openedAt = Date.now()
   } catch (error) {
     if (error.name !== 'AbortError' && loadVersion === nodeLoadVersion) {
       documentError.value = errorDetail(error, '本章学习材料加载失败。')
+      isResourceLoading.value = false
+      isResourceGenerating.value = false
     }
   } finally {
-    if (loadVersion === nodeLoadVersion) isResourceLoading.value = false
+    if (loadVersion === nodeLoadVersion && documentContent.value) isResourceLoading.value = false
   }
 }
 
@@ -762,15 +933,34 @@ async function showMindmap() {
   isMindmapLoading.value = true
   mindmapError.value = ''
   try {
-    const resource = await fundamentalsApi.getResource(normalizeResourceId(mindmapResource.value))
-    mindmapContent.value = normalizeResourceContent(resource?.content, 'mindmap')
-    if (!mindmapContent.value) throw new Error('知识结构内容为空')
+    const loaded = await hydrateResource('mindmap', mindmapResource.value, nodeLoadVersion)
+    if (!loaded) throw new Error(mindmapError.value || '知识结构内容为空')
   } catch (error) {
     mindmapError.value = errorDetail(error, '知识结构加载失败。')
     resourceView.value = 'document'
     if (document.visibilityState === 'visible') openedAt = Date.now()
   } finally {
     isMindmapLoading.value = false
+  }
+}
+
+async function showPpt() {
+  if (!pptResource.value || isPptLoading.value) return
+  await reportReadDuration(true)
+  resourceView.value = 'ppt'
+  openedAt = 0
+  if (pptContent.value) return
+  isPptLoading.value = true
+  pptError.value = ''
+  try {
+    const loaded = await hydrateResource('ppt', pptResource.value, nodeLoadVersion)
+    if (!loaded) throw new Error(pptError.value || 'PPT 内容为空')
+  } catch (error) {
+    pptError.value = errorDetail(error, 'PPT 辅助材料加载失败。')
+    resourceView.value = 'document'
+    if (document.visibilityState === 'visible') openedAt = Date.now()
+  } finally {
+    isPptLoading.value = false
   }
 }
 

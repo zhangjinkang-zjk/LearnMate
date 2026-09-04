@@ -23,7 +23,7 @@ system: |
   {feedback}
 
   ## 任务
-  为上述「本组需生成的节点」生成详细信息：knowledge_tags、prerequisites、resource_types、quiz_config。
+  为上述「本组需生成的节点」生成详细信息：knowledge_tags、prerequisites、resource_types、quiz_config，并保留大纲中的 difficulty_score。
   topic_outline 中可能包含 module、learning_goal、prerequisite_topics、key_points、micro_example 等规划字段；你必须继承这些字段的教学意图，不要重新发散成另一套路径。
 
   ## 约束
@@ -33,6 +33,7 @@ system: |
   4. quiz_config：count 默认 3、threshold 默认 0.7
   5. order_index 必须与 topic_outline 中的位置一致
   6. 节点不能只有标题：标签、资源类型和测验配置要体现该节点的 learning_goal 和 micro_example
+  7. difficulty_score 必须直接继承 topic_outline 对应节点的分数；第一个节点固定为 1.0，后续使用相对难度倍数（可保留两位小数），如果大纲没有分数才根据认知层级、先修关系和任务复杂度补充。它表示节点难度，不表示用户掌握度。
 
   ## 输出格式
   纯 JSON，第一个字符 `[`，最后一个字符 `]`。禁止代码块包裹。
@@ -44,6 +45,7 @@ system: |
       "order_index": 1,
       "prerequisites": [],
       "resource_types": ["document", "mindmap"],
-      "quiz_config": {{"count": 3, "threshold": 0.7}}
+      "quiz_config": {{"count": 3, "threshold": 0.7}},
+      "difficulty_score": 1.0
     }}
   ]

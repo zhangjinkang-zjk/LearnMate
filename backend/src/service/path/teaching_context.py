@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 
-PATH_DEFAULT_RESOURCE_TYPES = ("document", "mindmap")
+PATH_DEFAULT_RESOURCE_TYPES = ("document", "ppt", "mindmap")
 _TEACHING_SPEC_KEYS = (
     "module",
     "cognitive_level",
