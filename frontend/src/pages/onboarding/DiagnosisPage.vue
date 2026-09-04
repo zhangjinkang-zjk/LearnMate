@@ -18,7 +18,7 @@
       <div v-if="currentQuestion && !isFinished" class="answer-panel">
         <p class="answer-label">选择最符合你当前理解的一项</p>
         <div class="answer-list">
-          <button v-for="option in currentQuestion.options" :key="option" class="answer-option" :class="{ selected: selectedAnswer === answerKey(option) }" type="button" :disabled="isLoading" @click="selectedAnswer = answerKey(option)">
+          <button v-for="(option, optionIndex) in currentQuestion.options" :key="option" class="answer-option" :class="{ selected: selectedAnswer === answerKey(option, optionIndex) }" type="button" :disabled="isLoading" @click="selectedAnswer = answerKey(option, optionIndex)">
             <span class="answer-dot"></span>{{ option }}
           </button>
         </div>
@@ -55,9 +55,9 @@ const context = computed(() => ({
   goal: learningState.goal || localStorage.getItem('learnmate_goal') || '',
 }))
 
-function answerKey(option) {
+function answerKey(option, index = 0) {
   const match = String(option).match(/^\s*([A-D])(?:[.、)）]|\s)/i)
-  return match ? match[1].toUpperCase() : String(option)
+  return match ? match[1].toUpperCase() : String.fromCharCode(65 + index)
 }
 
 function questionText(question) {
@@ -86,7 +86,7 @@ async function startDiagnosis() {
 
 async function submitAnswer() {
   if (!selectedAnswer.value || !currentQuestion.value || isLoading.value) return
-  const selectedOption = currentQuestion.value.options?.find((option) => answerKey(option) === selectedAnswer.value) || selectedAnswer.value
+  const selectedOption = currentQuestion.value.options?.find((option, index) => answerKey(option, index) === selectedAnswer.value) || selectedAnswer.value
   messages.value.push({ role: 'user', text: selectedOption })
   isLoading.value = true
   errorMessage.value = ''
