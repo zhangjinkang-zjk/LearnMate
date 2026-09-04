@@ -2,6 +2,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 
 import HomePage from '@/pages/home/HomePage.vue'
 import DirectionSetupPage from '@/pages/onboarding/DirectionSetupPage.vue'
+import PortraitSummaryPage from '@/pages/onboarding/PortraitSummaryPage.vue'
 import LearnmateChatView from '@/features/learnmateFlow/LearnmateChatView.vue'
 import DiagnosisPage from '@/pages/onboarding/DiagnosisPage.vue'
 import DiagnosisResultPage from '@/pages/onboarding/DiagnosisResultPage.vue'
@@ -12,6 +13,9 @@ import NavigationPage from '@/pages/learning/NavigationPage.vue'
 import WorkspacePage from '@/pages/learning/WorkspacePage.vue'
 import ResourceLibraryPage from '@/pages/resources/ResourceLibraryPage.vue'
 import SettingsPage from '@/pages/settings/SettingsPage.vue'
+import ProfilePage from '@/pages/profile/ProfilePage.vue'
+import NotificationsPage from '@/pages/notifications/NotificationsPage.vue'
+import PlannerPage from '@/pages/planner/PlannerPage.vue'
 import LoginPage from '@/pages/auth/LoginPage.vue'
 
 const router = createRouter({
@@ -22,6 +26,7 @@ const router = createRouter({
     { path: '/onboarding/direction', name: 'directionSetup', component: DirectionSetupPage, meta: { layout: 'immersive', requiresAuth: true } },
     { path: '/select-identity', name: 'identitySelect', component: DirectionSetupPage, meta: { layout: 'immersive' } },
     { path: '/learnmate-chat', name: 'learnmateChat', component: LearnmateChatView, meta: { layout: 'immersive' } },
+    { path: '/learnmate-summary', name: 'learnmateSummary', component: PortraitSummaryPage, meta: { layout: 'immersive' } },
     { path: '/onboarding/diagnosis', name: 'diagnosis', component: DiagnosisPage, meta: { layout: 'immersive', requiresAuth: true } },
     { path: '/onboarding/diagnosis/result', name: 'diagnosisResult', component: DiagnosisResultPage, meta: { layout: 'immersive', requiresAuth: true } },
     { path: '/learning/overview', name: 'learningOverview', component: OverviewPage, meta: { requiresAuth: true } },
@@ -32,6 +37,9 @@ const router = createRouter({
     { path: '/learning/workspace', name: 'learningWorkspace', component: WorkspacePage, meta: { requiresAuth: true } },
     { path: '/resources', name: 'resourceLibrary', component: ResourceLibraryPage, meta: { requiresAuth: true } },
     { path: '/settings', name: 'settings', component: SettingsPage, meta: { requiresAuth: true } },
+    { path: '/profile', name: 'profile', component: ProfilePage, meta: { requiresAuth: true } },
+    { path: '/notifications', name: 'notifications', component: NotificationsPage, meta: { requiresAuth: true } },
+    { path: '/planner', name: 'planner', component: PlannerPage, meta: { requiresAuth: true } },
     { path: '/:pathMatch(.*)*', redirect: '/learning/overview' },
   ],
 })

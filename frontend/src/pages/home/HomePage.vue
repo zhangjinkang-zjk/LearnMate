@@ -18,10 +18,10 @@
         </p>
       </div>
 
-      <router-link class="login-link" to="/login">
-        <span>LOGIN</span>
+      <button class="login-link" type="button" @click="handleTopLogin">
+        <span>{{ isAuthenticated ? (displayUsername || "ACCOUNT") : "LOGIN" }}</span>
         <span class="login-arrow" aria-hidden="true">↗</span>
-      </router-link>
+      </button>
 
       <div class="object-field" aria-label="Learning tools">
         <button
@@ -60,17 +60,64 @@
         <span class="platform-edge"></span>
       </div>
 
-      <router-link class="enter-link" to="/select-identity">
+      <button class="enter-link" type="button" @click="handleEnter">
         <span>LET'S GO</span>
         <span class="enter-arrow" aria-hidden="true">↗</span>
-      </router-link>
+      </button>
+
+      <div v-if="isLoginOpen" class="login-modal-backdrop" @click.self="closeLogin">
+        <section class="login-modal" role="dialog" aria-modal="true" aria-labelledby="login-modal-title">
+          <button class="login-modal-close" type="button" aria-label="Close login" @click="closeLogin">×</button>
+          <p class="login-modal-kicker">LEARNMATE ACCESS</p>
+          <h2 id="login-modal-title">{{ isRegistering ? "Create your account" : "Welcome back" }}</h2>
+          <p class="login-modal-intro">
+            {{ isRegistering ? "Save your learning path and keep your progress in sync." : "Log in to continue your learning journey." }}
+          </p>
+          <form class="login-modal-form" @submit.prevent="submitLogin">
+            <label>
+              <span>USERNAME</span>
+              <input v-model.trim="loginUsername" type="text" autocomplete="username" required />
+            </label>
+            <label v-if="isRegistering">
+              <span>EMAIL</span>
+              <input v-model.trim="loginEmail" type="email" autocomplete="email" required />
+            </label>
+            <label v-if="isRegistering">
+              <span>EMAIL CODE</span>
+              <div class="login-modal-code-row">
+                <input v-model.trim="loginCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required />
+                <button class="login-modal-code" type="button" :disabled="isSendingCode || codeCountdown > 0 || !loginEmail" @click="sendCode">
+                  {{ isSendingCode ? "SENDING" : codeCountdown > 0 ? `${codeCountdown}s` : "GET CODE" }}
+                </button>
+              </div>
+            </label>
+            <label>
+              <span>PASSWORD</span>
+              <input v-model="loginPassword" type="password" :autocomplete="isRegistering ? 'new-password' : 'current-password'" required />
+            </label>
+            <label v-if="isRegistering">
+              <span>CONFIRM PASSWORD</span>
+              <input v-model="loginConfirmPassword" type="password" autocomplete="new-password" required />
+            </label>
+            <p v-if="loginError" class="login-modal-error">{{ loginError }}</p>
+            <button class="login-modal-submit" type="submit" :disabled="isLoggingIn">
+              <span>{{ isLoggingIn ? (isRegistering ? "CREATING..." : "LOGGING IN...") : (isRegistering ? "CREATE ACCOUNT" : "LOGIN") }}</span>
+              <span aria-hidden="true">↗</span>
+            </button>
+          </form>
+          <button class="login-modal-register" type="button" @click="toggleAuthMode">
+            {{ isRegistering ? "Already have an account? Log in" : "Create an account" }}
+          </button>
+        </section>
+      </div>
     </section>
   </main>
 </template>
 
 <script setup>
-import { onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
+import { authApi } from "../../shared/api/authApi";
 
 import tabletImage from "../../shared/assets/home/hdi-circle-8e23f1ab774009a1e1d254d85249c2f3-7g50i6bj4rpq-cutout.png";
 import laptopImage from "../../shared/assets/home/Late_2016_MacBook_Pro-cutout.png";
@@ -87,6 +134,112 @@ import backpackImage from "../../shared/assets/home/65f0199b0fe8d.png";
 
 const router = useRouter();
 const isOpen = ref(false);
+const isLoginOpen = ref(false);
+const isAuthenticated = ref(Boolean(localStorage.getItem("token")));
+const displayUsername = ref(localStorage.getItem("learnmate_username") || "");
+const isLoggingIn = ref(false);
+const loginUsername = ref("");
+const loginEmail = ref("");
+const loginCode = ref("");
+const loginPassword = ref("");
+const loginConfirmPassword = ref("");
+const isRegistering = ref(false);
+const isSendingCode = ref(false);
+const codeCountdown = ref(0);
+let codeTimer;
+const loginError = ref("");
+const loginIntent = ref("overview");
+
+const openLogin = (intent = "overview") => {
+  loginIntent.value = intent;
+  loginError.value = "";
+  isLoginOpen.value = true;
+};
+
+const handleTopLogin = () => {
+  if (isAuthenticated.value) {
+    router.push("/learning/overview");
+    return;
+  }
+  openLogin("overview");
+};
+
+const handleEnter = () => {
+  if (isAuthenticated.value) {
+    router.push(`/select-identity?fresh=${Date.now()}`);
+    return;
+  }
+  openLogin("identity");
+};
+
+const closeLogin = () => {
+  if (isLoggingIn.value) return;
+  isLoginOpen.value = false;
+};
+
+const toggleAuthMode = () => {
+  isRegistering.value = !isRegistering.value;
+  loginEmail.value = "";
+  loginCode.value = "";
+  loginPassword.value = "";
+  loginConfirmPassword.value = "";
+  loginError.value = "";
+  if (codeTimer) window.clearInterval(codeTimer);
+  codeTimer = undefined;
+  codeCountdown.value = 0;
+};
+
+const sendCode = async () => {
+  if (isSendingCode.value || codeCountdown.value > 0 || !loginEmail.value) return;
+  isSendingCode.value = true;
+  loginError.value = "";
+  try {
+    await authApi.sendEmailCode(loginEmail.value);
+    codeCountdown.value = 60;
+    codeTimer = window.setInterval(() => {
+      codeCountdown.value -= 1;
+      if (codeCountdown.value <= 0) {
+        window.clearInterval(codeTimer);
+        codeTimer = undefined;
+      }
+    }, 1000);
+  } catch (error) {
+    loginError.value = error?.message || "Could not send the code.";
+  } finally {
+    isSendingCode.value = false;
+  }
+};
+
+const submitLogin = async () => {
+  if (isLoggingIn.value) return;
+  isLoggingIn.value = true;
+  loginError.value = "";
+  try {
+    if (isRegistering.value && loginPassword.value !== loginConfirmPassword.value) {
+      throw new Error("Passwords do not match.");
+    }
+    const data = isRegistering.value
+      ? await authApi.registerByEmail(loginUsername.value, loginEmail.value, loginPassword.value, loginCode.value)
+      : await authApi.login(loginUsername.value, loginPassword.value);
+    localStorage.setItem("token", data.token);
+    const username = data.username || loginUsername.value;
+    if (username) {
+      localStorage.setItem("learnmate_username", username);
+      displayUsername.value = username;
+    }
+    isAuthenticated.value = true;
+    isLoginOpen.value = false;
+    router.push(loginIntent.value === "overview" ? "/learning/overview" : `/select-identity?fresh=${Date.now()}`);
+  } catch (error) {
+    loginError.value = error?.message || "Login failed. Please try again.";
+  } finally {
+    isLoggingIn.value = false;
+  }
+};
+
+onBeforeUnmount(() => {
+  if (codeTimer) window.clearInterval(codeTimer);
+});
 
 const item = (image, file, label, x, y, rotate, size, delay, to = "") => ({
   image,
@@ -408,6 +561,11 @@ const replayAnimation = () => {
   font-size: 11px;
   font-weight: 850;
   letter-spacing: 0.14em;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
   text-decoration: none;
   transition: color 0.2s ease, transform 0.2s ease;
 }
@@ -725,6 +883,9 @@ const replayAnimation = () => {
   font-weight: 900;
   letter-spacing: 0.12em;
   text-decoration: none;
+  border: 0;
+  font-family: inherit;
+  cursor: pointer;
   box-shadow: 0 12px 26px rgba(4, 20, 15, 0.3), inset 0 1px 0 rgba(255, 255, 210, 0.62);
   transition: color 0.2s ease, background 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
 }
@@ -739,6 +900,211 @@ const replayAnimation = () => {
 .enter-arrow {
   font-size: 20px;
   line-height: 0.65;
+}
+
+.login-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(5, 23, 17, 0.62);
+  backdrop-filter: blur(5px) saturate(1.08);
+  animation: modalFadeIn 0.35s ease both;
+}
+
+.login-modal {
+  position: relative;
+  width: min(430px, 100%);
+  padding: 34px 36px 30px;
+  border: 1px solid rgba(226, 244, 82, 0.34);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 86% 8%, rgba(226, 244, 82, 0.2), transparent 38%),
+    linear-gradient(145deg, rgba(36, 76, 58, 0.98), rgba(11, 37, 27, 0.98));
+  color: #f3f0e7;
+  box-shadow: 0 32px 90px rgba(2, 14, 9, 0.54), inset 0 1px 0 rgba(243, 240, 231, 0.08);
+  animation: modalRiseIn 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.login-modal-close {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(243, 240, 231, 0.1);
+  color: rgba(243, 240, 231, 0.76);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 0.3s ease, background 0.3s ease, color 0.3s ease;
+}
+
+.login-modal-close:hover {
+  background: rgba(226, 244, 82, 0.2);
+  color: #e2f452;
+  transform: rotate(90deg);
+}
+
+.login-modal-kicker {
+  margin: 0 0 12px;
+  color: #e2f452;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.2em;
+}
+
+.login-modal h2 {
+  margin: 0;
+  font-family: "Smiley Sans", Georgia, serif;
+  font-size: clamp(32px, 5vw, 46px);
+  font-weight: 700;
+  line-height: 0.98;
+}
+
+.login-modal-intro {
+  margin: 14px 0 26px;
+  color: rgba(243, 240, 231, 0.7);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.login-modal-form {
+  display: grid;
+  gap: 16px;
+}
+
+.login-modal-form label {
+  display: grid;
+  gap: 7px;
+}
+
+.login-modal-form label span {
+  color: rgba(243, 240, 231, 0.68);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.login-modal-form input {
+  width: 100%;
+  min-height: 48px;
+  padding: 0 15px;
+  border: 1px solid rgba(243, 240, 231, 0.2);
+  border-radius: 12px;
+  background: rgba(4, 22, 15, 0.5);
+  color: #f3f0e7;
+  outline: none;
+  font: inherit;
+  font-size: 14px;
+  transition: border-color 0.3s ease, background 0.3s ease, box-shadow 0.3s ease;
+}
+
+.login-modal-form input:focus {
+  border-color: rgba(226, 244, 82, 0.82);
+  background: rgba(4, 22, 15, 0.7);
+  box-shadow: 0 0 0 4px rgba(226, 244, 82, 0.1);
+}
+
+.login-modal-code-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.login-modal-code {
+  min-width: 92px;
+  padding: 0 12px;
+  border: 1px solid rgba(226, 244, 82, 0.42);
+  border-radius: 12px;
+  background: rgba(226, 244, 82, 0.12);
+  color: #e2f452;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: background 0.25s ease, border-color 0.25s ease, opacity 0.25s ease;
+}
+
+.login-modal-code:hover:not(:disabled) {
+  border-color: #e2f452;
+  background: rgba(226, 244, 82, 0.22);
+}
+
+.login-modal-code:disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+
+.login-modal-error {
+  margin: -2px 0 0;
+  color: #ffb5a8;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.login-modal-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 52px;
+  margin-top: 3px;
+  padding: 0 18px 0 20px;
+  border: 0;
+  border-radius: 999px;
+  background: #e2f452;
+  color: #1e3c34;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  cursor: pointer;
+  box-shadow: 0 14px 28px rgba(2, 15, 10, 0.26);
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), background 0.3s ease, box-shadow 0.3s ease;
+}
+
+.login-modal-submit:hover:not(:disabled) {
+  background: #b3f884;
+  transform: translateY(-3px) scale(1.015);
+  box-shadow: 0 20px 34px rgba(2, 15, 10, 0.34);
+}
+
+.login-modal-submit:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.login-modal-submit span:last-child {
+  font-size: 20px;
+  line-height: 0.65;
+}
+
+.login-modal-register {
+  display: block;
+  margin: 18px auto 0;
+  border: 0;
+  background: transparent;
+  color: rgba(243, 240, 231, 0.66);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.25s ease;
+}
+
+.login-modal-register:hover {
+  color: #e2f452;
+}
+
+@keyframes modalFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes modalRiseIn {
+  from { opacity: 0; transform: translateY(20px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 @media (max-width: 840px) {
