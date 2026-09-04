@@ -130,6 +130,7 @@
                 v-else
                 wide
                 :paginate="resourceView === 'document'"
+                :show-title="false"
                 :title="resourceView === 'mindmap' ? `${activeNode.title} · 知识结构` : activeNode.title"
                 :content="visibleResourceContent"
                 :tags="activeNode.knowledge_tags || []"

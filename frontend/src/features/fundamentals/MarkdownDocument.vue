@@ -1,11 +1,11 @@
 <template>
-  <article class="lesson-document surface" :class="{ 'lesson-document--wide': wide, 'lesson-document--paged': paginate }">
+  <article class="lesson-document surface" :class="{ 'lesson-document--wide': wide, 'lesson-document--paged': paginate, 'lesson-document--without-title': !showTitle }">
     <header class="lesson-document__header">
       <div class="lesson-document__meta">
         <span>第 {{ chapterNumber }} 章</span>
         <span>{{ paginate ? `第 ${currentPage + 1} / ${pageCount} 页 · ${pageEstimatedMinutes} 分钟` : `${estimatedMinutes} 分钟阅读` }}</span>
       </div>
-      <h1>{{ title }}</h1>
+      <h1 v-if="showTitle">{{ title }}</h1>
       <div v-if="tags.length" class="lesson-tags" aria-label="本章知识点">
         <span v-for="tag in tags" :key="tag">{{ tag }}</span>
       </div>
@@ -47,6 +47,7 @@ const props = defineProps({
   emptyMessage: { type: String, default: '系统会围绕当前节点生成完整讲解。' },
   wide: { type: Boolean, default: false },
   paginate: { type: Boolean, default: false },
+  showTitle: { type: Boolean, default: true },
 })
 
 const currentPage = ref(0)
@@ -151,6 +152,8 @@ watch(() => [props.content, props.title, props.paginate], () => {
 .document-empty p { max-width: 360px; margin: 0; font-size: 12px; line-height: 1.7; }
 .lesson-document--wide .lesson-document__header > * { max-width: 940px; margin-right: auto; margin-left: auto; }
 .lesson-document--wide .markdown-body { max-width: 940px; }
+.lesson-document--without-title .lesson-document__header { padding-top: 17px; padding-bottom: 15px; }
+.lesson-document--without-title .lesson-tags { margin-top: 0; }
 .lesson-document--paged .document-page { min-height: clamp(430px, calc(100vh - 310px), 680px); }
 .lesson-document--paged .document-page :deep(h2:first-child) { margin-top: 0; padding-top: 0; border-top: 0; font-size: 26px; }
 .document-pagination { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 24px; border-top: 1px solid var(--line); background: #fbfcfa; }
