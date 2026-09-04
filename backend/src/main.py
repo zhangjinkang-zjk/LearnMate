@@ -48,7 +48,6 @@ from backend.src.router.notification_router import router as notification_router
 from backend.src.router.annotation_router import router as annotation_router
 from backend.src.router.agent_router import router as agent_router
 from backend.src.router.diagnosis_router import router as diagnosis_router
-from backend.src.router.diagnosis_router import router as diagnosis_router
 app = FastAPI(
     title="AI聊天后端",
     description="Swagger接口文档",
@@ -168,5 +167,4 @@ app.include_router(mock_classroom_router)
 app.include_router(notification_router)
 app.include_router(annotation_router)
 app.include_router(agent_router)
-app.include_router(diagnosis_router)
 app.include_router(diagnosis_router)
