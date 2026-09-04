@@ -36,6 +36,7 @@
         <h3>需要回看的问题</h3>
         <article v-for="item in incorrectResults" :key="item.question_id">
           <strong>{{ questionContent(item.question_id) }}</strong>
+          <p>错误知识点：{{ questionTags(item.question_id) }}</p>
           <p>你的回答：{{ displayAnswer(item.user_answer) || '未作答' }}</p>
           <p>正确答案：{{ displayAnswer(item.correct_answer) }}</p>
         </article>
@@ -94,7 +95,7 @@ const props = defineProps({
   quizConfig: { type: Object, default: () => ({}) },
 })
 
-const emit = defineEmits(['close', 'passed'])
+const emit = defineEmits(['close', 'passed', 'submitted'])
 const answers = reactive({})
 const questions = ref([])
 const currentIndex = ref(0)
@@ -154,6 +155,11 @@ function questionContent(questionId) {
   return questions.value.find((question) => String(question.question_id) === String(questionId))?.content || '本章知识点'
 }
 
+function questionTags(questionId) {
+  const tags = questions.value.find((question) => String(question.question_id) === String(questionId))?.knowledge_tags
+  return Array.isArray(tags) && tags.length ? tags.join('、') : '待补充'
+}
+
 function displayAnswer(answer) {
   return Array.isArray(answer) ? answer.join('、') : String(answer || '')
 }
@@ -200,6 +206,7 @@ async function submitQuiz() {
   errorMessage.value = ''
   try {
     result.value = await fundamentalsApi.completeNode(props.nodeId, activeSessionId.value, { ...answers })
+    emit('submitted', result.value)
   } catch (error) {
     errorMessage.value = error.response?.data?.detail || error.message || '提交失败，请稍后重试。'
   } finally {

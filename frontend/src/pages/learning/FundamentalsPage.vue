@@ -157,6 +157,11 @@
                 :content="documentContent"
                 :tags="activeNode.knowledge_tags || []"
                 :chapter-number="activeNodeIndex + 1"
+                annotatable
+                :annotations="documentAnnotations"
+                @create-note="createDocumentAnnotation"
+                @update-note="updateDocumentAnnotation"
+                @delete-note="deleteDocumentAnnotation"
                 empty-message="本章文档尚未生成。"
               >
                 <template #pagination-action="{ isLastPage }">
@@ -284,7 +289,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, BookOpenText, CircleAlert, ListTree, LoaderCircle, Network, Presentation, Route, X } from 'lucide-vue-next'
+import { ArrowLeft, ArrowRight, BookOpenText, CircleAlert, Code2, FolderOpen, Lightbulb, ListTree, LoaderCircle, MessageCircle, Network, Presentation, Route, X } from 'lucide-vue-next'
 import ChapterCheck from '@/features/fundamentals/ChapterCheck.vue'
 import ChapterRail from '@/features/fundamentals/ChapterRail.vue'
 import LearningAssistant from '@/features/fundamentals/LearningAssistant.vue'
@@ -294,6 +299,7 @@ import PathPicker from '@/features/fundamentals/PathPicker.vue'
 import PptPreview from '@/features/fundamentals/PptPreview.vue'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { readPortrait } from '@/shared/api/portraitApi'
+import { resourceApi } from '@/shared/api/resourceApi'
 
 const route = useRoute()
 const router = useRouter()
@@ -308,6 +314,7 @@ const activeNodeId = ref(null)
 const nodeDetail = ref(null)
 const documentResource = ref(null)
 const documentContent = ref('')
+const documentAnnotations = ref([])
 const pptResource = ref(null)
 const pptContent = ref('')
 const mindmapResource = ref(null)
@@ -343,6 +350,8 @@ const nextNode = computed(() => {
   return candidate && candidate.status !== 'locked' ? candidate : null
 })
 const estimatedReadMinutes = computed(() => Math.max(3, Math.ceil(documentContent.value.replace(/\s/g, '').length / 420)))
+const knowledgeContent = computed(() => extractDocumentSection(documentContent.value, ['知识点', '概念', '原理']) || '')
+const exampleContent = computed(() => extractDocumentSection(documentContent.value, ['示例', '例子', '实践', 'example']) || '')
 const resourceStatusLabel = computed(() => {
   if (isResourceLoading.value) return '正在准备本章'
   if (documentError.value) return '主讲文档异常'
@@ -384,6 +393,69 @@ function errorDetail(error, fallback) {
 
 function normalizeResourceId(resource) {
   return resource?.resource_id || resource?.id || null
+}
+
+function extractDocumentSection(source, terms) {
+  const lines = String(source || '').split(/\r?\n/)
+  const start = lines.findIndex((line) => /^#{1,3}\s+/.test(line) && terms.some((term) => line.toLowerCase().includes(term.toLowerCase())))
+  if (start < 0) return ''
+  const end = lines.findIndex((line, index) => index > start && /^#{1,3}\s+/.test(line))
+  return lines.slice(start, end < 0 ? lines.length : end).join('\n').trim()
+}
+
+function normalizeAnnotations(payload) {
+  const data = payload?.data ?? payload
+  const list = Array.isArray(data) ? data : data?.records || data?.list || data?.annotations || []
+  return list.map((item) => ({
+    ...item,
+    id: item.id || item.annotation_id || item.annotationId,
+    selected_text: item.selected_text || item.selectedText || '',
+    note_text: item.note_text || item.note || '',
+  })).filter((item) => item.id)
+}
+
+async function refreshDocumentAnnotations(resourceId = normalizeResourceId(documentResource.value)) {
+  if (!resourceId) {
+    documentAnnotations.value = []
+    return
+  }
+  try {
+    documentAnnotations.value = normalizeAnnotations(await resourceApi.listAnnotations(resourceId, 'generated'))
+  } catch (error) {
+    console.warn('[FundamentalsPage] load document annotations failed:', error)
+    documentAnnotations.value = []
+  }
+}
+
+async function createDocumentAnnotation(payload) {
+  const resourceId = normalizeResourceId(documentResource.value)
+  if (!resourceId || !payload?.selected_text) return
+  try {
+    await resourceApi.createAnnotation(resourceId, payload)
+    await refreshDocumentAnnotations(resourceId)
+  } catch (error) {
+    console.warn('[FundamentalsPage] save document annotation failed:', error)
+  }
+}
+
+async function updateDocumentAnnotation(annotationId, payload) {
+  if (!annotationId) return
+  try {
+    await resourceApi.updateAnnotation(annotationId, payload)
+    await refreshDocumentAnnotations()
+  } catch (error) {
+    console.warn('[FundamentalsPage] update document annotation failed:', error)
+  }
+}
+
+async function deleteDocumentAnnotation(annotationId) {
+  if (!annotationId) return
+  try {
+    await resourceApi.deleteAnnotation(annotationId)
+    await refreshDocumentAnnotations()
+  } catch (error) {
+    console.warn('[FundamentalsPage] delete document annotation failed:', error)
+  }
 }
 
 function mindmapTreeToMarkdown(tree) {
@@ -813,6 +885,7 @@ async function loadActiveNode() {
   nodeDetail.value = null
   documentResource.value = null
   documentContent.value = ''
+  documentAnnotations.value = []
   pptResource.value = null
   pptContent.value = ''
   mindmapResource.value = null
@@ -842,7 +915,10 @@ async function loadActiveNode() {
 
     if (documentSummary) {
       resourceLoadingMessage.value = '正在读取本章文档'
-      if (await hydrateResource('document', documentSummary, loadVersion)) markDocumentReady()
+      if (await hydrateResource('document', documentSummary, loadVersion)) {
+        void refreshDocumentAnnotations()
+        markDocumentReady()
+      }
     }
 
     // Always pass through the idempotent path-node resource endpoint.  The
@@ -872,7 +948,10 @@ async function loadActiveNode() {
             ? '主讲文档已准备，正在读取正文'
             : `${type === 'ppt' ? 'PPT' : '知识结构'} 已准备，正在同步`
           void hydrateResource(type, summary, loadVersion).then((loaded) => {
-            if (type === 'document' && loaded) markDocumentReady()
+            if (type === 'document' && loaded) {
+              void refreshDocumentAnnotations()
+              markDocumentReady()
+            }
           })
         }
         if (event?.type === 'error') {
@@ -894,7 +973,10 @@ async function loadActiveNode() {
         if (!documentContent.value && !documentError.value) {
           const refreshed = await fundamentalsApi.getNode(learningPath.value.path_id, activeNode.value.id).catch(() => null)
           const refreshedDocument = findResource(refreshed?.progress?.resources, 'document')
-          if (refreshedDocument && await hydrateResource('document', refreshedDocument, loadVersion)) markDocumentReady()
+          if (refreshedDocument && await hydrateResource('document', refreshedDocument, loadVersion)) {
+            void refreshDocumentAnnotations()
+            markDocumentReady()
+          }
         }
         if (!documentContent.value && !documentError.value) documentError.value = '资源生成完成，但没有找到本章主讲文档'
         if (!documentContent.value) isResourceLoading.value = false
