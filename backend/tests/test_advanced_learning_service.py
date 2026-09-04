@@ -54,3 +54,26 @@ def test_advanced_tasks_keep_distinct_practice_entry_points():
     assert [task["kind"] for task in tasks] == ["transfer", "case", "project"]
     assert tasks[1]["status"] == "active"
     assert all(task["workspace"] == {"path_id": 12, "node_id": 2} for task in tasks)
+
+
+def test_advanced_context_prefers_the_current_node_and_updates_recommendation():
+    profile = {"identity": "工程师", "direction": "多智能体协同决策", "goal": "完成一个项目"}
+    path = _path([{"tag": "无关能力", "accuracy": 0.2}])
+    mastery = [{"knowledge_tag": "职责划分", "total_attempts": 5, "correct_count": 3, "mastery_level": "learning"}]
+
+    tasks = build_advanced_tasks(profile, path, mastery)
+
+    assert tasks[0]["context"]["focus"] == "职责划分"
+    assert tasks[0]["context"]["mastery_percent"] == 60
+    assert tasks[0]["is_recommended"] is True
+    assert tasks[0]["status"] == "active"
+    assert tasks[1]["status"] == "available"
+    assert "基础测试已记录 5 次作答" in tasks[0]["context"]["evidence"]
+
+
+def test_advanced_context_does_not_use_unrelated_global_weak_point():
+    profile = {"identity": "学生", "direction": "多智能体协同决策", "goal": "完成一个项目"}
+    task = build_advanced_task(profile, _path([{"tag": "无关能力", "accuracy": 0.2}]))
+
+    assert task["context"]["focus"] == "职责划分"
+    assert "协同冲突处理" in task["scenario"]

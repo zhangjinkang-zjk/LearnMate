@@ -1,5 +1,5 @@
 <template>
-  <aside class="chapter-rail" aria-label="本科目章节">
+  <aside class="chapter-rail" :class="{ 'chapter-rail--drawer': drawer }" aria-label="本科目章节">
     <div class="chapter-rail__heading">
       <p class="eyebrow">本科目章节</p>
       <span>{{ completedCount }} / {{ nodes.length }}</span>
@@ -48,6 +48,7 @@ import { BookOpen, CircleCheck, LockKeyhole } from 'lucide-vue-next'
 const props = defineProps({
   nodes: { type: Array, default: () => [] },
   activeNodeId: { type: [Number, String], default: null },
+  drawer: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['select'])
@@ -94,4 +95,10 @@ function selectFromMenu(event) {
   .chapter-rail__heading { margin-bottom: 10px; }
   .chapter-select { display: block; }
 }
+.chapter-rail--drawer { padding: 0; border-right: 0; }
+.chapter-rail--drawer .chapter-rail__heading { margin-bottom: 0; }
+.chapter-rail--drawer .chapter-rail__progress { display: block; }
+.chapter-rail--drawer .chapter-select { display: none; }
+.chapter-rail--drawer .chapter-list { display: grid; }
+.chapter-rail--drawer .chapter-item { min-height: 58px; padding: 8px 10px; }
 </style>

@@ -18,17 +18,18 @@
 
       <section class="decision-layout">
         <article class="surface surface-pad recommendation-card">
-          <div class="recommendation-card__heading"><div><p class="eyebrow">系统推荐</p><h2>{{ task.kind_label || '案例诊断' }}</h2></div><span class="recommendation-badge">{{ task.difficulty_label || '当前推荐' }}</span></div>
+          <div class="recommendation-card__heading"><div><p class="eyebrow">本阶段推荐</p><h2>{{ task.kind_label || '案例诊断' }}</h2></div><span class="recommendation-badge">{{ task.difficulty_label || '建议先做' }}</span></div>
           <h3>{{ task.title }}</h3>
-          <p>{{ task.why || task.recommendation || task.brief }}</p>
-          <div class="recommendation-facts"><span><strong>{{ task.focus || '当前薄弱点' }}</strong>重点能力</span><span><strong>{{ task.deliverables?.length || 0 }}</strong>项预期成果</span><span><strong>{{ task.resources?.length || 0 }}</strong>份关联材料</span></div>
-          <RouterLink class="button button--primary" :to="workspaceLink">开始学习巩固 <ArrowRight :size="15" /></RouterLink>
+          <p>{{ task.brief }}</p>
+          <div class="task-scenario"><span class="block-label">任务情境</span><p>{{ task.scenario || task.problem }}</p></div>
+          <div class="recommendation-facts"><span><strong>{{ task.context?.focus || task.focus || '当前薄弱点' }}</strong>重点能力</span><span><strong>{{ task.context?.mastery_label || '暂无测验证据' }}</strong>基础证据</span><span><strong>{{ task.deliverables?.length || 0 }}</strong>项交付</span></div>
+          <RouterLink class="button button--primary" :to="workspaceLink">进入学习巩固 <ArrowRight :size="15" /></RouterLink>
         </article>
-        <aside class="surface surface-pad decision-reason"><p class="eyebrow">为什么现在做</p><h2>这不是继续阅读</h2><p>进阶学习用来选择实践方向。你将在下一个页面亲自判断、提出假设并验证结果，系统只负责追问和提供必要提示。</p><div class="decision-reason__line"><span>当前阶段</span><strong>{{ path.stage || '基础到应用' }}</strong></div><div class="decision-reason__line"><span>任务顺序</span><strong>先看任务，再进入对话</strong></div></aside>
+        <aside class="surface surface-pad decision-reason"><p class="eyebrow">推荐依据</p><h2>根据你的基础学习</h2><p>{{ task.context?.reason || task.recommendation || '系统会根据当前学习节点生成实践入口。' }}</p><div class="decision-reason__line"><span>学习节点</span><strong>{{ task.context?.node_title || '当前节点' }}</strong></div><div class="decision-reason__line"><span>节点状态</span><strong>{{ task.context?.node_status_label || path.stage || '学习中' }}</strong></div><div class="decision-reason__line"><span>学习材料</span><strong>{{ task.context?.resource_label || `${task.resources?.length || 0} 份关联材料` }}</strong></div><div class="decision-reason__line"><span>路径进度</span><strong>{{ path.stage || '基础到应用' }}</strong></div></aside>
       </section>
 
       <section class="task-catalog"><div class="catalog-heading"><div><p class="eyebrow">实践任务目录</p><h2>也可以从这里换一个入口</h2></div><span>{{ tasks.length }} 个可选任务</span></div><div class="catalog-grid" role="list">
-        <button v-for="item in tasks" :key="item.id" type="button" class="catalog-card" :class="{ 'is-selected': item.id === task.id }" @click="selectTask(item)"><span class="catalog-card__top"><strong>{{ item.kind_label || '实践任务' }}</strong><small>{{ item.difficulty_label || '当前阶段' }}</small></span><h3>{{ item.title }}</h3><p>{{ item.why || item.brief }}</p><span class="catalog-card__footer"><span>{{ item.status === 'active' ? '系统推荐' : item.status === 'completed' ? '已完成' : '待开始' }}</span><ArrowUpRight :size="14" /></span></button>
+        <button v-for="item in tasks" :key="item.id" type="button" class="catalog-card" :class="{ 'is-selected': item.id === task.id }" :aria-label="`进入${item.kind_label || '实践任务'}：${item.title}`" @click="openTask(item)"><span class="catalog-card__top"><strong>{{ item.kind_label || '实践任务' }}</strong><small>{{ item.difficulty_label || '当前阶段' }}</small></span><h3>{{ item.title }}</h3><p>{{ item.why || item.brief }}</p><span class="catalog-card__footer"><span>{{ item.is_recommended ? '建议先做' : item.status === 'completed' ? '已完成' : '可开始' }}</span><ArrowUpRight :size="14" /></span></button>
       </div></section>
     </template>
   </div>
@@ -37,11 +38,12 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ArrowRight, ArrowUpRight, CircleAlert, LoaderCircle, RefreshCw } from 'lucide-vue-next'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import PageTitle from '@/shared/ui/PageTitle.vue'
 import { advancedLearningApi } from '@/shared/api/advancedLearningApi'
 
 const route = useRoute()
+const router = useRouter()
 const loading = ref(true)
 const errorMessage = ref('')
 const task = ref(null)
@@ -49,7 +51,23 @@ const tasks = ref([])
 const profile = reactive({ identity: '', direction: '', goal: '' })
 const path = reactive({ stage: '', progress: 0 })
 const unwrap = (response) => response?.data?.data ?? response?.data ?? null
-const workspaceLink = computed(() => ({ path: '/learning/consolidation', query: { taskId: task.value?.id, pathId: task.value?.workspace?.path_id, nodeId: task.value?.workspace?.node_id } }))
+function getTaskWorkspace(value) {
+  const workspace = value?.workspace || {}
+  return {
+    pathId: workspace.path_id ?? workspace.pathId ?? value?.path_id ?? value?.pathId ?? null,
+    nodeId: workspace.node_id ?? workspace.nodeId ?? value?.node_id ?? value?.nodeId ?? null,
+  }
+}
+
+function buildWorkspaceLocation(value) {
+  const workspace = getTaskWorkspace(value)
+  const query = { taskId: value?.id }
+  if (workspace.pathId !== null && workspace.pathId !== undefined) query.pathId = workspace.pathId
+  if (workspace.nodeId !== null && workspace.nodeId !== undefined) query.nodeId = workspace.nodeId
+  return { path: '/learning/consolidation', query }
+}
+
+const workspaceLink = computed(() => buildWorkspaceLocation(task.value))
 
 async function loadTask() {
   loading.value = true
@@ -66,16 +84,25 @@ async function loadTask() {
   } finally { loading.value = false }
 }
 
-function selectTask(item) { task.value = item }
+async function openTask(item) {
+  task.value = item
+  await router.push(buildWorkspaceLocation(item))
+}
 onMounted(loadTask)
 </script>
 
 <style scoped>
-.button { gap: 8px; }.button:disabled { cursor: wait; opacity: .55; }.state-panel { display: flex; align-items: center; gap: 14px; min-height: 96px; color: var(--accent-deep); }.state-panel div { flex: 1; }.state-panel p, .empty-panel p { margin: 5px 0 0; color: var(--muted); font-size: 13px; line-height: 1.7; }.state-panel--error { color: #954e38; }.spin { animation: spin 1s linear infinite; }.empty-panel { max-width: 720px; }.empty-panel h2 { margin: 0; font-size: 22px; }.empty-panel > p:not(.eyebrow) { margin-bottom: 20px; }
-.learning-snapshot { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-bottom: 18px; border: 1px solid var(--line); border-radius: 7px; background: var(--line); overflow: hidden; }.snapshot-item { display: grid; min-width: 0; gap: 7px; padding: 15px 16px; background: var(--paper); }.snapshot-item span { color: var(--muted); font-size: 10px; }.snapshot-item strong { overflow: hidden; color: var(--ink); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }.snapshot-item--progress strong { color: var(--accent-deep); font-size: 18px; }.snapshot-item--progress .progress-track { height: 5px; margin-top: 2px; }
-.decision-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, .65fr); gap: 18px; margin-bottom: 30px; }.recommendation-card { border-color: #d3e0c7; background: #f8fbf3; }.recommendation-card__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }.recommendation-card__heading h2 { margin: 0; font-size: 18px; }.recommendation-badge { padding: 5px 8px; border: 1px solid #d5e2c8; border-radius: 4px; color: var(--accent-deep); font-size: 10px; font-weight: 800; }.recommendation-card h3 { margin: 23px 0 8px; font-size: 22px; line-height: 1.45; }.recommendation-card > p { max-width: 720px; margin: 0; color: #536057; font-size: 13px; line-height: 1.75; }.recommendation-facts { display: flex; flex-wrap: wrap; gap: 24px; margin: 23px 0 20px; padding-top: 16px; border-top: 1px solid #dbe7d2; }.recommendation-facts span { display: grid; gap: 4px; color: var(--muted); font-size: 10px; }.recommendation-facts strong { color: var(--ink); font-size: 12px; }.decision-reason h2 { margin: 0; font-size: 19px; }.decision-reason > p:not(.eyebrow) { margin: 10px 0 21px; color: var(--muted); font-size: 12px; line-height: 1.75; }.decision-reason__line { display: flex; justify-content: space-between; gap: 12px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }.decision-reason__line + .decision-reason__line { margin-top: 11px; }.decision-reason__line strong { color: var(--ink); font-size: 11px; text-align: right; }
-.task-catalog { padding-top: 2px; }.catalog-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 13px; }.catalog-heading h2 { margin: 0; font-size: 20px; }.catalog-heading > span { color: var(--muted); font-size: 11px; }.catalog-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }.catalog-card { display: grid; min-height: 172px; align-content: start; gap: 9px; padding: 15px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); color: var(--ink); text-align: left; transition: border-color .16s ease, background .16s ease, transform .16s ease; }.catalog-card:hover { border-color: #b9c9b2; transform: translateY(-1px); }.catalog-card.is-selected { border-color: var(--accent-deep); background: #f4f8ed; box-shadow: inset 3px 0 0 var(--accent-deep); }.catalog-card__top, .catalog-card__footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }.catalog-card__top strong { color: var(--accent-deep); font-size: 10px; }.catalog-card__top small { color: var(--muted); font-size: 10px; }.catalog-card h3 { margin: 4px 0 0; font-size: 14px; line-height: 1.5; }.catalog-card p { min-height: 51px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }.catalog-card__footer { margin-top: auto; color: var(--muted); font-size: 10px; }
+.advanced-page { min-width: 0; }
+.advanced-page :deep(.page-heading) { margin-bottom: 20px; }
+.advanced-page :deep(.page-heading p) { max-width: 640px; font-size: 13px; }
+.button { gap: 8px; }.button:disabled { cursor: wait; opacity: .55; }
+.state-panel { display: flex; align-items: center; gap: 14px; min-height: 96px; color: var(--accent-deep); }.state-panel > div { min-width: 0; flex: 1; }.state-panel p, .empty-panel p { margin: 5px 0 0; color: var(--muted); font-size: 13px; line-height: 1.7; }.state-panel--error { color: #954e38; }.spin { animation: spin 1s linear infinite; }.empty-panel { max-width: 720px; }.empty-panel h2 { margin: 0; font-size: 22px; }.empty-panel > p:not(.eyebrow) { margin-bottom: 20px; }
+.learning-snapshot { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--line); overflow: hidden; }.snapshot-item { display: grid; min-width: 0; gap: 6px; padding: 12px 14px; background: var(--paper); }.snapshot-item span { color: var(--muted); font-size: 10px; }.snapshot-item strong { min-width: 0; overflow: hidden; color: var(--ink); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }.snapshot-item--progress strong { color: var(--accent-deep); font-size: 17px; }.snapshot-item--progress .progress-track { height: 5px; margin-top: 1px; }
+.decision-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(245px, .65fr); gap: 14px; margin-bottom: 20px; }.recommendation-card, .decision-reason { min-width: 0; padding: 18px; }.recommendation-card { border-color: #d3e0c7; background: #f8fbf3; }.recommendation-card__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }.recommendation-card__heading > div { min-width: 0; }.recommendation-card__heading h2 { margin: 0; font-size: 17px; }.recommendation-badge { max-width: 42%; padding: 5px 8px; border: 1px solid #d5e2c8; border-radius: 4px; color: var(--accent-deep); font-size: 10px; font-weight: 800; line-height: 1.3; text-align: right; }.recommendation-card h3 { margin: 17px 0 7px; overflow-wrap: anywhere; font-size: clamp(18px, 2vw, 22px); line-height: 1.4; }.recommendation-card > p { max-width: 720px; margin: 0; color: #536057; font-size: 12px; line-height: 1.7; }.recommendation-facts { display: flex; flex-wrap: wrap; gap: 18px; margin: 17px 0 15px; padding-top: 13px; border-top: 1px solid #dbe7d2; }.recommendation-facts span { display: grid; gap: 3px; color: var(--muted); font-size: 10px; }.recommendation-facts strong { color: var(--ink); font-size: 12px; overflow-wrap: anywhere; }.decision-reason h2 { margin: 0; font-size: 18px; }.decision-reason > p:not(.eyebrow) { margin: 9px 0 17px; color: var(--muted); font-size: 12px; line-height: 1.7; }.decision-reason__line { display: flex; justify-content: space-between; gap: 12px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }.decision-reason__line + .decision-reason__line { margin-top: 9px; }.decision-reason__line strong { min-width: 0; color: var(--ink); font-size: 11px; overflow-wrap: anywhere; text-align: right; }
+.task-catalog { padding-top: 1px; }.catalog-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 11px; }.catalog-heading h2 { margin: 0; font-size: 18px; }.catalog-heading > span { color: var(--muted); font-size: 11px; }.catalog-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }.catalog-card { display: grid; min-width: 0; min-height: 142px; align-content: start; gap: 7px; padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); color: var(--ink); text-align: left; transition: border-color .16s ease, background .16s ease, transform .16s ease; }.catalog-card:hover { border-color: #b9c9b2; transform: translateY(-1px); }.catalog-card.is-selected { border-color: var(--accent-deep); background: #f4f8ed; box-shadow: inset 3px 0 0 var(--accent-deep); }.catalog-card__top, .catalog-card__footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }.catalog-card__top strong { color: var(--accent-deep); font-size: 10px; }.catalog-card__top small { color: var(--muted); font-size: 10px; }.catalog-card h3 { margin: 4px 0 0; overflow-wrap: anywhere; font-size: 13px; line-height: 1.45; }.catalog-card p { display: -webkit-box; min-height: 36px; margin: 0; overflow: hidden; color: var(--muted); font-size: 11px; line-height: 1.6; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }.catalog-card__footer { margin-top: auto; color: var(--muted); font-size: 10px; }
+.task-scenario { margin-top: 15px; padding: 11px 12px; border-left: 3px solid #c8d9b7; background: #f1f6eb; }.task-scenario p { margin: 5px 0 0; color: #536057; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (max-width: 900px) { .learning-snapshot { grid-template-columns: repeat(2, minmax(0, 1fr)); }.decision-layout { grid-template-columns: 1fr; }.catalog-grid { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .learning-snapshot { grid-template-columns: repeat(2, minmax(0, 1fr)); }.decision-layout { grid-template-columns: 1fr; }.catalog-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 700px) { .catalog-grid { grid-template-columns: 1fr; } }
 @media (max-width: 560px) { .learning-snapshot { grid-template-columns: 1fr; }.catalog-heading { align-items: flex-start; flex-direction: column; gap: 6px; }.recommendation-card h3 { font-size: 19px; }.recommendation-facts { gap: 14px; }.recommendation-card .button { width: 100%; } }
 </style>
