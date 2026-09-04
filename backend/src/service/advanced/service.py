@@ -1,8 +1,17 @@
-"""Build a goal-oriented advanced task from existing learning data."""
+"""Build and persist milestone-based advanced practice tasks."""
 
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
 from typing import Any, Iterable
+
+logger = logging.getLogger(__name__)
+
+ADVANCED_MILESTONE_SIZE = 10
+ADVANCED_UNLOCK_NODES = 10
+_snapshot_locks: dict[tuple[int, int, int], asyncio.Lock] = {}
 
 GOAL_MODES = (
     (("就业", "岗位", "求职", "实习", "职业"), "job"),
@@ -189,6 +198,155 @@ def _recommended_kind(context: dict) -> str:
     return "case"
 
 
+def completed_node_count(path: dict) -> tuple[int, int]:
+    """Return completed and total nodes from the server-owned path snapshot."""
+    nodes = path.get("nodes") or []
+    return sum(1 for node in nodes if node.get("status") == "completed"), len(nodes)
+
+
+def advanced_milestone(completed_nodes: int) -> int:
+    """Return the ten-node milestone that owns the current task snapshot."""
+    completed = max(0, int(completed_nodes or 0))
+    return completed // ADVANCED_MILESTONE_SIZE if completed >= ADVANCED_UNLOCK_NODES else 0
+
+
+def _agent_context(profile: dict, path: dict, mastery_records: Iterable[Any], milestone: int) -> dict:
+    completed, total = completed_node_count(path)
+    node = _current_node(path)
+    resources = [
+        {
+            "id": resource.get("id"),
+            "title": resource.get("title"),
+            "resource_type": resource.get("resource_type"),
+        }
+        for resource in (node.get("resources") or [])
+        if isinstance(resource, dict)
+    ]
+    return {
+        "milestone": milestone,
+        "completed_nodes": completed,
+        "total_nodes": total,
+        "profile": profile,
+        "path": {
+            "path_id": path.get("path_id"),
+            "goal": path.get("goal"),
+            "stage": path.get("stage"),
+            "current_node": {
+                "id": node.get("id"),
+                "title": node.get("title") or node.get("topic"),
+                "summary": node.get("summary"),
+                "status": node.get("status"),
+                "knowledge_tags": node.get("knowledge_tags") or [],
+                "resources": resources,
+                "resources_viewed": bool(node.get("resources_viewed") or node.get("total_views")),
+                "time_spent": node.get("time_spent", 0),
+            },
+        },
+        "mastery": _normalise_mastery_records(mastery_records),
+    }
+
+
+def _clean_text(value: Any, fallback: str = "", limit: int = 140) -> str:
+    text = " ".join(str(value or "").split())
+    return text[:limit] if text else fallback
+
+
+def _clean_list(value: Any, fallback: list[str], limit: int = 6) -> list[str]:
+    if not isinstance(value, list):
+        return fallback[:limit]
+    cleaned = [_clean_text(item, limit=100) for item in value]
+    cleaned = [item for item in cleaned if item]
+    return cleaned[:limit] or fallback[:limit]
+
+
+def _normalise_agent_tasks(payload: Any, fallback_tasks: list[dict]) -> tuple[list[dict], str] | None:
+    """Validate the agent contract while preserving server-owned IDs and context."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("tasks"), list):
+        return None
+    raw_by_kind = {
+        item.get("kind"): item for item in payload["tasks"] if isinstance(item, dict) and item.get("kind")
+    }
+    normalised = []
+    for fallback in fallback_tasks:
+        raw = raw_by_kind.get(fallback["kind"])
+        if not isinstance(raw, dict):
+            return None
+        item = {**fallback}
+        item["title"] = _clean_text(raw.get("title"), fallback["title"], 42)
+        item["brief"] = _clean_text(raw.get("brief"), fallback["brief"])
+        item["scenario"] = _clean_text(raw.get("scenario"), fallback.get("scenario", fallback["problem"]))
+        item["problem"] = _clean_text(raw.get("problem"), fallback["problem"])
+        item["why"] = _clean_text(raw.get("why"), fallback.get("why", fallback["brief"]))
+        item["focus"] = fallback["context"]["focus"]
+        item["deliverables"] = [
+            {"id": f"deliverable-{index}", "label": label, "completed": False}
+            for index, label in enumerate(
+                _clean_list(raw.get("deliverables"), [entry["label"] for entry in fallback["deliverables"]]),
+                start=1,
+            )
+        ]
+        item["criteria"] = _clean_list(raw.get("criteria"), fallback["criteria"])
+        item["constraints"] = _clean_list(raw.get("constraints"), fallback["constraints"])
+        raw_stages = raw.get("stages")
+        if isinstance(raw_stages, list) and len(raw_stages) >= 4:
+            item["stages"] = [
+                {
+                    "id": _clean_text(stage.get("id"), fallback["stages"][index]["id"], 24),
+                    "label": _clean_text(stage.get("label"), fallback["stages"][index]["label"], 24),
+                    "hint": _clean_text(stage.get("hint"), "完成本阶段并留下证据", 48),
+                    "status": fallback["stages"][index].get("status", "pending"),
+                }
+                for index, stage in enumerate(raw_stages[:4])
+                if isinstance(stage, dict)
+            ]
+        if len(item.get("stages", [])) != 4:
+            item["stages"] = fallback["stages"]
+        normalised.append(item)
+
+    recommended = payload.get("recommended_kind")
+    if recommended not in {item["kind"] for item in fallback_tasks}:
+        recommended = next((item["kind"] for item in fallback_tasks if item.get("is_recommended")), "case")
+    for item in normalised:
+        item["status"] = "active" if item["kind"] == recommended else "available"
+        item["is_recommended"] = item["kind"] == recommended
+        if item["is_recommended"]:
+            item["difficulty_label"] = "建议先做"
+    return normalised, _clean_text(payload.get("summary"), "本次实践任务已根据当前学习里程碑更新。", 100)
+
+
+async def _generate_agent_task_set(user_id: int, profile: dict, path: dict, mastery_records: list[Any], milestone: int) -> dict:
+    """Generate once at a milestone, with the existing deterministic contract as fallback."""
+    fallback_tasks = build_advanced_tasks(profile, path, mastery_records)
+    context = _agent_context(profile, path, mastery_records, milestone)
+    try:
+        from backend.src.ai_core.llm_config import llm
+        from backend.src.utils.json_parser import parse_llm_json
+        from backend.src.utils.prompt_loader import fill_prompt, load_prompt
+
+        prompt = fill_prompt(
+            load_prompt("advanced/task_generator"),
+            profile_json=json.dumps(context["profile"], ensure_ascii=False),
+            milestone_json=json.dumps({key: context[key] for key in ("milestone", "completed_nodes", "total_nodes")}, ensure_ascii=False),
+            path_json=json.dumps(context["path"], ensure_ascii=False),
+            mastery_json=json.dumps(context["mastery"], ensure_ascii=False),
+        )
+        response = await llm.ainvoke(prompt, priority="low", user_id=user_id, pool="advanced")
+        parsed = parse_llm_json(response.content)
+        normalised = _normalise_agent_tasks(parsed, fallback_tasks)
+        if normalised:
+            tasks, summary = normalised
+            return {"tasks": tasks, "summary": summary, "source": "agent", "error": None}
+        raise ValueError("进阶任务智能体返回的任务结构无效")
+    except Exception as exc:
+        logger.warning("advanced task agent fallback user_id=%s milestone=%s error=%s", user_id, milestone, type(exc).__name__)
+        return {
+            "tasks": fallback_tasks,
+            "summary": "智能体暂不可用，已根据当前学习记录生成临时实践入口。",
+            "source": "fallback",
+            "error": "进阶任务智能体暂时不可用",
+        }
+
+
 def _current_node(path: dict) -> dict:
     nodes = path.get("nodes") or []
     current_id = path.get("current_node_id")
@@ -310,6 +468,87 @@ def build_advanced_tasks(profile: dict, path: dict, mastery_records: Iterable[An
     return tasks
 
 
+def _read_snapshot(snapshot: Any) -> dict | None:
+    if not snapshot:
+        return None
+    payload = snapshot.task_json if isinstance(snapshot.task_json, dict) else {}
+    tasks = payload.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        return None
+    return {
+        "tasks": tasks,
+        "summary": payload.get("summary") or "本次实践任务已根据当前学习里程碑更新。",
+        "source": snapshot.source or "agent",
+        "generation_error": snapshot.generation_error,
+        "generated_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
+    }
+
+
+async def _get_or_create_snapshot(
+    user_id: int,
+    path_id: int,
+    milestone: int,
+    profile: dict,
+    path: dict,
+    mastery_records: list[Any],
+) -> dict:
+    from backend.src.models.advanced_task_model import AdvancedTaskSnapshot
+
+    existing = _read_snapshot(await AdvancedTaskSnapshot.filter(
+        user_id=user_id,
+        path_id=path_id,
+        milestone=milestone,
+    ).first())
+    if existing:
+        return existing
+
+    lock = _snapshot_locks.setdefault((user_id, path_id, milestone), asyncio.Lock())
+    async with lock:
+        existing = _read_snapshot(await AdvancedTaskSnapshot.filter(
+            user_id=user_id,
+            path_id=path_id,
+            milestone=milestone,
+        ).first())
+        if existing:
+            return existing
+
+        generated = await _generate_agent_task_set(user_id, profile, path, mastery_records, milestone)
+        completed, _ = completed_node_count(path)
+        node = _current_node(path)
+        try:
+            snapshot = await AdvancedTaskSnapshot.create(
+                user_id=user_id,
+                path_id=path_id,
+                milestone=milestone,
+                completed_nodes=completed,
+                current_node_id=node.get("id"),
+                task_json={"tasks": generated["tasks"], "summary": generated["summary"]},
+                source=generated["source"],
+                generation_error=generated["error"],
+            )
+        except Exception as exc:
+            # A second worker may win the unique milestone row between the read and create.
+            logger.warning("advanced snapshot create race user_id=%s path_id=%s milestone=%s error=%s", user_id, path_id, milestone, type(exc).__name__)
+            existing = _read_snapshot(await AdvancedTaskSnapshot.filter(
+                user_id=user_id,
+                path_id=path_id,
+                milestone=milestone,
+            ).first())
+            if existing:
+                return existing
+            raise
+
+        # The current milestone is the only task set shown to the learner.
+        await AdvancedTaskSnapshot.filter(user_id=user_id, path_id=path_id).exclude(milestone=milestone).delete()
+        return _read_snapshot(snapshot) or {
+            "tasks": generated["tasks"],
+            "summary": generated["summary"],
+            "source": generated["source"],
+            "generation_error": generated["error"],
+            "generated_at": None,
+        }
+
+
 class AdvancedLearningService:
     @staticmethod
     async def get_current(user_id: int) -> dict:
@@ -336,19 +575,55 @@ class AdvancedLearningService:
             return {"status": "path_required", "profile": profile, "path": None, "tasks": [], "task": None}
 
         mastery_records = await KnowledgeMastery.filter(user_id=user_id).all()
-        tasks = build_advanced_tasks(profile, current_path, mastery_records)
+        completed, total = completed_node_count(current_path)
+        milestone = advanced_milestone(completed)
+        path_payload = {
+            "id": current_path.get("path_id"),
+            "stage": current_path.get("stage"),
+            "progress": current_path.get("progress", 0),
+            "current_node_id": current_path.get("current_node_id"),
+            "diagnosis": current_path.get("diagnosis") or {},
+            "completed_nodes": completed,
+            "total_nodes": total,
+        }
+        milestone_payload = {
+            "size": ADVANCED_MILESTONE_SIZE,
+            "unlock_nodes": ADVANCED_UNLOCK_NODES,
+            "completed_nodes": completed,
+            "current": milestone,
+            "next": max(ADVANCED_UNLOCK_NODES, (milestone + 1) * ADVANCED_MILESTONE_SIZE),
+            "remaining": max(0, ADVANCED_UNLOCK_NODES - completed) if completed < ADVANCED_UNLOCK_NODES else 0,
+        }
+
+        if completed < ADVANCED_UNLOCK_NODES:
+            return {
+                "status": "locked",
+                "profile": profile,
+                "path": path_payload,
+                "milestone": milestone_payload,
+                "tasks": [],
+                "task": None,
+            }
+
+        snapshot = await _get_or_create_snapshot(
+            user_id,
+            int(current_path["path_id"]),
+            milestone,
+            profile,
+            current_path,
+            mastery_records,
+        )
+        tasks = snapshot["tasks"]
+        active_task = next((item for item in tasks if item.get("is_recommended")), tasks[0] if tasks else None)
 
         return {
             "status": "ready",
             "profile": profile,
-            "path": {
-                "id": current_path.get("path_id"),
-                "stage": current_path.get("stage"),
-                "progress": current_path.get("progress", 0),
-                "current_node_id": current_path.get("current_node_id"),
-                "diagnosis": current_path.get("diagnosis") or {},
-            },
+            "path": path_payload,
+            "milestone": milestone_payload,
+            "task_source": snapshot["source"],
+            "task_summary": snapshot["summary"],
+            "task_generated_at": snapshot["generated_at"],
             "tasks": tasks,
-            # Keep the original field for clients that only render one task.
-            "task": tasks[1] if len(tasks) > 1 else (tasks[0] if tasks else None),
+            "task": active_task,
         }
