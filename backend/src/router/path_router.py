@@ -72,10 +72,25 @@ async def generate_paths_from_direction(data: GenerateFromDirectionRequest, user
         goal = goal or str(onboarding.get("goal") or "").strip()
     if not direction:
         raise HTTPException(status_code=400, detail="请先完成学习定向")
-    subjects = await sync_direction_subjects(user_id, direction, goal, data.subject_limit)
+    subjects = await sync_direction_subjects(
+        user_id,
+        direction,
+        goal,
+        data.subject_limit,
+        force_regenerate=data.force_regenerate,
+    )
+    from backend.src.models.path_model import LearningPath
+
+    async def generate_or_reuse(subject: str):
+        if data.force_regenerate:
+            existing = await LearningPath.filter(user_id=user_id, subject=subject).first()
+            if existing:
+                return await PathService.regenerate_path(existing.id, user_id)
+        return await PathService.generate_path(subject, user_id, data.difficulty, data.node_count)
+
     import asyncio
     results = await asyncio.gather(
-        *[PathService.generate_path(subject, user_id, data.difficulty, data.node_count) for subject in subjects],
+        *[generate_or_reuse(subject) for subject in subjects],
         return_exceptions=True,
     )
     paths = []
@@ -83,7 +98,12 @@ async def generate_paths_from_direction(data: GenerateFromDirectionRequest, user
         if isinstance(result, Exception):
             paths.append({"subject": subject, "status": "failed", "message": str(result)})
             continue
-        paths.append({"subject": subject, "status": "cached" if result.get("cached") else "created", "path_id": result.get("path_id"), "node_count": result.get("node_count", len(result.get("nodes", [])))})
+        paths.append({
+            "subject": subject,
+            "status": "regenerated" if result.get("regenerated") else ("cached" if result.get("cached") else "created"),
+            "path_id": result.get("path_id"),
+            "node_count": result.get("node_count", len(result.get("nodes", []))),
+        })
     return {"code": 200, "msg": "success", "data": {"direction": direction, "subjects": subjects, "paths": paths}}
 
 

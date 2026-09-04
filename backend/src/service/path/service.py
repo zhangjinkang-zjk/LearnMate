@@ -467,8 +467,14 @@ class PathService:
             yield event({"type": "error", "detail": str(exc) or "Path generation failed"})
 
     @staticmethod
-    async def generate_path(subject: str, user_id: int, difficulty: str = "medium", node_count: int = 0) -> dict:
-        """LLM 生成路径结构 → 存库（node_count=0 自动计算）。同用户同 subject 已存在则跳过。"""
+    async def generate_path(
+        subject: str,
+        user_id: int,
+        difficulty: str = "medium",
+        node_count: int = 0,
+        force_regenerate: bool = False,
+    ) -> dict:
+        """LLM 生成路径结构 → 存库；默认复用同用户同科目，强制模式才重建。"""
         await init_db()
 
         # >admin 快捷模式：强制 2 节点，跳过预生成
@@ -478,8 +484,11 @@ class PathService:
             node_count = 2
 
         existing = await LearningPath.filter(user_id=user_id, subject=subject).first()
-        if existing:
+        if existing and not force_regenerate:
             return {"path_id": existing.id, "subject": subject, "nodes": [], "cached": True}
+        if existing and force_regenerate:
+            # 路径有 user_id+subject 唯一约束；旧资源记录保留，路径结构按用户明确操作重建。
+            await existing.delete()
 
         portrait_context = "暂无画像数据"
         mastery_context = "暂无掌握度数据"
@@ -1412,7 +1421,13 @@ class PathService:
                 completed_topics.append(r.node.topic)
 
         # 用最新画像重新生成
-        result = await PathService.generate_path(path.subject, user_id, path.difficulty, path.node_count)
+        result = await PathService.generate_path(
+            path.subject,
+            user_id,
+            path.difficulty,
+            path.node_count,
+            force_regenerate=True,
+        )
         if "error" in result:
             return result
 

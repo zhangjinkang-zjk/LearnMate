@@ -97,24 +97,44 @@ async def get_direction_subjects(direction: str, goal: str = "", limit: int = 4)
     return [f"{direction}基础", f"{direction}核心方法", f"{direction}应用实践"][:limit]
 
 
-async def sync_direction_subjects(user_id: int, direction: str, goal: str = "", limit: int = 4) -> list[str]:
-    """生成方向科目并写入用户画像，便于概览和后续路径复用。"""
+async def sync_direction_subjects(
+    user_id: int,
+    direction: str,
+    goal: str = "",
+    limit: int = 4,
+    force_regenerate: bool = False,
+) -> list[str]:
+    """读取或生成方向科目并写入画像；普通进入优先复用已保存结果。"""
     from backend.src.models.usermodel import User
     from backend.src.models.portraitmodel import User_picture
     from backend.src.service.portrait.service import parse_traits, dump_traits
 
-    subjects = await get_direction_subjects(direction, goal, limit)
     user = await User.filter(id=user_id).first()
+    picture = await user.picture if user else None
+    traits = parse_traits(picture.traits if picture else None)
+    cached_direction = str(traits.get("learning_direction") or "").strip()
+    cached_goal = str(traits.get("learning_direction_goal") or "").strip()
+    cached_subjects = traits.get("learning_direction_subjects")
+    if (
+        not force_regenerate
+        and cached_direction == str(direction or "").strip()
+        and isinstance(cached_subjects, list)
+        and cached_subjects
+        and (not cached_goal or not goal or cached_goal == str(goal).strip())
+    ):
+        return [str(item).strip() for item in cached_subjects if str(item).strip()][:limit]
+
+    subjects = await get_direction_subjects(direction, goal, limit)
     if not user:
         return subjects
-    picture = await user.picture
     if not picture:
         picture = await User_picture.create()
         user.picture = picture
         await user.save()
-    traits = parse_traits(picture.traits)
+        traits = parse_traits(picture.traits)
     traits["learning_direction_subjects"] = subjects
     traits["learning_direction"] = direction[:120]
+    traits["learning_direction_goal"] = goal[:160]
     picture.traits = dump_traits(traits)
     await picture.save()
     return subjects
