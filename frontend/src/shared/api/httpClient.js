@@ -6,9 +6,28 @@ const httpClient = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
+httpClient.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token')
+  if (token) {
+    config.headers = config.headers || {}
+    config.headers.Authorization = `Bearer ${token}`
+    config.headers.token = token
+  }
+  config.headers = config.headers || {}
+  config.headers['ngrok-skip-browser-warning'] = 'true'
+  return config
+})
+
 httpClient.interceptors.response.use(
   (response) => response,
-  (error) => Promise.reject(error),
+  (error) => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('token')
+      const currentPath = window.location.hash.replace(/^#/, '') || '/'
+      if (!currentPath.startsWith('/login')) window.location.hash = `#/login?redirect=${encodeURIComponent(currentPath)}`
+    }
+    return Promise.reject(error)
+  },
 )
 
 export default httpClient

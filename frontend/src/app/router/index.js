@@ -11,25 +11,34 @@ import NavigationPage from '@/pages/learning/NavigationPage.vue'
 import WorkspacePage from '@/pages/learning/WorkspacePage.vue'
 import ResourceLibraryPage from '@/pages/resources/ResourceLibraryPage.vue'
 import SettingsPage from '@/pages/settings/SettingsPage.vue'
+import LoginPage from '@/pages/auth/LoginPage.vue'
 
 const router = createRouter({
   history: createWebHashHistory(),
   routes: [
     { path: '/', name: 'home', component: HomePage, meta: { layout: 'immersive' } },
-    { path: '/onboarding/direction', name: 'directionSetup', component: DirectionSetupPage, meta: { layout: 'immersive' } },
+    { path: '/login', name: 'login', component: LoginPage, meta: { layout: 'immersive' } },
+    { path: '/onboarding/direction', name: 'directionSetup', component: DirectionSetupPage, meta: { layout: 'immersive', requiresAuth: true } },
     { path: '/select-identity', redirect: '/onboarding/direction' },
-    { path: '/onboarding/diagnosis', name: 'diagnosis', component: DiagnosisPage, meta: { layout: 'immersive' } },
-    { path: '/onboarding/diagnosis/result', name: 'diagnosisResult', component: DiagnosisResultPage, meta: { layout: 'immersive' } },
-    { path: '/learning/overview', name: 'learningOverview', component: OverviewPage },
+    { path: '/onboarding/diagnosis', name: 'diagnosis', component: DiagnosisPage, meta: { layout: 'immersive', requiresAuth: true } },
+    { path: '/onboarding/diagnosis/result', name: 'diagnosisResult', component: DiagnosisResultPage, meta: { layout: 'immersive', requiresAuth: true } },
+    { path: '/learning/overview', name: 'learningOverview', component: OverviewPage, meta: { requiresAuth: true } },
     { path: '/learning/task-analysis', redirect: '/learning/overview' },
-    { path: '/learning/fundamentals', name: 'fundamentals', component: FundamentalsPage },
-    { path: '/learning/advanced', name: 'advancedLearning', component: AdvancedLearningPage },
-    { path: '/learning/navigation', name: 'learningNavigation', component: NavigationPage },
-    { path: '/learning/workspace', name: 'learningWorkspace', component: WorkspacePage },
-    { path: '/resources', name: 'resourceLibrary', component: ResourceLibraryPage },
-    { path: '/settings', name: 'settings', component: SettingsPage },
+    { path: '/learning/fundamentals', name: 'fundamentals', component: FundamentalsPage, meta: { requiresAuth: true } },
+    { path: '/learning/advanced', name: 'advancedLearning', component: AdvancedLearningPage, meta: { requiresAuth: true } },
+    { path: '/learning/navigation', name: 'learningNavigation', component: NavigationPage, meta: { requiresAuth: true } },
+    { path: '/learning/workspace', name: 'learningWorkspace', component: WorkspacePage, meta: { requiresAuth: true } },
+    { path: '/resources', name: 'resourceLibrary', component: ResourceLibraryPage, meta: { requiresAuth: true } },
+    { path: '/settings', name: 'settings', component: SettingsPage, meta: { requiresAuth: true } },
     { path: '/:pathMatch(.*)*', redirect: '/learning/overview' },
   ],
+})
+
+router.beforeEach((to) => {
+  const hasToken = Boolean(localStorage.getItem('token'))
+  if (to.meta.requiresAuth && !hasToken) return { name: 'login', query: { redirect: to.fullPath } }
+  if (to.name === 'login' && hasToken) return '/learning/overview'
+  return true
 })
 
 export default router

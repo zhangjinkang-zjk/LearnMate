@@ -5,7 +5,7 @@
 ## 当前分支与提交
 
 - 分支：`main`
-- 当前 HEAD：`1b40cca3 fix(diagnosis): normalize conversational choice answers`
+- 当前 HEAD：`36e55f1e refactor(learning): remove redundant task analysis module`
 - 主要基线：`46f39e5e refactor(frontend): remove legacy ppt workspace`
 - 本地没有推送远程。远程 `main` 曾与本地分叉，未经确认不要强推。
 
@@ -79,7 +79,7 @@ frontend/src/
   - 参数：`session_id`、`question_id`、`answer`、`time_spent`、`max_steps`
   - 复用 `ExamService.submit_answer` 判分，更新 `ExamRecord`、`KnowledgeMastery` 和画像雷达，再生成下一题
 
-后端接口都依赖 JWT 鉴权。当前基线前端没有登录页，联调需要浏览器已有有效 `localStorage.token`。
+后端接口都依赖 JWT 鉴权。前端通过 `/login` 调用既有 `/user/login_user` 获取 token，Axios 请求统一携带 `Authorization: Bearer <token>` 和兼容旧接口的 `token` header；路由守卫拦截未登录访问，接口返回 401 时清理 token 并回到登录页。
 
 ## 数据入库
 
@@ -98,16 +98,18 @@ frontend/src/
 
 后端同时把目标映射到既有 `learning_goal` 枚举，供旧的画像、路径和资源逻辑使用；原始中文目标保留在 `traits.onboarding.goal`。
 
-## 当前未提交改动
+## 最近完成的改动
 
-本轮正在把第二张图的沉浸式背景抽成公共组件：
+第二张图的绿色沉浸式背景已抽成公共组件，认证层也已接入既有 JWT 接口：
 
 - 新增：`frontend/src/shared/ui/ImmersiveOnboardingBackdrop.vue`
 - 修改：`DirectionSetupPage.vue` 使用公共背景组件
 - 修改：`DiagnosisPage.vue` 迁移到同一绿色沉浸式背景
 - 修改：`frontend/src/app/router/index.js` 将诊断和诊断结果标记为 `layout: immersive`
 
-这些改动尚未提交，完成视觉检查和构建后再提交。
+前端新增登录页、JWT 请求拦截器和路由守卫，学习定向、诊断和学习区均要求有效 token。
+
+当前工作区可能仍有其他任务产生的未跟踪文档，处理时不要删除或覆盖。
 
 ## 背景来源
 
@@ -129,11 +131,10 @@ frontend/src/
 
 ## 多任务协作注意
 
-多个 Codex 对话共享同一个工作区。可以并行，但不要同时修改同一文件。当前任务占用的文件是：
+多个 Codex 对话共享同一个工作区。可以并行，但不要同时修改同一文件。认证和规范改动涉及：
 
-- `frontend/src/pages/onboarding/DirectionSetupPage.vue`
-- `frontend/src/pages/onboarding/DiagnosisPage.vue`
-- `frontend/src/pages/onboarding/DiagnosisResultPage.vue`
+- `AGENTS.md`
 - `frontend/src/app/router/index.js`
-- `frontend/src/shared/ui/ImmersiveOnboardingBackdrop.vue`
-
+- `frontend/src/shared/api/httpClient.js`
+- `frontend/src/shared/api/authApi.js`
+- `frontend/src/pages/auth/LoginPage.vue`

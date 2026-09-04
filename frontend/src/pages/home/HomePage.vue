@@ -18,7 +18,7 @@
         </p>
       </div>
 
-      <router-link class="login-link" to="/profile">
+      <router-link class="login-link" to="/login">
         <span>LOGIN</span>
         <span class="login-arrow" aria-hidden="true">↗</span>
       </router-link>
