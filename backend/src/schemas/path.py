@@ -8,6 +8,7 @@ class GeneratePathRequest(BaseModel):
     subject: str = Field(description="学科主题")
     difficulty: str = Field(default="medium", description="难度: easy/medium/hard")
     node_count: int = Field(default=0, description="节点数，0=自动")
+    force_regenerate: bool = Field(default=False, description="用户明确要求时忽略已有路径缓存")
 
 
 class EnrollPathRequest(BaseModel):

@@ -13,7 +13,7 @@
       <button class="button button--quiet" type="button" @click="loadPage">重新加载</button>
     </div>
 
-    <div v-else-if="!learningPath" class="page-state surface">
+    <div v-else-if="!learningPath && !pathCatalog.length" class="page-state surface">
       <Route :size="28" />
       <strong>还没有可以学习的路径</strong>
       <p>先完成学习定向与能力诊断，系统才会按你的目标生成科目和章节。</p>
@@ -21,6 +21,27 @@
     </div>
 
     <template v-else>
+      <PathPicker
+        :paths="pathCatalog"
+        :active-path-id="learningPath?.path_id"
+        :loading="isPathsLoading"
+        :switching="isPathSwitching"
+        @select="selectPath"
+      />
+
+      <div v-if="pathSwitchError" class="path-switch-error" role="status">
+        <CircleAlert :size="16" />
+        <span>{{ pathSwitchError }}</span>
+        <button class="button button--quiet" type="button" @click="pathSwitchError = ''">关闭</button>
+      </div>
+
+      <div v-else-if="!learningPath" class="page-state surface">
+        <Route :size="25" />
+        <strong>请选择一条学习路径</strong>
+        <p>上方列出了当前学习方向下的相关科目，选择后即可进入对应章节。</p>
+      </div>
+
+      <template v-else>
       <header class="lesson-context">
         <div class="lesson-context__copy">
           <p class="eyebrow">基础讲解 · 当前科目</p>
@@ -122,6 +143,7 @@
           :resource-id="documentResource?.resource_id"
         />
       </div>
+      </template>
     </template>
   </div>
 </template>
@@ -134,13 +156,19 @@ import ChapterCheck from '@/features/fundamentals/ChapterCheck.vue'
 import ChapterRail from '@/features/fundamentals/ChapterRail.vue'
 import LearningAssistant from '@/features/fundamentals/LearningAssistant.vue'
 import MarkdownDocument from '@/features/fundamentals/MarkdownDocument.vue'
+import PathPicker from '@/features/fundamentals/PathPicker.vue'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
+import { readPortrait } from '@/shared/api/portraitApi'
 
 const route = useRoute()
 const router = useRouter()
 const isPageLoading = ref(true)
 const pageError = ref('')
 const learningPath = ref(null)
+const pathCatalog = ref([])
+const isPathsLoading = ref(true)
+const isPathSwitching = ref(false)
+const pathSwitchError = ref('')
 const activeNodeId = ref(null)
 const nodeDetail = ref(null)
 const documentResource = ref(null)
@@ -233,28 +261,284 @@ function findResource(resources, type) {
   return (resources || []).find((resource) => resource.resource_type === type) || null
 }
 
+function progressSummary(path, progress = null) {
+  const nodes = Array.isArray(path?.nodes) ? path.nodes : []
+  const rows = Array.isArray(progress?.nodes) ? progress.nodes : []
+  const completedNodes = Number(progress?.completed_nodes ?? progress?.completed ?? nodes.filter((node) => node.status === 'completed').length)
+  const totalNodes = Number(progress?.total_nodes ?? nodes.length)
+  const currentRow = rows.find((row) => ['in_progress', 'unlocked'].includes(row.status))
+  const currentNodeId = progress?.current_node_id ?? currentRow?.node_id ?? nodes.find((node) => ['in_progress', 'unlocked'].includes(node.status))?.id ?? null
+  const currentNode = nodes.find((node) => Number(node.id) === Number(currentNodeId))
+  const rawPercentage = progress?.percentage ?? path?.progress
+  const fallbackPercentage = totalNodes ? completedNodes / totalNodes : 0
+  const numericPercentage = Number(rawPercentage)
+  const percentage = Number.isFinite(numericPercentage)
+    ? (numericPercentage <= 1 ? numericPercentage * 100 : numericPercentage)
+    : fallbackPercentage * 100
+  return {
+    percentage: Math.min(100, Math.max(0, Math.round(percentage))),
+    completed_nodes: completedNodes,
+    total_nodes: totalNodes,
+    current_node: progress?.current_node || currentNode?.title || currentNode?.topic || '',
+    current_node_id: currentNodeId,
+  }
+}
+
+const SUBJECT_TERM_GROUPS = [
+  { terms: ['python'], weight: 8 },
+  { terms: ['rag'], weight: 8 },
+  { terms: ['大模型', '语言模型'], weight: 5 },
+  { terms: ['提示词', '提示工程', 'prompt'], weight: 5 },
+  { terms: ['文档'], weight: 3 },
+  { terms: ['向量', '嵌入', '语义'], weight: 4 },
+  { terms: ['检索'], weight: 4 },
+  { terms: ['知识库'], weight: 4 },
+  { terms: ['架构'], weight: 3 },
+  { terms: ['性能', '优化', '评估', '部署'], weight: 2 },
+  { terms: ['编程', '数据处理'], weight: 3 },
+  { terms: ['应用', '开发'], weight: 2 },
+]
+
+function normalizeSubject(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[\s·:：、，,。！？!?/\\_\-]+/g, '')
+}
+
+function subjectMatchScore(source, target) {
+  const sourceText = normalizeSubject(source)
+  const targetText = normalizeSubject(target)
+  if (!sourceText || !targetText) return 0
+  if (sourceText === targetText) return 1000
+  let score = sourceText.includes(targetText) || targetText.includes(sourceText) ? 30 : 0
+  SUBJECT_TERM_GROUPS.forEach(({ terms, weight }) => {
+    const sourceHasTerm = terms.some((term) => sourceText.includes(normalizeSubject(term)))
+    const targetHasTerm = terms.some((term) => targetText.includes(normalizeSubject(term)))
+    if (sourceHasTerm && targetHasTerm) score += weight
+  })
+  const sourceBigrams = new Set(Array.from(sourceText).map((_, index) => sourceText.slice(index, index + 2)).filter((item) => item.length === 2))
+  const sharedBigrams = Array.from(new Set(Array.from(targetText).map((_, index) => targetText.slice(index, index + 2)).filter((item) => item.length === 2)))
+    .filter((item) => sourceBigrams.has(item)).length
+  return score + Math.min(sharedBigrams, 8)
+}
+
+function selectRelatedPaths(values, relatedSubjects) {
+  const selected = []
+  const remaining = [...values]
+  relatedSubjects.forEach((subject) => {
+    let bestIndex = -1
+    let bestScore = 0
+    remaining.forEach((path, index) => {
+      const score = subjectMatchScore(subject, path.subject)
+      if (score > bestScore) {
+        bestScore = score
+        bestIndex = index
+      }
+    })
+    // Do not present an unrelated historical path as a current-direction course.
+    if (bestIndex >= 0 && bestScore >= 4) {
+      selected.push({ ...remaining[bestIndex], related_subject: subject })
+      remaining.splice(bestIndex, 1)
+    }
+  })
+  return selected
+}
+
+function mergePathCatalog(pathList, statsPaths, currentPath = null, relatedSubjects = []) {
+  const byId = new Map()
+  ;(pathList || []).forEach((path) => {
+    if (!path?.path_id) return
+    byId.set(Number(path.path_id), { ...path, path_id: Number(path.path_id) })
+  })
+  ;(statsPaths || []).forEach((stat) => {
+    if (!stat?.path_id) return
+    const pathId = Number(stat.path_id)
+    const existing = byId.get(pathId) || { path_id: pathId, subject: stat.subject || stat.goal || '' }
+    byId.set(pathId, {
+      ...existing,
+      subject: existing.subject || stat.subject || stat.goal || '',
+      difficulty: existing.difficulty || stat.difficulty,
+      node_count: existing.node_count || stat.progress?.total_nodes || stat.total_nodes || 0,
+      progress: stat.progress || existing.progress,
+    })
+  })
+  if (currentPath?.path_id) {
+    const pathId = Number(currentPath.path_id)
+    const existing = byId.get(pathId) || { path_id: pathId }
+    byId.set(pathId, {
+      ...existing,
+      subject: existing.subject || currentPath.goal || '',
+      node_count: existing.node_count || currentPath.nodes?.length || 0,
+      progress: {
+        ...existing.progress,
+        ...progressSummary(currentPath),
+      },
+    })
+  }
+  const values = [...byId.values()]
+  if (relatedSubjects.length) {
+    const subjects = relatedSubjects.map((subject) => String(subject || '').trim()).filter(Boolean)
+    const relatedPaths = selectRelatedPaths(values, subjects)
+    if (relatedPaths.length) return relatedPaths
+  }
+  return values.sort((left, right) => Number(right.path_id) - Number(left.path_id))
+}
+
+function chooseInitialNode(path, requestedNodeId = null) {
+  if (!path || !Array.isArray(path.nodes)) return null
+  const requestedNode = Number(requestedNodeId)
+  if (requestedNode > 0) {
+    const requested = path.nodes.find((node) => Number(node.id) === requestedNode && node.status !== 'locked')
+    if (requested) return requested
+  }
+  return path.nodes.find((node) => Number(node.id) === Number(path.current_node_id))
+    || path.nodes.find((node) => node.status === 'in_progress' || node.status === 'unlocked')
+    || [...path.nodes].reverse().find((node) => node.status === 'completed')
+    || path.nodes[0]
+    || null
+}
+
+async function loadPathWorkspace(pathId) {
+  const selected = await fundamentalsApi.getCurrentPath(pathId)
+  if (selected && Number(selected.path_id) === Number(pathId) && Array.isArray(selected.nodes)) return selected
+
+  // Older deployments may not support the path_id query parameter yet. Build
+  // the same workspace shape from the protected path and progress endpoints.
+  const [detail, progress] = await Promise.all([
+    fundamentalsApi.getPath(pathId),
+    fundamentalsApi.getPathProgress(pathId).catch(() => null),
+  ])
+  if (!detail) return null
+  const progressRows = Array.isArray(progress?.nodes) ? progress.nodes : []
+  const nodes = (detail.nodes || []).map((node, index) => {
+    const id = node.node_id ?? node.id
+    const row = progressRows.find((item) => Number(item.node_id) === Number(id))
+    return {
+      id,
+      title: node.topic || node.title || `第 ${index + 1} 节`,
+      summary: node.description || '',
+      knowledge_tags: node.knowledge_tags || [],
+      resource_types: node.resource_types || [],
+      teaching_spec: node.teaching_spec || null,
+      status: row?.status || (index === 0 ? 'unlocked' : 'locked'),
+      session_id: row?.session_id || null,
+      resources: [],
+    }
+  })
+  const currentNodeId = progress?.current_node_id
+    || nodes.find((node) => node.status === 'in_progress' || node.status === 'unlocked')?.id
+    || null
+  const completedNodes = nodes.filter((node) => node.status === 'completed').length
+  return {
+    path_id: detail.path_id,
+    goal: detail.subject,
+    stage: `${completedNodes}/${nodes.length}`,
+    progress: progress?.percentage ?? Math.round(completedNodes / Math.max(nodes.length, 1) * 100),
+    current_node_id: currentNodeId,
+    nodes,
+    next_action: currentNodeId ? { target_id: currentNodeId, type: 'read', label: '开始学习' } : null,
+    diagnosis: null,
+  }
+}
+
+function syncPathCatalog(path) {
+  if (!path?.path_id) return
+  const pathId = Number(path.path_id)
+  const summary = {
+    path_id: pathId,
+    subject: path.goal || '',
+    node_count: path.nodes?.length || 0,
+    progress: progressSummary(path),
+  }
+  const index = pathCatalog.value.findIndex((item) => Number(item.path_id) === pathId)
+  if (index < 0) pathCatalog.value = [...pathCatalog.value, summary]
+  else pathCatalog.value[index] = { ...pathCatalog.value[index], ...summary }
+}
+
 async function loadPage() {
   isPageLoading.value = true
   pageError.value = ''
+  pathSwitchError.value = ''
+  isPathsLoading.value = true
   try {
-    const path = await fundamentalsApi.getCurrentPath()
-    if (!path || !Array.isArray(path.nodes) || !path.nodes.length) {
+    const [pathListResult, pathStatsResult, currentResult, portraitResult] = await Promise.allSettled([
+      fundamentalsApi.listPaths(),
+      fundamentalsApi.getPathStats(),
+      fundamentalsApi.getCurrentPath(),
+      readPortrait(),
+    ])
+    const pathList = pathListResult.status === 'fulfilled' && Array.isArray(pathListResult.value) ? pathListResult.value : []
+    const pathStats = pathStatsResult.status === 'fulfilled' ? pathStatsResult.value : null
+    let current = currentResult.status === 'fulfilled' ? currentResult.value : null
+    const portrait = portraitResult.status === 'fulfilled' ? portraitResult.value : null
+    const relatedSubjects = Array.isArray(portrait?.traits?.learning_direction_subjects)
+      ? portrait.traits.learning_direction_subjects
+      : []
+    pathCatalog.value = mergePathCatalog(pathList, pathStats?.paths, current, relatedSubjects)
+
+    const requestedPathId = Number(route.query.pathId)
+    const listedPathIds = new Set(pathCatalog.value.map((path) => Number(path.path_id)))
+    const selectedPathId = requestedPathId > 0 && listedPathIds.has(requestedPathId)
+      ? requestedPathId
+      : (current?.path_id && listedPathIds.has(Number(current.path_id))
+          ? current.path_id
+          : pathCatalog.value[0]?.path_id)
+    if (selectedPathId && (!current || Number(current.path_id) !== Number(selectedPathId))) {
+      current = await loadPathWorkspace(selectedPathId)
+    }
+    if (!current || !Array.isArray(current.nodes) || !current.nodes.length) {
       learningPath.value = null
       activeNodeId.value = null
       return
     }
-    learningPath.value = path
-    const requestedId = Number(route.query.node)
-    const requestedNode = path.nodes.find((node) => node.id === requestedId && node.status !== 'locked')
-    const currentNode = path.nodes.find((node) => node.id === path.current_node_id)
-      || path.nodes.find((node) => node.status === 'in_progress' || node.status === 'unlocked')
-      || [...path.nodes].reverse().find((node) => node.status === 'completed')
-    const initialNode = requestedNode || currentNode
-    if (initialNode) await selectNode(initialNode.id, false)
+    learningPath.value = current
+    syncPathCatalog(current)
+    const initialNode = chooseInitialNode(current, route.query.node)
+    if (selectedPathId && (Number(route.query.pathId) !== Number(selectedPathId)
+      || (initialNode && Number(route.query.node) !== Number(initialNode.id)))) {
+      await router.replace({
+        query: {
+          ...route.query,
+          pathId: selectedPathId,
+          ...(initialNode ? { node: initialNode.id } : {}),
+        },
+      })
+    }
+    if (initialNode) {
+      isPageLoading.value = false
+      await selectNode(initialNode.id, false)
+    }
   } catch (error) {
     pageError.value = errorDetail(error, '无法读取当前学习路径，请稍后重试。')
   } finally {
+    isPathsLoading.value = false
     isPageLoading.value = false
+  }
+}
+
+async function selectPath(pathId) {
+  const nextPathId = Number(pathId)
+  if (!nextPathId || isPathSwitching.value || Number(learningPath.value?.path_id) === nextPathId) return
+  isPathSwitching.value = true
+  pathSwitchError.value = ''
+  await reportReadDuration(true)
+  resourceController?.abort()
+  try {
+    const selected = await loadPathWorkspace(nextPathId)
+    if (!selected || !Array.isArray(selected.nodes) || !selected.nodes.length) throw new Error('这条路径暂时没有可学习的章节')
+    learningPath.value = selected
+    activeNodeId.value = null
+    syncPathCatalog(selected)
+    const initialNode = chooseInitialNode(selected)
+    await router.replace({ query: { ...route.query, pathId: nextPathId, node: initialNode?.id } })
+    if (initialNode) {
+      isPageLoading.value = false
+      await selectNode(initialNode.id, false)
+    }
+  } catch (error) {
+    pathSwitchError.value = errorDetail(error, '无法打开这条学习路径，请稍后重试。')
+  } finally {
+    isPathSwitching.value = false
   }
 }
 
@@ -292,19 +576,37 @@ async function loadActiveNode() {
     let resources = detail?.progress?.resources || activeNode.value.resources || []
     let documentSummary = findResource(resources, 'document')
 
-    if (!documentSummary) {
-      resourceLoadingMessage.value = '正在为本章生成完整讲解'
-      await fundamentalsApi.generateResources(learningPath.value.path_id, activeNode.value.id, (event) => {
-        if (event?.type === 'status') resourceLoadingMessage.value = event.msg || event.message || resourceLoadingMessage.value
-        if (event?.type === 'error') documentError.value = event.detail || event.message || '本章资源生成失败'
-      }, resourceController.signal)
-      if (documentError.value) throw new Error(documentError.value)
-      detail = await fundamentalsApi.getNode(learningPath.value.path_id, activeNode.value.id)
-      if (loadVersion !== nodeLoadVersion) return
-      nodeDetail.value = detail
-      resources = detail?.progress?.resources || []
-      documentSummary = findResource(resources, 'document')
-    }
+    // Always pass through the idempotent path-node resource endpoint.  The
+    // backend decides whether to reuse a validated binding or generate a
+    // missing/stale chapter; the page must not infer that from a summary row.
+    resourceLoadingMessage.value = documentSummary
+      ? '正在校验本章资源'
+      : '正在调用资源生成服务'
+    await fundamentalsApi.generateResources(
+      learningPath.value.path_id,
+      activeNode.value.id,
+      (event) => {
+        if (event?.type === 'status') {
+          resourceLoadingMessage.value = event.msg || event.message || resourceLoadingMessage.value
+        }
+        if (event?.type === 'resource') {
+          resourceLoadingMessage.value = event.resource_type === 'document'
+            ? '主讲文档已准备，正在读取正文'
+            : '章节资源已准备'
+        }
+        if (event?.type === 'error') {
+          documentError.value = event.detail || event.message || '本章资源生成失败'
+        }
+      },
+      resourceController.signal,
+      detail?.resource_types || activeNode.value.resource_types,
+    )
+    if (documentError.value) throw new Error(documentError.value)
+    detail = await fundamentalsApi.getNode(learningPath.value.path_id, activeNode.value.id)
+    if (loadVersion !== nodeLoadVersion) return
+    nodeDetail.value = detail
+    resources = detail?.progress?.resources || []
+    documentSummary = findResource(resources, 'document')
 
     if (!documentSummary) throw new Error('资源生成完成，但没有找到本章主讲文档')
     const fullDocument = await fundamentalsApi.getResource(normalizeResourceId(documentSummary))
@@ -387,8 +689,12 @@ async function handleChapterPassed() {
   const finishedIndex = activeNodeIndex.value
   isChecking.value = false
   try {
-    const refreshed = await fundamentalsApi.getCurrentPath()
-    if (refreshed?.nodes) learningPath.value = refreshed
+    const currentPathId = learningPath.value?.path_id
+    const refreshed = currentPathId ? await fundamentalsApi.getCurrentPath(currentPathId) : null
+    if (refreshed?.nodes) {
+      learningPath.value = refreshed
+      syncPathCatalog(refreshed)
+    }
     const nextNode = learningPath.value?.nodes[finishedIndex + 1]
     if (nextNode && nextNode.status !== 'locked') await selectNode(nextNode.id)
   } catch (error) {
@@ -431,6 +737,9 @@ onBeforeUnmount(() => {
 .path-progress strong { color: var(--accent-deep); font-size: 20px; }
 .path-progress small { color: var(--muted); font-size: 10px; text-align: right; }
 .learning-layout { display: grid; grid-template-columns: 168px minmax(440px, 1fr) 286px; align-items: start; gap: 14px; }
+.path-switch-error { display: flex; min-height: 42px; align-items: center; gap: 9px; margin: -10px 0 18px; padding: 9px 12px; border: 1px solid #ead6c8; border-radius: 6px; background: #fff9f4; color: #965536; font-size: 11px; }
+.path-switch-error > span { min-width: 0; flex: 1; }
+.path-switch-error .button { min-height: 28px; padding: 0 9px; font-size: 10px; }
 .lesson-main { display: grid; min-width: 0; gap: 12px; }
 .resource-toolbar { display: flex; min-height: 38px; align-items: center; justify-content: space-between; gap: 12px; }
 .resource-tabs { display: flex; align-items: center; gap: 4px; }

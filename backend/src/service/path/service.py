@@ -486,9 +486,6 @@ class PathService:
         existing = await LearningPath.filter(user_id=user_id, subject=subject).first()
         if existing and not force_regenerate:
             return {"path_id": existing.id, "subject": subject, "nodes": [], "cached": True}
-        if existing and force_regenerate:
-            # 路径有 user_id+subject 唯一约束；旧资源记录保留，路径结构按用户明确操作重建。
-            await existing.delete()
 
         portrait_context = "暂无画像数据"
         mastery_context = "暂无掌握度数据"
@@ -573,6 +570,9 @@ class PathService:
             raise RuntimeError("LLM 未返回有效节点")
 
         from tortoise.exceptions import IntegrityError
+        if existing and force_regenerate:
+            # 只有新节点已成功生成后才移除旧结构，生成失败时保留原路径可继续学习。
+            await existing.delete()
         try:
             path = await LearningPath.create(
                 subject=subject,
@@ -672,8 +672,14 @@ class PathService:
 
     @staticmethod
     async def list_paths(user_id: int) -> list[dict]:
-        """列出当前用户的所有路径"""
-        paths = await LearningPath.filter(user_id=user_id).order_by("-created_at").prefetch_related("nodes").all()
+        """列出用户创建或已加入的路径，供学习空间切换。"""
+        owned_paths = await LearningPath.filter(user_id=user_id).prefetch_related("nodes").all()
+        enrolled_ids = await UserPathProgress.filter(user_id=user_id).values_list("path_id", flat=True)
+        enrolled_paths = []
+        if enrolled_ids:
+            enrolled_paths = await LearningPath.filter(id__in=list(set(enrolled_ids))).prefetch_related("nodes").all()
+        paths_by_id = {path.id: path for path in [*owned_paths, *enrolled_paths]}
+        paths = sorted(paths_by_id.values(), key=lambda path: path.created_at, reverse=True)
 
         result = []
         for p in paths:
@@ -696,8 +702,10 @@ class PathService:
         if not path:
             return None
 
-        # 权限检查：创建者或公共路径可查看
-        if path.user_id != user_id and not path.is_public:
+        # 与节点/进度接口保持一致：创建者、公开路径或已加入用户可读。
+        # 这条分支主要服务旧部署的路径详情回退，不改变写操作权限。
+        is_enrolled = await UserPathProgress.filter(user_id=user_id, path_id=path_id).exists()
+        if path.user_id != user_id and not path.is_public and not is_enrolled:
             return None
 
         nodes = path.nodes or []
@@ -826,24 +834,33 @@ class PathService:
 
         progress = await UserPathProgress.filter(user_id=user_id, path_id=path_id, node_id=node_id).first()
 
-        resource_ids = json.loads(progress.resource_ids) if progress and progress.resource_ids else []
+        # A progress binding is the authoritative path cache.  Revalidate it
+        # against the current node teaching contract so stale/failed documents
+        # are reported as missing and the client can call the real generator.
+        resource_types = json.loads(node.resource_types) if node.resource_types else list(PATH_DEFAULT_RESOURCE_TYPES)
+        teaching_context = await build_node_teaching_context(path_id, node_id, user_id)
+        bound_records, _ = await get_bound_node_resources(
+            progress,
+            user_id,
+            resource_types,
+            topic=node.topic,
+            teaching_context=teaching_context,
+        )
         resources = []
-        if resource_ids:
-            res_records = await GeneratedResource.filter(id__in=resource_ids).all()
-            for r in res_records:
-                item = {"resource_id": r.id, "topic": r.topic, "resource_type": r.resource_type}
-                if r.file_url:
-                    item["file_url"] = r.file_url
-                    item["url"] = r.file_url
-                    item["preview_url"] = r.file_url
-                if r.resource_type == "html" and r.content:
-                    try:
-                        c = json.loads(r.content)
-                        if c.get("presentation_id"):
-                            item["presentation_id"] = c["presentation_id"]
-                    except (json.JSONDecodeError, TypeError):
-                        logger.warning("Suppressed exception at backend/src/service/path/service.py:710", exc_info=True)
-                resources.append(item)
+        for r in bound_records:
+            item = {"resource_id": r.id, "topic": r.topic, "resource_type": r.resource_type}
+            if r.file_url:
+                item["file_url"] = r.file_url
+                item["url"] = r.file_url
+                item["preview_url"] = r.file_url
+            if r.resource_type == "html" and r.content:
+                try:
+                    c = json.loads(r.content)
+                    if c.get("presentation_id"):
+                        item["presentation_id"] = c["presentation_id"]
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning("节点资源 presentation_id 解析失败 resource_id=%s", r.id, exc_info=True)
+            resources.append(item)
 
         return {
             "node_id": node.id,
@@ -923,7 +940,14 @@ class PathService:
         async with lock:
             topic = node.topic
             node_resource_types = resource_types or list(PATH_DEFAULT_RESOURCE_TYPES)
-            existing_records, missing_types = await get_bound_node_resources(progress, user_id, node_resource_types)
+            teaching_context = await build_node_teaching_context(path_id, node_id, user_id)
+            existing_records, missing_types = await get_bound_node_resources(
+                progress,
+                user_id,
+                node_resource_types,
+                topic=node.topic,
+                teaching_context=teaching_context,
+            )
 
             for r in existing_records:
                 yield _resource_sse(r, path_id=path_id, node_id=node_id)
@@ -951,7 +975,6 @@ class PathService:
 
                 if gen_types:
                     from backend.src.service.resource.service import ResourceService
-                    teaching_context = await build_node_teaching_context(path_id, node_id, user_id)
                     async for event_str in ResourceService.generate_stream(
                         topic=topic, user_id=user_id, resource_types=gen_types, skip_review=True,
                         ppt_prompt_key="ppt_video",
@@ -1021,14 +1044,20 @@ class PathService:
         async with lock:
             topic = node.topic
             node_resource_types = resource_types or list(PATH_DEFAULT_RESOURCE_TYPES)
-            existing_records, missing_types = await get_bound_node_resources(progress, user_id, node_resource_types)
+            teaching_context = await build_node_teaching_context(path_id, node_id, user_id)
+            existing_records, missing_types = await get_bound_node_resources(
+                progress,
+                user_id,
+                node_resource_types,
+                topic=node.topic,
+                teaching_context=teaching_context,
+            )
 
             gen_types = [t for t in missing_types if t != "exercise"]
 
             generated_ids = []
             if gen_types:
                 try:
-                    teaching_context = await build_node_teaching_context(path_id, node_id, user_id)
                     saved = await ResourceService.generate_and_save(
                         topic=topic,
                         user_id=user_id,
@@ -1683,10 +1712,12 @@ class PathService:
     # ── 轻量学习路径接口（供前端动态路径动画） ──
 
     @staticmethod
-    async def get_current_path(user_id: int) -> dict | None:
-        """返回用户当前活跃路径（含节点、进度、诊断）"""
-        progress_record = await UserPathProgress.filter(user_id=user_id)\
-            .order_by("-id").prefetch_related("path", "node").first()
+    async def get_current_path(user_id: int, path_id: int | None = None) -> dict | None:
+        """返回用户当前活跃路径，或用户指定的已加入路径。"""
+        progress_query = UserPathProgress.filter(user_id=user_id)
+        if path_id is not None:
+            progress_query = progress_query.filter(path_id=path_id)
+        progress_record = await progress_query.order_by("-id").prefetch_related("path", "node").first()
         if not progress_record or not progress_record.path:
             return None
 
@@ -1710,7 +1741,12 @@ class PathService:
         resources_map = {}
         read_duration_map = {}
         if all_resource_ids:
-            res_records = await GeneratedResource.filter(id__in=all_resource_ids).all()
+            # Resource bindings are user-scoped; never expose a record that a
+            # stale or forged progress row points at for another account.
+            res_records = await GeneratedResource.filter(
+                id__in=all_resource_ids,
+                user_id=user_id,
+            ).all()
             for r in res_records:
                 resources_map[r.id] = r
             read_statuses = await ResourceReadStatus.filter(

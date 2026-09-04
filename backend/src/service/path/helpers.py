@@ -14,6 +14,7 @@ from backend.src.models.portraitmodel import User_picture
 from backend.src.models.resource_model import GeneratedResource
 from backend.src.models.usermodel import User
 from backend.src.service.notification.service import check_and_create_node_unlocked
+from backend.src.service.resource.document_quality import validate_document_chapter
 from backend.src.service.resource.persistence import is_failed_generation_content
 from backend.src.service.path.teaching_context import PATH_DEFAULT_RESOURCE_TYPES
 
@@ -74,14 +75,33 @@ async def get_bound_node_resources(
     progress,
     user_id: int,
     resource_types: list[str] | None = None,
+    topic: str | None = None,
+    teaching_context: dict | None = None,
 ):
-    """Return resources already bound to this path node, not global same-topic resources."""
+    """Return resources valid for this path-node binding.
+
+    ``UserPathProgress.resource_ids`` is the path cache.  A global same-topic
+    lookup is intentionally not performed here because identical topics can
+    have different teaching contracts on different paths.
+    """
     if resource_types is None:
         resource_types = list(PATH_DEFAULT_RESOURCE_TYPES)
+    requested_types = list(dict.fromkeys(
+        str(resource_type).strip()
+        for resource_type in resource_types
+        if str(resource_type).strip()
+    ))
+    if not requested_types:
+        return [], []
+
+    if not topic and isinstance(teaching_context, dict):
+        current = teaching_context.get("current")
+        if isinstance(current, dict):
+            topic = str(current.get("topic") or "").strip() or None
 
     bound_ids = _load_resource_ids(getattr(progress, "resource_ids", None))
     if not bound_ids:
-        return [], list(resource_types)
+        return [], requested_types
 
     records = [
         record
@@ -93,13 +113,53 @@ async def get_bound_node_resources(
 
     existing_records = []
     seen_types: set[str] = set()
-    for resource_type in resource_types:
-        record = next((r for r in ordered if r.resource_type == resource_type), None)
-        if record:
+    accepted_ids: set[int] = set()
+    rejected_ids: set[int] = set()
+    for record in ordered:
+        resource_type = str(record.resource_type or "").strip()
+        if resource_type not in requested_types:
+            accepted_ids.add(record.id)
+            continue
+        if topic and str(record.topic or "").strip() != topic:
+            rejected_ids.add(record.id)
+            continue
+        if resource_type == "document" and teaching_context is not None:
+            quality_errors = validate_document_chapter(record.content, teaching_context)
+            if quality_errors:
+                rejected_ids.add(record.id)
+                logger.info(
+                    "路径节点文档未通过复用校验，解除绑定 resource_id=%s errors=%s",
+                    record.id,
+                    quality_errors,
+                )
+                continue
+        if resource_type not in seen_types:
             existing_records.append(record)
             seen_types.add(resource_type)
+        accepted_ids.add(record.id)
 
-    missing_types = [resource_type for resource_type in resource_types if resource_type not in seen_types]
+    # Remove stale, failed, wrong-topic, and quality-invalid IDs from this
+    # node binding.  The GeneratedResource rows remain available for inspection.
+    retained_ids = [
+        resource_id
+        for resource_id in bound_ids
+        if resource_id in accepted_ids and resource_id not in rejected_ids
+    ]
+    if retained_ids != bound_ids:
+        serialized_ids = json.dumps(retained_ids, ensure_ascii=False)
+        try:
+            await UserPathProgress.filter(id=progress.id, user_id=user_id).update(
+                resource_ids=serialized_ids,
+            )
+            progress.resource_ids = serialized_ids
+        except Exception:
+            logger.exception(
+                "清理路径节点资源绑定失败 progress_id=%s user_id=%s",
+                getattr(progress, "id", None),
+                user_id,
+            )
+
+    missing_types = [resource_type for resource_type in requested_types if resource_type not in seen_types]
     return existing_records, missing_types
 
 

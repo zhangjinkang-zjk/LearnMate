@@ -12,13 +12,32 @@ function unwrap(response) {
 }
 
 export const fundamentalsApi = {
-  async getCurrentPath() {
+  async getCurrentPath(pathId = null) {
     try {
-      return unwrap(await httpClient.get('/learning_path/current'))
+      const params = Number.isInteger(Number(pathId)) && Number(pathId) > 0
+        ? { path_id: Number(pathId) }
+        : undefined
+      return unwrap(await httpClient.get('/learning_path/current', { params }))
     } catch (error) {
       if (error.response?.status === 404) return null
       throw error
     }
+  },
+
+  async listPaths() {
+    return unwrap(await httpClient.get('/path/list'))
+  },
+
+  async getPath(pathId) {
+    return unwrap(await httpClient.get(`/path/${pathId}`))
+  },
+
+  async getPathProgress(pathId) {
+    return unwrap(await httpClient.get(`/path/${pathId}/progress`))
+  },
+
+  async getPathStats() {
+    return unwrap(await httpClient.get('/study/path-stats'))
   },
 
   async getNode(pathId, nodeId) {
@@ -35,10 +54,14 @@ export const fundamentalsApi = {
     }))
   },
 
-  generateResources(pathId, nodeId, onEvent, signal) {
+  generateResources(pathId, nodeId, onEvent, signal, resourceTypes = ['document', 'mindmap']) {
+    let requestedTypes = Array.isArray(resourceTypes) && resourceTypes.length
+      ? resourceTypes.filter((type) => typeof type === 'string' && type.trim())
+      : ['document', 'mindmap']
+    if (!requestedTypes.length) requestedTypes = ['document', 'mindmap']
     return streamJsonEvents(
       `/path/${pathId}/node/${nodeId}/generate-resources/stream`,
-      { resource_types: ['document', 'mindmap'], background: false },
+      { resource_types: requestedTypes, background: false },
       onEvent,
       { signal },
     )

@@ -137,13 +137,44 @@ async def _cache_task_state(task_id: str, state: dict):
 class ResourceService:
 
     @staticmethod
-    async def generate_and_save(topic: str, user_id: int, resource_types: list[str], chat_group_id: int = 0, exam_question_types: str = "", exam_count: int = 5, exam_difficulty: str = "medium", user_notes: str = "", ppt_prompt_key: str = "ppt", llm_priority: str = "high", skip_review: bool = False, bind_chat_history: bool = False, ppt_theme_id: str | None = None, include_request_in_history: bool = True, save_to_chat_history: bool = True, teaching_context: dict | None = None) -> list[dict]:
+    async def generate_and_save(topic: str, user_id: int, resource_types: list[str], chat_group_id: int = 0, exam_question_types: str = "", exam_count: int = 5, exam_difficulty: str = "medium", user_notes: str = "", ppt_prompt_key: str = "ppt", llm_priority: str = "high", skip_review: bool = False, bind_chat_history: bool = False, ppt_theme_id: str | None = None, include_request_in_history: bool = True, save_to_chat_history: bool = True, teaching_context: dict | None = None, force_regenerate: bool = False) -> list[dict]:
         import time as _time
         _t_total = _time.perf_counter()
         chat_group_id = await _ensure_generation_chat_group_id(user_id, chat_group_id, bind_chat_history)
 
         initial_state = await _make_state(topic, user_id, resource_types, chat_group_id, exam_question_types, exam_count, exam_difficulty, user_notes=user_notes, ppt_prompt_key=ppt_prompt_key, llm_priority=llm_priority, skip_review=skip_review, ppt_theme_id=ppt_theme_id, teaching_context=teaching_context)
         topic = initial_state["topic"]
+
+        # 资源类型明确时按用户、主题、类型逐项复用；空类型交给 LeaderAgent 决定，无法安全推断缓存范围。
+        cached_resources: dict[str, dict] = {}
+        requested_types = list(dict.fromkeys(str(item).strip() for item in (resource_types or []) if str(item).strip()))
+        # A path teaching contract scopes resources to its path-node binding;
+        # never reuse another same-topic record from the user's global library.
+        if requested_types and not force_regenerate and teaching_context is None:
+            for resource_type in requested_types:
+                record = await GeneratedResource.filter(
+                    user_id=user_id,
+                    topic=topic,
+                    resource_type=resource_type,
+                ).order_by("-id").first()
+                if record and not _is_failed_generation_content(record.content):
+                    cached_resources[resource_type] = {
+                        "resource_id": record.id,
+                        "topic": record.topic,
+                        "resource_type": record.resource_type,
+                        "content": record.content,
+                        "review_passed": record.review_passed,
+                        "retry_count": record.retry_count,
+                        "file_url": record.file_url,
+                        "cover_url": record.cover_url,
+                        "visibility": record.visibility or "private",
+                        "cached": True,
+                    }
+            missing_types = [item for item in requested_types if item not in cached_resources]
+            if not missing_types:
+                return [cached_resources[item] for item in requested_types]
+            resource_types = missing_types
+            initial_state["resource_types"] = missing_types
 
         result = await resource_graph.ainvoke(initial_state)
         generated = result.get("generated_resources", {})
@@ -155,6 +186,9 @@ class ResourceService:
             file_urls=result.get("file_urls"),
             ppt_theme_id=ppt_theme_id,
         )
+        if cached_resources:
+            saved_by_type = {item.get("resource_type"): item for item in saved}
+            saved = [cached_resources[item] if item in cached_resources else saved_by_type[item] for item in requested_types if item in cached_resources or item in saved_by_type]
         if save_to_chat_history and chat_group_id > 0:
             await _save_generation_to_history(user_id, chat_group_id, topic, saved, include_request=include_request_in_history)
 
@@ -194,7 +228,7 @@ class ResourceService:
         return saved
 
     @staticmethod
-    async def generate_stream(topic: str, user_id: int, resource_types: list[str], chat_group_id: int = 0, exam_question_types: str = "single_choice, multi_choice, true_false", exam_count: int = 5, exam_difficulty: str = "medium", skip_review: bool = False, user_notes: str = "", ppt_prompt_key: str = "ppt", llm_priority: str = "high", bind_chat_history: bool = False, answers: dict | None = None, ppt_theme_id: str | None = None, include_request_in_history: bool = True, save_to_chat_history: bool = True, teaching_context: dict | None = None):
+    async def generate_stream(topic: str, user_id: int, resource_types: list[str], chat_group_id: int = 0, exam_question_types: str = "single_choice, multi_choice, true_false", exam_count: int = 5, exam_difficulty: str = "medium", skip_review: bool = False, user_notes: str = "", ppt_prompt_key: str = "ppt", llm_priority: str = "high", bind_chat_history: bool = False, answers: dict | None = None, ppt_theme_id: str | None = None, include_request_in_history: bool = True, save_to_chat_history: bool = True, teaching_context: dict | None = None, force_regenerate: bool = False):
         """astream(stream_mode=["values", "custom"]) — PPT 通过 custom 事件逐页推送，其他类型通过 values 事件推送"""
         import time as _time
         _t_total = _time.perf_counter()
@@ -225,6 +259,56 @@ class ResourceService:
         yielded_types: set[str] = set()
         saved_types: set[str] = set()
         saved_resources: list[dict] = []
+        cached_resource_ids: set[int] = set()
+
+        requested_types = list(dict.fromkeys(str(item).strip() for item in (resource_types or []) if str(item).strip()))
+        # Keep path-node generation isolated from the global topic cache.  The
+        # path service will pass already-validated bound resources separately.
+        if requested_types and not force_regenerate and teaching_context is None:
+            cached_by_type = {}
+            for resource_type in requested_types:
+                record = await GeneratedResource.filter(
+                    user_id=user_id,
+                    topic=topic,
+                    resource_type=resource_type,
+                ).order_by("-id").first()
+                if record and not _is_failed_generation_content(record.content):
+                    cached_by_type[resource_type] = {
+                        "resource_id": record.id,
+                        "topic": record.topic,
+                        "resource_type": record.resource_type,
+                        "content": record.content,
+                        "review_passed": record.review_passed,
+                        "retry_count": record.retry_count,
+                        "file_url": record.file_url,
+                        "cover_url": record.cover_url,
+                        "visibility": record.visibility or "private",
+                    }
+            for resource_type in requested_types:
+                item = cached_by_type.get(resource_type)
+                if not item:
+                    continue
+                saved_resources.append(item)
+                saved_types.add(resource_type)
+                yielded_types.add(resource_type)
+                cached_resource_ids.add(int(item["resource_id"]))
+                yield _make_file_event(topic, resource_type, item.get("content", ""), item["resource_id"], f"/resource/{item['resource_id']}/download")
+            missing_types = [item for item in requested_types if item not in cached_by_type]
+            if not missing_types:
+                done_resources = [
+                    {
+                        "resource_id": item["resource_id"],
+                        "file_type": item["resource_type"],
+                        "topic": item["topic"],
+                        "content": item.get("content", ""),
+                        "download_url": f"/resource/{item['resource_id']}/download",
+                    }
+                    for item in saved_resources
+                ]
+                yield f"data: {json.dumps({'done': True, 'chat_group_id': chat_group_id, 'resources': done_resources}, ensure_ascii=False)}\n\n"
+                return
+            resource_types = missing_types
+            initial_state["resource_types"] = missing_types
 
         async for mode, chunk in resource_graph.astream(initial_state, stream_mode=["values", "custom"]):
             if mode == "custom":
@@ -286,6 +370,8 @@ class ResourceService:
 
         # 更新审核状态
         for r in saved_resources:
+            if r["resource_id"] in cached_resource_ids:
+                continue
             await GeneratedResource.filter(id=r["resource_id"]).update(
                 review_passed=final_passed, retry_count=final_retry,
             )

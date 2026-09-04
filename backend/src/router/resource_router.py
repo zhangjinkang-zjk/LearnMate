@@ -96,7 +96,7 @@ async def generate_resource(
     if not await check_rate_limit("resource_gen", user_id, 5, 60):
         raise HTTPException(429, "请求过于频繁，请 1 分钟后再试")
     try :
-        result = await ResourceService.generate_and_save(data.topic, user_id, data.resource_types, data.chat_group_id, bind_chat_history=data.bind_chat_history, ppt_theme_id=data.ppt_theme_id, save_to_chat_history=data.save_to_chat_history)
+        result = await ResourceService.generate_and_save(data.topic, user_id, data.resource_types, data.chat_group_id, bind_chat_history=data.bind_chat_history, ppt_theme_id=data.ppt_theme_id, save_to_chat_history=data.save_to_chat_history, force_regenerate=data.force_regenerate)
         return ok(result)
     except HTTPException :
         raise
@@ -122,6 +122,7 @@ async def generate_resource_stream(
             answers=data.answers,
             ppt_theme_id=data.ppt_theme_id,
             save_to_chat_history=data.save_to_chat_history,
+            force_regenerate=data.force_regenerate,
         ),
         media_type = "text/event-stream",
         headers = {

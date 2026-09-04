@@ -122,7 +122,7 @@ async def sync_direction_subjects(
         and cached_subjects
         and (not cached_goal or not goal or cached_goal == str(goal).strip())
     ):
-        return [str(item).strip() for item in cached_subjects if str(item).strip()][:limit]
+        return [item.strip() for item in cached_subjects if isinstance(item, str) and item.strip()][:limit]
 
     subjects = await get_direction_subjects(direction, goal, limit)
     if not user:

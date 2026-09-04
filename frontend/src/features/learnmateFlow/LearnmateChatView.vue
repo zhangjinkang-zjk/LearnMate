@@ -52,21 +52,44 @@ const messages = ref([
   { role: 'assistant', text: 'Hi, I am LearnMate. Let\'s get to know how you learn.' }
 ])
 
-const fallbackQuestions = [
-  '最近你真正想学会、做成，或者认真搞明白的一件事是什么？',
-  '围绕这件事，你最希望自己获得什么结果？',
-  '学习过程中，哪一部分最容易让你卡住？',
-  '当你卡住时，你希望我用什么方式帮你？',
-  '最后，你希望我用什么节奏陪你推进学习？'
+const fallbackQuestionVariants = [
+  [
+    '最近有没有一个你想亲手做成、处理好或交付的东西？不用专业术语，比如把数据分析清楚、做个小工具，或让知识库能回答问题。',
+    '有没有一件事是你现在总要照着别人做，但希望以后能自己完成？直接说事情就行，比如写接口、做分析或排查故障。',
+    '如果这段时间只练会一件能派上用场的本领，你最想是哪一件？可以说一个任务、一个作品，甚至一个关键词。'
+  ],
+  [
+    first => `如果把「${first}」做好了，你最想拿它解决什么？可以说会用到的人、场景，或你希望看到的结果。`,
+    first => `你为什么现在想把「${first}」学会？是要交付一个东西、应对一项工作，还是想先做出自己的作品？`,
+    first => `想象一下「${first}」真正派上用场的那天：你希望它替你完成哪件事？`
+  ],
+  [
+    first => `你以前试过「${first}」吗？可以从最近一次尝试说起，不管是照着教程做，还是只看懂了一部分。`,
+    first => `现在把「${first}」交给你，你能先自己完成哪一步？说到具体动作就好。`,
+    first => `关于「${first}」，有没有一个小成果是你已经做出来的？哪怕只是跟着示例跑通也算。`,
+    first => `上次做「${first}」时，你实际先做了什么？可以从准备资料、数据或动手写第一步说起。`
+  ],
+  [
+    first => `做「${first}」时，哪一个动作最容易让你停住或返工？比如拆需求、选方案、调试、检查结果。`,
+    first => `「${first}」第一次没做好时，你最不知道该看哪里？可以说一个具体场面。`,
+    first => `从「${first}」的开始到交付，中间哪一段你最没把握？比如判断方向、动手实现，或确认效果。`,
+    first => `如果把「${first}」换一个相近场景，你最担心哪一步不会迁移？可以说一个遇到过的变化。`
+  ],
+  [
+    '你希望什么时候能真正用上这项能力？可以说一个日期、一个项目节点，或大概的时间范围。',
+    '为了把这件事练到能用，你每周能稳定留出多少时间？比如零散的几次半小时，或周末集中练。',
+    '你想先练一个多大的小任务？比如先做一个最小版本，再逐步加功能。'
+  ]
 ]
 
-fallbackQuestions.splice(0, fallbackQuestions.length,
-  '你想重点学习什么方向或主题？',
-  '你希望通过学习最终达成什么目标？',
-  '你目前对这个方向了解多少，最卡在哪里？',
-  '你每周大约能投入多少时间学习？',
-  '你更喜欢怎样的学习方式：讲解、练习还是项目实践？'
-)
+const fallbackQuestionForStep = currentStep => {
+  const first = (portraitAnswers.value[0] || '这件事').trim().slice(0, 24)
+  const seedText = portraitAnswers.value.slice(0, currentStep).join('')
+  const seed = [...seedText].reduce((sum, char) => sum + char.charCodeAt(0), 0)
+  const variants = fallbackQuestionVariants[Math.min(currentStep, fallbackQuestionVariants.length - 1)]
+  const selected = variants[(seed + currentStep) % variants.length]
+  return typeof selected === 'function' ? selected(first) : selected
+}
 
 const buildDialogue = () => portraitQuestions.value.map((question, index) => ({
   question,
@@ -79,7 +102,7 @@ const askNextQuestion = async () => {
   if (step.value >= PORTRAIT_MAX_STEPS || isLoading.value) return
   isLoading.value = true
   const currentStep = step.value
-  let question = fallbackQuestions[currentStep]
+  let question = fallbackQuestionForStep(currentStep)
   try {
     const result = await getNextPortraitInterviewQuestion({
       dialogue: buildDialogue(),

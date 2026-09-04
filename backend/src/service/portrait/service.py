@@ -190,17 +190,44 @@ def _answer_excerpt(dialogue: list[dict], index: int = -1, fallback: str = "这�
 
 
 def _fallback_interview_question(step: int, dialogue: list[dict], max_steps: int = 5) -> dict:
-    first = _answer_excerpt(dialogue, 0, "你最近想学的内容")
-    last = _answer_excerpt(dialogue, -1, "刚才提到的情况")
-    questions = [
-        "最近你真正想推进的一件事是什么？比如课程、项目、比赛、考试、找工作方向，或者一个想学会的技能。",
-        f"围绕「{first}」，你通常更喜欢怎么学？比如看讲解、读资料、动手做、刷题巩固，或者和人讨论。",
-        f"学「{first}」时，最容易卡住你的地方是什么？比如概念看不懂、不会迁移、记不住、执行不稳，或者容易分心。",
-        "压力大或者任务多的时候，你更像哪种状态？比如越催越冲、需要人拉一把、先乱后稳，或者容易转去做别的。",
-        f"以后遇到「{last}」这类问题时，你希望我怎么帮你？比如给路线图、拆每日计划、讲例题、出练习，或者提醒推进。",
+    first = _answer_excerpt(dialogue, 0, "你最近想做成的事情")
+    # Keep the learning progression stable, while varying the conversational angle
+    # so a fallback response does not sound like a repeated questionnaire.
+    seed_text = " ".join(str(item.get("answer", "") or "") for item in (dialogue or []))
+    seed = sum(ord(char) for char in seed_text)
+    question_variants = [
+        [
+            "最近有没有一个你想亲手做成、处理好或交付的东西？不用专业术语，比如把数据分析清楚、做个小工具，或让知识库能回答问题。",
+            "有没有一件事是你现在总要照着别人做，但希望以后能自己完成？直接说事情就行，比如写接口、做分析或排查故障。",
+            "如果这段时间只练会一件能派上用场的本领，你最想是哪一件？可以说一个任务、一个作品，甚至一个关键词。",
+        ],
+        [
+            f"如果把「{first}」做好了，你最想拿它解决什么？可以说会用到的人、场景，或你希望看到的结果。",
+            f"你为什么现在想把「{first}」学会？是要交付一个东西、应对一项工作，还是想先做出自己的作品？",
+            f"想象一下「{first}」真正派上用场的那天：你希望它替你完成哪件事？",
+        ],
+        [
+            f"你以前试过「{first}」吗？可以从最近一次尝试说起，不管是照着教程做，还是只看懂了一部分。",
+            f"现在把「{first}」交给你，你能先自己完成哪一步？说到具体动作就好。",
+            f"关于「{first}」，有没有一个小成果是你已经做出来的？哪怕只是跟着示例跑通也算。",
+            f"上次做「{first}」时，你实际先做了什么？可以从打开资料、准备数据或动手写第一步说起。",
+        ],
+        [
+            f"做「{first}」时，哪一个动作最容易让你停住或返工？比如拆需求、选方案、调试、检查结果。",
+            f"「{first}」第一次没做好时，你最不知道该看哪里？可以说一个具体场面。",
+            f"从「{first}」的开始到交付，中间哪一段你最没把握？比如判断方向、动手实现，或确认效果。",
+            f"如果把「{first}」换一个相近场景，你最担心哪一步不会迁移？可以说一个你遇到过的变化。",
+        ],
+        [
+            "你希望什么时候能真正用上这项能力？可以说一个日期、一个项目节点，或大概的时间范围。",
+            "为了把这件事练到能用，你每周能稳定留出多少时间？比如零散的几次半小时，或周末集中练。",
+            "你想先练一个多大的小任务？比如先做一个最小版本，再逐步加功能。",
+        ],
     ]
-    idx = max(0, min(step, len(questions) - 1))
-    return {"question": questions[idx], "finish": step >= max_steps - 1}
+    idx = max(0, min(step, len(question_variants) - 1))
+    variants = question_variants[idx]
+    question = variants[(seed + step) % len(variants)]
+    return {"question": question, "finish": step >= max_steps - 1}
 
 
 # ═══════════════════════════════════════
@@ -409,6 +436,8 @@ class PortraitChatHistory_Service:
             logger.warning("对话画像提取无有效返回 user_id=%s", user_id)
             raise RuntimeError("画像分析无结果")
 
+        learning_direction = str(result.get("learning_direction", "") or "").strip()
+        learning_goal_text = str(result.get("learning_goal_text", "") or "").strip()
         cognition = result.get("cognition", "") or ""
         learning_goal = result.get("learning_goal", "") or ""
         tags = result.get("personality_tags") or []
@@ -428,6 +457,17 @@ class PortraitChatHistory_Service:
 
         # 同步写入 traits 的 interest 维度（如果有对话提取的兴趣信息）
         traits = parse_traits(picture.traits)
+        if learning_direction:
+            onboarding = traits.get("onboarding") if isinstance(traits.get("onboarding"), dict) else {}
+            onboarding["direction"] = learning_direction[:120]
+            if learning_goal_text:
+                onboarding["goal"] = learning_goal_text[:160]
+            traits["onboarding"] = onboarding
+            traits["learning_direction"] = learning_direction[:120]
+        elif learning_goal_text:
+            onboarding = traits.get("onboarding") if isinstance(traits.get("onboarding"), dict) else {}
+            onboarding["goal"] = learning_goal_text[:160]
+            traits["onboarding"] = onboarding
         if tags:
             traits["interest"] = build_trait_entry(
                 "、".join(tags[:3]), "user_stated", traits.get("interest")

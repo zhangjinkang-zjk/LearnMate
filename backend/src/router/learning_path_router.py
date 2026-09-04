@@ -17,9 +17,9 @@ class CompleteNodeBody(BaseModel):
 
 
 @router.get("/current")
-async def get_current_path(user_id: int = Depends(get_user_id_from_token)):
-    """用户当前活跃路径（含节点、进度、薄弱点诊断、下一步动作）"""
-    result = await PathService.get_current_path(user_id)
+async def get_current_path(path_id: int | None = None, user_id: int = Depends(get_user_id_from_token)):
+    """返回当前路径；传 path_id 时返回该用户已加入的指定路径。"""
+    result = await PathService.get_current_path(user_id, path_id=path_id)
     if not result:
         return {"code": 404, "msg": "暂无进行中的学习路径，请先生成或加入路径"}
     return {"code": 200, "msg": "success", "data": result}

@@ -1,5 +1,7 @@
 """学习路径路由"""
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Depends, Body
 from starlette.responses import StreamingResponse
 
@@ -22,6 +24,7 @@ from backend.src.schemas.path import (
 )
 
 router = APIRouter(prefix="/path", tags=["学习路径"])
+logger = logging.getLogger(__name__)
 
 
 async def _assert_path_access(path_id: int, user_id: int, *, public_readable: bool = False) -> None:
@@ -44,7 +47,7 @@ async def _assert_path_access(path_id: int, user_id: int, *, public_readable: bo
 @router.post("/generate")
 async def generate_path(data: GeneratePathRequest, user_id: int = Depends(get_user_id_from_token)):
     """AI 生成学习路径"""
-    result = await PathService.generate_path(data.subject, user_id, data.difficulty, data.node_count)
+    result = await PathService.generate_path(data.subject, user_id, data.difficulty, data.node_count, data.force_regenerate)
     return {"code": 200, "msg": "success", "data": result}
 
 
@@ -264,6 +267,14 @@ async def generate_node_resources_stream(
 ):
     """流式为节点生成学习资源（SSE），生成好一个推送一个"""
     await _assert_path_access(path_id, user_id)
+    logger.info(
+        "节点资源确保请求 path_id=%s node_id=%s user_id=%s resource_types=%s background=%s",
+        path_id,
+        node_id,
+        user_id,
+        data.resource_types if data else None,
+        data.background if data else False,
+    )
     return StreamingResponse(
         PathService.generate_node_resources_stream(
             path_id, node_id, user_id,
@@ -271,6 +282,11 @@ async def generate_node_resources_stream(
             llm_priority="low" if data and data.background else "high",
         ),
         media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
     )
 
 

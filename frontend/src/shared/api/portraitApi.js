@@ -11,3 +11,8 @@ export const initPortraitFromDialogue = async (payload) => {
   const response = await httpClient.post('/ai_portrait/init_from_dialogue', payload)
   return unwrap(response)
 }
+
+export const readPortrait = async () => {
+  const response = await httpClient.get('/ai_portrait/read_portrait')
+  return unwrap(response)
+}
