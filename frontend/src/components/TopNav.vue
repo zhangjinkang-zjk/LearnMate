@@ -1,5 +1,5 @@
 <template>
-  <header class="topnav">
+  <header class="topnav" :class="{ 'topnav--home': route.path === '/' }">
     <div class="topnav-inner">
       <!-- Logo -->
       <router-link to="/" class="logo-area" aria-label="知伴首页">
@@ -426,6 +426,63 @@ html[data-theme="dark"] .theme-toggle:hover {
   align-items: center;
   gap: 12px;
   flex-shrink: 0;
+}
+
+/* Homepage palette follows the dark green landing scene. */
+.topnav--home {
+  background: rgba(30, 60, 52, 0.84);
+  border-bottom-color: rgba(226, 244, 82, 0.16);
+  box-shadow: none;
+}
+
+.topnav--home .logo-icon {
+  border-color: #e2f452;
+}
+
+.topnav--home .brand,
+.topnav--home .nav-pill,
+.topnav--home .bell-btn {
+  color: #f3f0e7;
+}
+
+.topnav--home .nav-pill:hover {
+  background: rgba(226, 244, 82, 0.14);
+  color: #e2f452;
+}
+
+.topnav--home .nav-pill.router-link-active,
+.topnav--home .nav-pill.router-link-exact-active,
+.topnav--home .nav-pill.active {
+  background: #e2f452;
+  border-color: #e2f452;
+  color: #1e3c34;
+  box-shadow: 0 7px 18px rgba(3, 16, 12, 0.24);
+}
+
+.topnav--home .theme-toggle,
+.topnav--home .bell-btn {
+  border-color: rgba(226, 244, 82, 0.26);
+  background: rgba(243, 240, 231, 0.08);
+}
+
+.topnav--home .theme-toggle {
+  color: #e2f452;
+}
+
+.topnav--home .bell-btn:hover,
+.topnav--home .theme-toggle:hover {
+  background: rgba(226, 244, 82, 0.18);
+}
+
+.topnav--home :deep(.account-entry) {
+  background: rgba(243, 240, 231, 0.1);
+  border-color: rgba(226, 244, 82, 0.22);
+  color: #f3f0e7;
+}
+
+.topnav--home :deep(.account-text strong),
+.topnav--home :deep(.account-text small) {
+  color: #f3f0e7;
 }
 
 /* 消息铃铛 */
