@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 ADVANCED_MILESTONE_SIZE = 10
 ADVANCED_UNLOCK_NODES = 10
+ADVANCED_AGENT_TIMEOUT_SECONDS = 40
 _snapshot_locks: dict[tuple[int, int, int], asyncio.Lock] = {}
 
 GOAL_MODES = (
@@ -336,7 +337,10 @@ async def _generate_agent_task_set(user_id: int, profile: dict, path: dict, mast
             path_json=json.dumps(context["path"], ensure_ascii=False),
             mastery_json=json.dumps(context["mastery"], ensure_ascii=False),
         )
-        response = await llm.ainvoke(prompt, priority="low", user_id=user_id, pool="advanced")
+        response = await asyncio.wait_for(
+            llm.ainvoke(prompt, priority="low", user_id=user_id, pool="advanced"),
+            timeout=ADVANCED_AGENT_TIMEOUT_SECONDS,
+        )
         parsed = parse_llm_json(response.content)
         normalised = _normalise_agent_tasks(parsed, fallback_tasks)
         if normalised:
