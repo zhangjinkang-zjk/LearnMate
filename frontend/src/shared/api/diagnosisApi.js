@@ -30,6 +30,7 @@ async function streamRequest(path, payload, onEvent) {
   const decoder = new TextDecoder()
   let buffer = ''
   let finalResult = null
+  let streamError = ''
   const consume = (chunk) => {
     buffer += chunk
     const frames = buffer.split('\n\n')
@@ -40,6 +41,7 @@ async function streamRequest(path, payload, onEvent) {
       try {
         const event = JSON.parse(data)
         if (event.type === 'result') finalResult = event.data
+        if (event.type === 'error') streamError = event.message || '诊断服务暂时不可用'
         onEvent?.(event)
       } catch { /* 忽略跨帧或代理附加的非 JSON 行 */ }
     }
@@ -50,7 +52,7 @@ async function streamRequest(path, payload, onEvent) {
     consume(decoder.decode(value, { stream: true }))
   }
   consume(decoder.decode())
-  if (!finalResult) throw new Error('流式响应未返回有效结果')
+  if (!finalResult) throw new Error(streamError || '流式响应未返回有效结果')
   return finalResult
 }
 
