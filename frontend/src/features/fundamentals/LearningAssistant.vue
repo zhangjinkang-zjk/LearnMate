@@ -9,10 +9,12 @@
     </header>
 
     <div ref="messageList" class="assistant-messages" aria-live="polite">
-      <div v-for="(message, index) in messages" :key="`${message.role}-${index}`" class="assistant-message" :class="`is-${message.role}`">
-        <span v-if="message.role === 'assistant'" class="message-avatar">LM</span>
-        <div class="message-bubble" v-html="renderMarkdown(message.text)"></div>
-      </div>
+      <template v-for="(message, index) in messages" :key="`${message.role}-${index}`">
+        <div v-if="message.text || message.role === 'user'" class="assistant-message" :class="`is-${message.role}`">
+          <span v-if="message.role === 'assistant'" class="message-avatar">LM</span>
+          <div class="message-bubble" v-html="renderMarkdown(message.text)"></div>
+        </div>
+      </template>
       <div v-if="isStreaming" class="assistant-message is-assistant">
         <span class="message-avatar">LM</span>
         <div class="message-bubble typing" aria-label="正在回复"><span></span><span></span><span></span></div>
@@ -51,7 +53,7 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { LoaderCircle, Send, Sparkles } from 'lucide-vue-next'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { renderMarkdown } from '@/shared/lib/markdown'
@@ -102,7 +104,7 @@ async function sendMessage() {
   if (!question || isStreaming.value) return
 
   messages.value.push({ role: 'user', text: question })
-  const responseMessage = { role: 'assistant', text: '' }
+  const responseMessage = reactive({ role: 'assistant', text: '' })
   messages.value.push(responseMessage)
   draft.value = ''
   errorMessage.value = ''

@@ -120,7 +120,11 @@ function isChoiceQuestion(question) {
 
 function normalizedOptions(question) {
   const fallback = question.question_type === 'true_false' ? ['正确', '错误'] : []
-  const options = Array.isArray(question.options) && question.options.length ? question.options : fallback
+  const options = Array.isArray(question.options) && question.options.length
+    ? question.options
+    : question.options && typeof question.options === 'object'
+      ? Object.entries(question.options).map(([key, label]) => ({ key, value: key, label }))
+      : fallback
   return options.map((option, index) => {
     const key = String.fromCharCode(65 + index)
     if (option && typeof option === 'object') {

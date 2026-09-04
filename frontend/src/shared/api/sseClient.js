@@ -56,13 +56,15 @@ export async function streamJsonEvents(path, payload, onEvent, options = {}) {
       .join('\n')
 
     if (!rawData || rawData === '[DONE]') return
+    let event
     try {
-      const event = JSON.parse(rawData)
-      lastEvent = event
-      onEvent?.(event)
+      event = JSON.parse(rawData)
     } catch {
       // Some reverse proxies append non-SSE text. Valid frames continue to be consumed.
+      return
     }
+    lastEvent = event
+    onEvent?.(event)
   }
 
   const consume = (chunk, flush = false) => {
