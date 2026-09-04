@@ -71,15 +71,15 @@ def _valid_section(title: str) -> str:
     return f"## {title}\n\n" + "\n\n".join(paragraph for _ in range(8))
 
 
-def test_learning_path_default_resources_are_document_and_mindmap():
-    assert PATH_DEFAULT_RESOURCE_TYPES == ("document", "mindmap")
+def test_learning_path_default_resources_include_document_ppt_and_mindmap():
+    assert PATH_DEFAULT_RESOURCE_TYPES == ("document", "ppt", "mindmap")
 
     fallback_nodes = path_graph._fallback_group_nodes(
         [{"topic": "文档切分", "key_points": ["语义边界"]}],
         group_start=1,
     )
 
-    assert fallback_nodes[0]["resource_types"] == ["document", "mindmap"]
+    assert fallback_nodes[0]["resource_types"] == ["document", "ppt", "mindmap"]
 
 
 @pytest.mark.parametrize("title", ["一元二次方程", "二叉树", "三角函数"])

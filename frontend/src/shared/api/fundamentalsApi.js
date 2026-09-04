@@ -54,11 +54,11 @@ export const fundamentalsApi = {
     }))
   },
 
-  generateResources(pathId, nodeId, onEvent, signal, resourceTypes = ['document', 'mindmap']) {
+  generateResources(pathId, nodeId, onEvent, signal, resourceTypes = ['document', 'ppt', 'mindmap']) {
     let requestedTypes = Array.isArray(resourceTypes) && resourceTypes.length
       ? resourceTypes.filter((type) => typeof type === 'string' && type.trim())
-      : ['document', 'mindmap']
-    if (!requestedTypes.length) requestedTypes = ['document', 'mindmap']
+      : ['document', 'ppt', 'mindmap']
+    if (!requestedTypes.length) requestedTypes = ['document', 'ppt', 'mindmap']
     return streamJsonEvents(
       `/path/${pathId}/node/${nodeId}/generate-resources/stream`,
       { resource_types: requestedTypes, background: false },
