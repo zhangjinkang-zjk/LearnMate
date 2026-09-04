@@ -62,6 +62,7 @@ const loading = ref(true)
 const profile = reactive({ direction: learningState.direction, goal: learningState.goal })
 const path = reactive({ hasPath: false, progress: 0, stage: '', currentNode: '', completedNodes: 0, totalNodes: 0, nodes: [], diagnosis: null, nextAction: null })
 const stats = reactive({ studySeconds: 0, examAnswered: 0, weakPoints: [] })
+const pathStats = ref([])
 const mastery = ref([])
 const guidance = ref('')
 const unwrap = (response) => response?.data?.data ?? response?.data ?? null
@@ -89,11 +90,22 @@ const abilityScores = computed(() => (guidanceSections.value['学习者能力分
   return match ? [{ tag: match[1].trim(), score: Number(match[2]) }] : []
 }))
 
-const subjects = computed(() => path.nodes.map((node, index) => {
+const nodeSubjects = computed(() => path.nodes.map((node, index) => {
   const status = node.status || 'locked'
   const progress = status === 'completed' ? 100 : status === 'in_progress' ? 55 : status === 'unlocked' ? 15 : 0
   return { id: node.id || index, name: node.title || node.topic || '正在生成', progress, statusLabel: ({ completed: '已完成', in_progress: '进行中', unlocked: '待开始', locked: '待解锁' })[status] || '正在生成', time: node.time_spent ? formatDuration(node.time_spent) : '正在生成' }
 }))
+
+const subjects = computed(() => {
+  if (pathStats.value.length) return pathStats.value.map((item) => ({
+    id: item.path_id,
+    name: item.subject || '正在生成',
+    progress: Number(item.progress?.percentage ?? 0),
+    statusLabel: item.progress?.completed_nodes ? `${item.progress.completed_nodes}/${item.progress.total_nodes} 个节点已完成` : '尚未开始',
+    time: formatDuration(item.study_time?.total_seconds || 0),
+  }))
+  return nodeSubjects.value
+})
 
 const diagnosis = computed(() => {
   const radarWeakPoints = abilityScores.value.filter((item) => item.score < 50).map((item) => ({ tag: item.tag, accuracy: item.score / 100 }))
@@ -115,14 +127,16 @@ const recommendation = computed(() => {
   const actionableLine = strategyLines.find((line) => !line.startsWith('建议难度配比')) || materialLines[0] || ''
   const weak = diagnosis.value.weakPoints[0]?.tag
   const title = weak ? `优先补强：${weak}` : (path.currentNode || '当前学习节点')
-  const hasRecommendation = Boolean(path.currentNode || actionableLine)
+  const hasRecommendation = Boolean(path.currentNode || weak || actionableLine)
   const action = path.currentNode ? `完成“${path.currentNode}”练习` : actionableLine
+  const weakSubject = weak && subjects.value.find((item) => item.name.includes(weak) || weak.includes(item.name))
+  const resolvedAction = path.currentNode ? action : (weak ? `完成“${weak}”基础练习` : action)
   return {
     title: hasRecommendation ? title : '正在生成',
     judgement: weak ? `当前主要短板是 ${weak} 能力` : '正在生成系统判断…',
-    guidance: hasRecommendation ? action : '正在生成推荐行动…',
-    reason: weak ? `诊断显示“${weak}”是当前薄弱点，先处理它可以减少后续练习中的反复。` : '正在生成依据。',
-    criteria: path.currentNode ? `能够解释“${path.currentNode}”的关键方法，并通过节点测验。` : '正在生成完成标准。',
+    guidance: hasRecommendation ? resolvedAction : '正在生成推荐行动…',
+    reason: weakSubject ? `${weakSubject.name}完成度 ${weakSubject.progress}%，掌握度偏低，先补强可以减少后续练习中的反复。` : (weak ? `诊断显示“${weak}”是当前薄弱点，先处理它可以减少后续练习中的反复。` : '正在生成依据。'),
+    criteria: path.currentNode ? `能够解释“${path.currentNode}”的关键方法，并通过节点测验。` : (weak ? `能够解释“${weak}”的关键方法，并完成一次针对性练习。` : '正在生成完成标准。'),
     to: hasRecommendation && path.nextAction?.type ? (path.nextAction.type === 'quiz' ? '/learning/advanced' : '/learning/fundamentals') : '',
     actionLabel: path.nextAction?.label || '开始当前节点',
   }
@@ -131,12 +145,13 @@ const recommendation = computed(() => {
 function formatDuration(seconds) { const value = Number(seconds || 0); if (value < 60) return `${value}秒`; const minutes = Math.round(value / 60); if (minutes < 60) return `${minutes}分钟`; return `${(minutes / 60).toFixed(1)}小时` }
 
 async function loadOverview() {
-  const results = await Promise.allSettled([learningApi.getCurrentPath(), learningApi.getStudyStats(), learningApi.getMastery(), learningApi.getLearningGuidance()])
+  const results = await Promise.allSettled([learningApi.getCurrentPath(), learningApi.getStudyStats(), learningApi.getPathStats(), learningApi.getMastery(), learningApi.getLearningGuidance()])
   const currentPathPayload = results[0].status === 'fulfilled' ? unwrap(results[0].value) : null
   const currentPath = currentPathPayload && Array.isArray(currentPathPayload.nodes) ? currentPathPayload : null
   const studyStats = results[1].status === 'fulfilled' ? unwrap(results[1].value) : null
-  const masteryResult = results[2].status === 'fulfilled' ? unwrap(results[2].value) : null
-  const guidanceResult = results[3].status === 'fulfilled' ? unwrap(results[3].value) : null
+  const pathStatsResult = results[2].status === 'fulfilled' ? unwrap(results[2].value) : null
+  const masteryResult = results[3].status === 'fulfilled' ? unwrap(results[3].value) : null
+  const guidanceResult = results[4].status === 'fulfilled' ? unwrap(results[4].value) : null
   if (currentPath) {
     const nodes = currentPath.nodes || []
     const nextActionNode = nodes.find((node) => node.id === currentPath.next_action?.target_id)
@@ -144,6 +159,7 @@ async function loadOverview() {
     profile.goal = currentPath.goal || profile.goal
   }
   if (studyStats) { stats.studySeconds = studyStats.study_time?.total_seconds || 0; stats.examAnswered = studyStats.exam_summary?.completed_questions || 0; stats.weakPoints = studyStats.weak_points || [] }
+  if (Array.isArray(pathStatsResult?.paths)) pathStats.value = pathStatsResult.paths
   if (Array.isArray(masteryResult)) mastery.value = masteryResult
   guidance.value = guidanceResult?.guidance || ''
   loading.value = false
