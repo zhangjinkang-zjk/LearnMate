@@ -7,16 +7,20 @@
     <div v-if="loading" class="surface surface-pad loading-state">正在同步你的学习状态…</div>
     <div v-else class="overview-layout">
       <main class="overview-main">
-        <section class="surface surface-pad goal-panel">
-          <div class="section-heading"><div><p class="eyebrow">当前目标</p><h2>{{ profile.goal || '正在生成' }}</h2></div><span class="goal-progress">{{ path.hasPath ? `${path.progress}%` : '正在生成' }}</span></div>
-          <p class="muted goal-copy">学习方向：{{ profile.direction || '正在生成' }}</p>
+        <section class="surface surface-pad status-panel">
+          <div class="section-heading section-heading--compact"><div><p class="eyebrow">学习状态与科目进度</p><h2>当前学习状态</h2></div><span class="status-progress">{{ path.hasPath ? `${path.progress}%` : '正在生成' }}</span></div>
+          <div class="status-grid">
+            <div class="status-item"><span class="block-label">当前目标</span><strong>{{ profile.goal || '正在生成' }}</strong></div>
+            <div class="status-item"><span class="block-label">学习方向</span><strong>{{ profile.direction || '正在生成' }}</strong></div>
+          </div>
           <div class="progress-track" aria-label="学习路径完成度"><div class="progress-value" :style="{ width: `${path.progress}%` }"></div></div>
-          <div class="goal-meta"><span v-if="path.hasPath">已完成 {{ path.completedNodes }} / {{ path.totalNodes }} 个学习节点</span><span v-else>正在生成学习路径</span><span v-if="path.currentNode">当前节点：{{ path.currentNode }}</span></div>
+          <p class="status-meta">{{ path.hasPath ? `已完成 ${path.completedNodes} / ${path.totalNodes} 个学习节点` : '正在生成学习路径' }}</p>
         </section>
 
         <section class="surface surface-pad">
-          <div class="section-heading section-heading--compact"><div><p class="eyebrow">相关科目</p><h2>按路径拆开的学习内容</h2></div><span class="muted">{{ subjects.length }} 个科目</span></div>
+          <div class="section-heading section-heading--compact"><div><p class="eyebrow">相关科目</p><h2>相关科目</h2></div><span class="muted">{{ subjects.length ? `${subjects.length} 个科目` : '正在生成' }}</span></div>
           <div v-if="subjects.length" class="subject-list">
+            <div class="subject-header" aria-hidden="true"><span>科目</span><span>完成度</span><span>完成用时</span></div>
             <article v-for="subject in subjects" :key="subject.id" class="subject-row">
               <div class="subject-copy"><strong>{{ subject.name }}</strong><span class="muted">{{ subject.statusLabel }}</span></div>
               <div class="subject-progress"><div class="progress-track"><div class="progress-value" :style="{ width: `${subject.progress}%` }"></div></div><span>{{ subject.progress }}%</span></div>
@@ -27,8 +31,8 @@
         </section>
 
         <section class="surface surface-pad diagnosis-panel">
-          <div class="section-heading section-heading--compact"><div><p class="eyebrow">当前诊断</p><h2>知道哪里需要补强</h2></div><RouterLink class="text-link" to="/onboarding/diagnosis">重新诊断 →</RouterLink></div>
-          <div class="diagnosis-summary"><div class="diagnosis-score"><strong>{{ diagnosis.hasData ? `${diagnosis.score}%` : '正在生成' }}</strong><span class="muted">{{ diagnosis.hasData ? '综合掌握度' : '正在生成诊断' }}</span></div><div class="diagnosis-stats"><span><strong>{{ stats.examAnswered || '正在生成' }}</strong> 道题已作答</span><span><strong>{{ stats.studySeconds ? formatDuration(stats.studySeconds) : '正在生成' }}</strong> 累计学习</span></div></div>
+          <div class="section-heading section-heading--compact"><div><p class="eyebrow">当前诊断</p><h2>当前能力起点</h2></div><RouterLink class="text-link" to="/onboarding/diagnosis">重新诊断 →</RouterLink></div>
+          <div class="diagnosis-summary"><div class="diagnosis-score"><strong>{{ diagnosis.hasData ? `${diagnosis.score}%` : '正在生成' }}</strong><span class="muted">综合掌握度</span></div><div class="diagnosis-stats"><span><strong>{{ diagnosis.stage }}</strong> 当前阶段</span><span><strong>{{ stats.examAnswered || '正在生成' }}</strong> 道题已作答</span></div></div>
           <div v-if="diagnosis.weakPoints.length" class="weak-points"><span class="muted">优先补强</span><span v-for="point in diagnosis.weakPoints" :key="point.tag" class="weak-point">{{ point.tag }} {{ point.accuracy }}%</span></div>
           <p v-else class="muted diagnosis-note">正在生成当前诊断…</p>
         </section>
@@ -36,10 +40,11 @@
 
       <aside class="overview-aside">
         <section class="surface surface-pad recommendation-panel">
-          <div class="section-heading"><div><p class="eyebrow">当前建议</p><h2>{{ recommendation.title }}</h2></div><span class="recommendation-mark">→</span></div>
-          <p class="recommendation-copy">{{ recommendation.guidance }}</p>
-          <div class="recommendation-block"><span class="block-label">为什么现在做</span><p>{{ recommendation.reason }}</p></div>
-          <div class="recommendation-block"><span class="block-label">完成标志</span><p>{{ recommendation.criteria }}</p></div>
+          <div class="section-heading"><div><p class="eyebrow">当前建议</p><h2>学习决策</h2></div><span class="recommendation-mark">→</span></div>
+          <div class="recommendation-block recommendation-block--first"><span class="block-label">系统判断</span><p>{{ recommendation.judgement }}</p></div>
+          <div class="recommendation-block"><span class="block-label">推荐行动</span><p>{{ recommendation.guidance }}</p></div>
+          <div class="recommendation-block"><span class="block-label">推荐理由</span><p>{{ recommendation.reason }}</p></div>
+          <div class="recommendation-block"><span class="block-label">完成标准</span><p>{{ recommendation.criteria }}</p></div>
           <RouterLink v-if="recommendation.to" class="button button--primary recommendation-action" :to="recommendation.to">{{ recommendation.actionLabel }} <span>→</span></RouterLink>
         </section>
       </aside>
