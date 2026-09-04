@@ -6,7 +6,7 @@
       <span>MATE</span>
     </div>
 
-    <router-link class="learn-chat-back" to="/select-identity">
+    <router-link class="learn-chat-back" to="/select-identity" @click.prevent="router.push('/select-identity')">
       <span aria-hidden="true">←</span>
       <span>BACK</span>
     </router-link>
@@ -38,7 +38,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { getNextPortraitInterviewQuestion, initPortraitFromDialogue } from '../../api/apis'
+import { getNextPortraitInterviewQuestion, initPortraitFromDialogue } from '../../shared/api/portraitApi'
 
 const router = useRouter()
 const PORTRAIT_MAX_STEPS = 5
@@ -59,6 +59,14 @@ const fallbackQuestions = [
   '当你卡住时，你希望我用什么方式帮你？',
   '最后，你希望我用什么节奏陪你推进学习？'
 ]
+
+fallbackQuestions.splice(0, fallbackQuestions.length,
+  '你想重点学习什么方向或主题？',
+  '你希望通过学习最终达成什么目标？',
+  '你目前对这个方向了解多少，最卡在哪里？',
+  '你每周大约能投入多少时间学习？',
+  '你更喜欢怎样的学习方式：讲解、练习还是项目实践？'
+)
 
 const buildDialogue = () => portraitQuestions.value.map((question, index) => ({
   question,
@@ -233,7 +241,7 @@ onMounted(() => {
   left: clamp(120px, 20vw, 380px);
   display: grid;
   gap: 22px;
-  width: min(540px, 42vw);
+  width: min(850px, 68vw);
   max-height: 58vh;
   overflow-y: auto;
   scrollbar-width: none;
@@ -360,8 +368,9 @@ onMounted(() => {
 .chat-message--user {
   justify-self: end;
   border-bottom-right-radius: 5px;
-  background: #1e3c34;
-  color: #e2f452;
+  background: rgba(226, 244, 82, 0.78);
+  color: #1e3c34;
+  box-shadow: 0 14px 28px rgba(3, 20, 13, 0.2);
 }
 
 .dialog-greeting {

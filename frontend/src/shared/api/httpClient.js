@@ -2,7 +2,7 @@ import axios from 'axios'
 import { clearAuthSession } from '@/shared/auth/session'
 
 const httpClient = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '',
+  baseURL: "http://10.170.5.72:2221",
   timeout: 15000,
   headers: { 'Content-Type': 'application/json' },
 })
