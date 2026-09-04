@@ -47,12 +47,5 @@ export default defineConfig({
       '/annotation': proxyTarget,
       '/debug': proxyTarget,
     },
-  },
-  css: {
-    preprocessorOptions: {
-      scss: {
-        additionalData: `@use "@/assets/styles/base-style.scss" as *;`
-      }
-    }
   }
 })

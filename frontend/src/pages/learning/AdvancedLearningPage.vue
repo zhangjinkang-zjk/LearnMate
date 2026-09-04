@@ -1,0 +1,5 @@
+<template>
+  <div><PageTitle eyebrow="进阶学习" title="把知识迁移到你的目标场景" description="进阶内容不重复基础讲解，而是围绕你的目标，训练判断、权衡和交付。" /><div class="grid grid--two"><StageCard v-for="stage in advancedStages" :key="stage.index" v-bind="stage" /><section class="surface surface-pad scenario"><p class="eyebrow">目标场景</p><h2>{{ learningState.goal }}</h2><p>你将面对一个企业知识库问答效果下降的问题，需要阅读材料、定位原因并提交可验证的处理方案。</p><RouterLink class="button button--primary" to="/learning/workspace">进入案例工作区</RouterLink></section></div></div>
+</template>
+<script setup>import PageTitle from '@/shared/ui/PageTitle.vue'; import StageCard from '@/widgets/learning/StageCard.vue'; import { learningState } from '@/entities/learning/learningState'; const advancedStages = [{ index: '01', title: '迁移练习', description: '调整切分策略并比较检索结果。', progress: 36, state: 'active' }, { index: '02', title: '综合案例', description: '从日志和知识结构中定位问题。', progress: 0, state: 'locked' }]</script>
+<style scoped>.scenario { display: grid; align-content: start; gap: 13px; }.scenario h2 { margin: 0; font-size: 20px; }.scenario p:not(.eyebrow) { margin: 0 0 8px; color: var(--muted); font-size: 13px; line-height: 1.75; }</style>
