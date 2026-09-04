@@ -1,6 +1,6 @@
 """Pure task-contract tests for advanced learning."""
 
-from backend.src.service.advanced.service import build_advanced_task, classify_goal
+from backend.src.service.advanced.service import build_advanced_task, build_advanced_tasks, classify_goal
 
 
 def _path(weak_points=None):
@@ -45,3 +45,12 @@ def test_task_recommendation_uses_goal_progress_and_weak_point():
     assert "掌握度约为 40%" in task["recommendation"]
     assert task["workspace"] == {"path_id": 12, "node_id": 2}
     assert task["resources"][0]["id"] == 8
+
+
+def test_advanced_tasks_keep_distinct_practice_entry_points():
+    profile = {"identity": "工程师", "direction": "多智能体协同决策", "goal": "完成一个项目"}
+    tasks = build_advanced_tasks(profile, _path())
+
+    assert [task["kind"] for task in tasks] == ["transfer", "case", "project"]
+    assert tasks[1]["status"] == "active"
+    assert all(task["workspace"] == {"path_id": 12, "node_id": 2} for task in tasks)

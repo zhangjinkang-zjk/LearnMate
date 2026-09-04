@@ -31,6 +31,21 @@
     </section>
 
     <template v-else>
+      <section class="task-picker surface surface-pad">
+        <div class="section-heading">
+          <div><p class="eyebrow">实践入口</p><h3>选择一项适合现在的任务</h3></div>
+          <span>{{ tasks.length }} 个任务</span>
+        </div>
+        <div class="task-picker__list" role="list">
+          <button v-for="item in tasks" :key="item.id" type="button" class="task-picker__item" :class="{ 'is-active': item.id === task?.id }" @click="selectTask(item)">
+            <span><strong>{{ item.kind_label || '实践任务' }}</strong><small>{{ item.difficulty_label || '当前阶段' }}</small></span>
+            <b>{{ item.title }}</b>
+            <em>{{ item.why || item.brief }}</em>
+            <i>{{ item.status === 'active' ? '推荐现在开始' : item.status === 'completed' ? '已完成' : '待开始' }}</i>
+          </button>
+        </div>
+      </section>
+
       <section class="task-banner">
         <div class="task-banner__copy">
           <div class="task-tags">
@@ -61,7 +76,7 @@
               <li v-for="constraint in task.constraints" :key="constraint"><span></span>{{ constraint }}</li>
             </ul>
             <div class="task-action-row">
-              <RouterLink class="button button--primary" :to="workspaceLink">进入任务工作区 <ArrowRight :size="15" /></RouterLink>
+              <RouterLink class="button button--primary" :to="workspaceLink">进入学习巩固 <ArrowRight :size="15" /></RouterLink>
               <span>{{ task.resources.length ? `已关联 ${task.resources.length} 份当前节点材料` : '进入后可生成或补充任务材料' }}</span>
             </div>
           </section>
@@ -104,6 +119,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ArrowRight, Check, CircleAlert, LoaderCircle, RefreshCw, Route } from 'lucide-vue-next'
 import PageTitle from '@/shared/ui/PageTitle.vue'
 import { advancedLearningApi } from '@/shared/api/advancedLearningApi'
@@ -111,6 +127,8 @@ import { advancedLearningApi } from '@/shared/api/advancedLearningApi'
 const loading = ref(true)
 const errorMessage = ref('')
 const task = ref(null)
+const tasks = ref([])
+const route = useRoute()
 const profile = reactive({ identity: '', direction: '', goal: '' })
 const path = reactive({ id: null, stage: '', progress: null })
 
@@ -118,7 +136,7 @@ const modeLabels = { job: '就业目标', project: '项目目标', transition: '
 const stageDescription = { context: '理解任务背景与限制', plan: '形成方案并说明取舍', verify: '用数据或材料验证', review: '复盘结论并完成答辩' }
 const goalModeLabel = computed(() => modeLabels[task.value?.mode] || '正在生成')
 const activeStage = computed(() => task.value?.stages.find((stage) => stage.status === 'active'))
-const workspaceLink = computed(() => ({ path: '/learning/workspace', query: { mode: 'advanced', taskId: task.value?.id, pathId: task.value?.workspace.path_id, nodeId: task.value?.workspace.node_id } }))
+const workspaceLink = computed(() => ({ path: '/learning/consolidation', query: { taskId: task.value?.id, pathId: task.value?.workspace?.path_id, nodeId: task.value?.workspace?.node_id } }))
 const unwrap = (response) => response?.data?.data ?? response?.data ?? null
 
 async function loadTask() {
@@ -128,12 +146,18 @@ async function loadTask() {
     const result = unwrap(await advancedLearningApi.getCurrentTask())
     Object.assign(profile, result?.profile || {})
     Object.assign(path, result?.path || { id: null, stage: '', progress: null })
-    task.value = result?.status === 'ready' ? result.task : null
+    const source = Array.isArray(result?.tasks) && result.tasks.length ? result.tasks : (result?.task ? [result.task] : [])
+    tasks.value = result?.status === 'ready' ? source : []
+    task.value = tasks.value.find((item) => String(item.id) === String(route.query.taskId)) || tasks.value.find((item) => item.status === 'active') || tasks.value[0] || null
   } catch (error) {
     errorMessage.value = error.response?.data?.detail || '请检查后端服务后重新同步。'
   } finally {
     loading.value = false
   }
+}
+
+function selectTask(item) {
+  task.value = item
 }
 
 onMounted(loadTask)
@@ -150,6 +174,15 @@ onMounted(loadTask)
 .empty-panel { max-width: 720px; }
 .empty-panel h2 { margin: 0; font-size: 22px; }
 .empty-panel > p:not(.eyebrow) { margin-bottom: 20px; }
+.task-picker { margin-bottom: 18px; }
+.task-picker .section-heading { align-items: flex-end; margin-bottom: 15px; }
+.task-picker .section-heading > span { color: var(--muted); font-size: 11px; }
+.task-picker__list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.task-picker__item { display: grid; min-height: 142px; align-content: start; gap: 7px; padding: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); text-align: left; transition: border-color .16s ease, background .16s ease, transform .16s ease; }
+.task-picker__item:hover { border-color: #b9c9b2; transform: translateY(-1px); }
+.task-picker__item.is-active { border-color: var(--accent-deep); background: #f4f8ed; box-shadow: inset 3px 0 0 var(--accent-deep); }
+.task-picker__item > span { display: flex; justify-content: space-between; gap: 8px; }
+.task-picker__item strong { color: var(--accent-deep); font-size: 10px; }.task-picker__item small { color: var(--muted); font-size: 10px; }.task-picker__item b { font-size: 13px; line-height: 1.45; }.task-picker__item em { min-height: 32px; color: var(--muted); font-size: 11px; font-style: normal; line-height: 1.5; }.task-picker__item i { margin-top: auto; color: var(--muted); font-size: 10px; font-style: normal; }
 .task-banner { display: grid; grid-template-columns: minmax(0, 1fr) 160px; gap: 30px; align-items: end; margin-bottom: 18px; padding: 4px 4px 24px; border-bottom: 1px solid var(--line); }
 .task-tags { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 22px; }
 .task-tags span, .focus-chip { padding: 5px 8px; border: 1px solid #dbe5d5; border-radius: 4px; background: #f8fbf4; color: var(--accent-deep); font-size: 10px; font-weight: 800; }
@@ -198,5 +231,6 @@ onMounted(loadTask)
 .stage-list small { margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.45; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 900px) { .task-layout { grid-template-columns: 1fr; }.stage-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px 0; }.stage-list li:nth-child(2)::after { display: none; } }
+@media (max-width: 900px) { .task-picker__list { grid-template-columns: 1fr; } }
 @media (max-width: 600px) { .task-banner { grid-template-columns: 1fr; }.task-progress { text-align: left; }.section-heading, .stage-heading, .task-action-row { align-items: flex-start; flex-direction: column; }.focus-chip { white-space: normal; }.stage-list { grid-template-columns: 1fr; border-top: 0; }.stage-list li { padding: 0 0 0 39px; }.stage-list li:not(:last-child)::after { top: 28px; bottom: -22px; left: 13px; width: 2px; height: auto; }.stage-index { position: absolute; top: 0; left: 0; margin: 0; } }
 </style>

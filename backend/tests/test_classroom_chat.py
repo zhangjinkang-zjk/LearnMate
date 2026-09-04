@@ -95,6 +95,13 @@ def test_compose_user_prompt_feynman():
     assert "我觉得补码能把减法变成加法" in prompt
 
 
+def test_compose_user_prompt_practice_keeps_one_step_at_a_time():
+    prompt = cg_chat._compose_user_prompt("practice", "我准备换向量模型", {"phase": "比较方案"})
+    assert "学习巩固" in prompt
+    assert "比较方案" in prompt
+    assert "只追问一个" in prompt
+
+
 def test_compose_user_prompt_free():
     assert cg_chat._compose_user_prompt("free", "为什么补码能统一加减？", {}) == "为什么补码能统一加减？"
 

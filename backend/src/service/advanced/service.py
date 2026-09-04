@@ -141,6 +141,52 @@ def build_advanced_task(profile: dict, path: dict) -> dict:
     }
 
 
+def build_advanced_tasks(profile: dict, path: dict) -> list[dict]:
+    """Create distinct practice entry points for the same current knowledge gap.
+
+    The task list is deliberately derived from the existing task contract so the
+    overview and practice pages share one source of truth.  ``status`` describes
+    the suggested order only; completing a task is not inferred on the client.
+    """
+    base = build_advanced_task(profile, path)
+    topic = _current_node(path).get("title") or profile.get("direction") or "当前知识点"
+
+    transfer = {
+        **base,
+        "id": f"{base['id']}-transfer",
+        "kind": "transfer",
+        "kind_label": "迁移练习",
+        "difficulty_label": "引导练习",
+        "status": "pending",
+        "support_level": "high",
+        "title": f"把“{topic}”迁移到一个新情境",
+        "brief": "换一个与原例子不同的情境，说明你会如何识别问题、选择方法并验证结果。",
+        "why": "先在相近但不同的情境中练习迁移，确认你不是只记住了例子。",
+    }
+    case = {
+        **base,
+        "kind": "case",
+        "kind_label": "案例诊断",
+        "difficulty_label": "当前推荐",
+        "status": "active",
+        "support_level": "medium",
+        "why": base["recommendation"],
+    }
+    project = {
+        **base,
+        "id": f"{base['id']}-project",
+        "kind": "project",
+        "kind_label": "项目实训",
+        "difficulty_label": "开放挑战",
+        "status": "pending",
+        "support_level": "low",
+        "title": f"围绕“{topic}”完成一段项目交付",
+        "brief": "把当前知识点放进一个更开放的项目目标中，独立完成方案、验证和复盘。",
+        "why": "当你能解释方法并完成案例诊断后，再用开放任务检验独立交付能力。",
+    }
+    return [transfer, case, project]
+
+
 class AdvancedLearningService:
     @staticmethod
     async def get_current(user_id: int) -> dict:
@@ -163,7 +209,9 @@ class AdvancedLearningService:
         }
 
         if not current_path:
-            return {"status": "path_required", "profile": profile, "path": None, "task": None}
+            return {"status": "path_required", "profile": profile, "path": None, "tasks": [], "task": None}
+
+        tasks = build_advanced_tasks(profile, current_path)
 
         return {
             "status": "ready",
@@ -173,5 +221,7 @@ class AdvancedLearningService:
                 "stage": current_path.get("stage"),
                 "progress": current_path.get("progress", 0),
             },
-            "task": build_advanced_task(profile, current_path),
+            "tasks": tasks,
+            # Keep the original field for clients that only render one task.
+            "task": tasks[1] if len(tasks) > 1 else (tasks[0] if tasks else None),
         }
