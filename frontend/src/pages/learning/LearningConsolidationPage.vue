@@ -11,17 +11,18 @@
     <template v-else>
       <section class="session-context surface">
         <div class="session-context__identity"><span class="session-context__kind">{{ selectedTask.kind_label || '实践任务' }}</span><div><strong>{{ selectedTask.title }}</strong><p>{{ selectedTask.brief }}</p></div></div>
-        <div class="session-context__facts"><span><b>{{ selectedTask.focus || '当前薄弱点' }}</b>重点能力</span><span><b>{{ selectedTask.workspace?.node_id || '当前节点' }}</b>关联节点</span><span><b>{{ selectedTask.deliverables?.length || 0 }}</b>项成果</span></div>
+        <div class="session-context__facts"><span><b>{{ selectedTask.focus || '当前薄弱点' }}</b>重点能力</span><span><b>{{ selectedWorkspace.nodeId || '当前节点' }}</b>关联节点</span><span><b>{{ selectedTask.deliverables?.length || 0 }}</b>项成果</span></div>
       </section>
 
-      <PracticeDialogue v-if="!sessionEnded" :key="selectedTask.id" :path-id="selectedTask.workspace?.path_id" :node-id="selectedTask.workspace?.node_id" :task="selectedTask" :chapter-content="chapterContent" :resource-id="resourceId" @end="endSession" />
+      <PracticeDialogue v-if="!sessionEnded && hasWorkspace" :key="selectedTask.id" :path-id="selectedWorkspace.pathId" :node-id="selectedWorkspace.nodeId" :task="selectedTask" :chapter-content="chapterContent" :resource-id="resourceId" @end="endSession" />
+      <section v-else-if="!sessionEnded" class="surface surface-pad consolidation-state consolidation-state--error"><CircleAlert :size="22" /><div><strong>实践任务缺少关联节点</strong><p>请返回进阶学习重新同步任务后再进入巩固。</p></div><RouterLink class="button button--primary" to="/learning/advanced">返回进阶学习</RouterLink></section>
       <section v-else class="surface surface-pad session-ended"><span class="session-ended__mark">✓</span><p class="eyebrow">本次巩固已结束</p><h2>对话过程已经保存</h2><p>结束本次巩固不会改变路径完成状态。你可以稍后从进阶学习重新进入这个任务。</p><div><button class="button button--quiet" type="button" @click="sessionEnded = false">继续这个任务</button><RouterLink class="button button--primary" to="/learning/advanced">返回进阶学习</RouterLink></div></section>
     </template>
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { CircleAlert, LoaderCircle, Route } from 'lucide-vue-next'
 import { useRoute } from 'vue-router'
 import PracticeDialogue from '@/features/advanced/PracticeDialogue.vue'
@@ -36,6 +37,14 @@ const selectedTask = ref(null)
 const chapterContent = ref('')
 const resourceId = ref(null)
 const sessionEnded = ref(false)
+const selectedWorkspace = computed(() => {
+  const workspace = selectedTask.value?.workspace || {}
+  return {
+    pathId: workspace.path_id ?? workspace.pathId ?? selectedTask.value?.path_id ?? selectedTask.value?.pathId ?? null,
+    nodeId: workspace.node_id ?? workspace.nodeId ?? selectedTask.value?.node_id ?? selectedTask.value?.nodeId ?? null,
+  }
+})
+const hasWorkspace = computed(() => selectedWorkspace.value.pathId !== null && selectedWorkspace.value.nodeId !== null)
 
 const unwrap = (response) => response?.data?.data ?? response?.data ?? null
 
@@ -48,8 +57,9 @@ function normalizeContent(value) {
 async function loadNodeContext(task) {
   chapterContent.value = ''
   resourceId.value = null
-  const pathId = task?.workspace?.path_id
-  const nodeId = task?.workspace?.node_id
+  const workspace = task?.workspace || {}
+  const pathId = workspace.path_id ?? workspace.pathId ?? task?.path_id ?? task?.pathId
+  const nodeId = workspace.node_id ?? workspace.nodeId ?? task?.node_id ?? task?.nodeId
   if (!pathId || !nodeId) return
   try {
     const detail = await fundamentalsApi.getNode(pathId, nodeId)

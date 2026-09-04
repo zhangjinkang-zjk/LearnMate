@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterable
 
 GOAL_MODES = (
     (("就业", "岗位", "求职", "实习", "职业"), "job"),
@@ -74,6 +74,121 @@ def _percent(value: Any) -> int:
     return round(number * 100) if number <= 1 else round(number)
 
 
+def _normalise_mastery_records(records: Iterable[Any] | None) -> list[dict]:
+    """Convert mastery rows and diagnosis snapshots to one small read model."""
+    result = []
+    for record in records or []:
+        if isinstance(record, dict):
+            tag = record.get("knowledge_tag") or record.get("tag")
+            attempts = record.get("total_attempts", 0)
+            accuracy = record.get("accuracy")
+            correct = record.get("correct_count", 0)
+        else:
+            tag = getattr(record, "knowledge_tag", None)
+            attempts = getattr(record, "total_attempts", 0)
+            accuracy = getattr(record, "accuracy", None)
+            correct = getattr(record, "correct_count", 0)
+        if not tag:
+            continue
+        try:
+            attempts = int(attempts or 0)
+        except (TypeError, ValueError):
+            attempts = 0
+        if accuracy is None:
+            accuracy = float(correct or 0) / max(attempts, 1)
+        try:
+            accuracy = max(0.0, min(1.0, float(accuracy)))
+        except (TypeError, ValueError):
+            accuracy = 0.0
+        result.append({
+            "tag": str(tag),
+            "accuracy": accuracy,
+            "attempts": attempts,
+            "level": record.get("mastery_level") if isinstance(record, dict) else getattr(record, "mastery_level", "beginner"),
+        })
+    return result
+
+
+def _status_label(status: str) -> str:
+    return {
+        "completed": "已完成",
+        "in_progress": "学习中",
+        "unlocked": "已解锁",
+        "locked": "待解锁",
+    }.get(status, "待开始")
+
+
+def _find_focus(node: dict, diagnosis: dict, mastery_records: list[dict]) -> tuple[str, dict | None]:
+    """Prefer a weak point belonging to the current node over global weak points."""
+    tags = [str(tag) for tag in (node.get("knowledge_tags") or []) if tag]
+    scoped = [item for item in mastery_records if item["tag"] in tags]
+    weak_scoped = [item for item in scoped if item["accuracy"] < 0.7]
+    weak_global = _normalise_mastery_records(diagnosis.get("weak_points"))
+    weak_global_scoped = [item for item in weak_global if item["tag"] in tags and item["accuracy"] < 0.7]
+    weak_candidates = weak_scoped or weak_global_scoped
+    if not weak_candidates and not tags:
+        weak_candidates = [item for item in weak_global if item["accuracy"] < 0.7]
+    if weak_candidates:
+        selected = min(weak_candidates, key=lambda item: item["accuracy"])
+        return selected["tag"], selected
+    if scoped:
+        selected = min(scoped, key=lambda item: item["accuracy"])
+        return selected["tag"], selected
+    return (tags[0] if tags else node.get("title") or "当前知识点"), None
+
+
+def _build_learning_context(node: dict, focus: str, mastery: dict | None, completed_count: int, total_count: int) -> dict:
+    status = node.get("status") or "locked"
+    mastery_percent = _percent(mastery["accuracy"]) if mastery is not None else None
+    resource_count = len(node.get("resources") or [])
+    resources_viewed = bool(node.get("resources_viewed") or node.get("total_views"))
+    if mastery is None:
+        evidence = "尚无基础测试记录"
+        mastery_label = "暂无测验证据"
+    elif mastery.get("attempts", 0) > 0:
+        evidence = f"基础测试已记录 {mastery.get('attempts', 0)} 次作答"
+        mastery_label = f"掌握度 {mastery_percent}%"
+    else:
+        evidence = "基础诊断已记录该能力表现"
+        mastery_label = f"诊断掌握度 {mastery_percent}%"
+    resource_label = "已打开学习材料" if resources_viewed else (f"有 {resource_count} 份关联材料" if resource_count else "尚未关联学习材料")
+    node_title = node.get("title") or node.get("topic") or "当前学习节点"
+    status_text = _status_label(status)
+    if mastery_percent is None:
+        reason = f"当前节点“{node_title}”处于{status_text}，还没有“{focus}”的应用证据，先用案例把判断过程走一遍。"
+    elif mastery_percent < 60:
+        reason = f"基础测试显示“{focus}”掌握度为 {mastery_percent}%，当前节点“{node_title}”仍在{status_text}，先处理一个带边界的案例。"
+    elif status == "completed" or mastery_percent >= 80:
+        reason = f"“{focus}”基础测试达到 {mastery_percent}%，节点“{node_title}”已具备基础证据，可以进入开放交付。"
+    else:
+        reason = f"“{focus}”基础测试达到 {mastery_percent}%，节点“{node_title}”正在{status_text}，换一个情境检查能否迁移。"
+    return {
+        "node_title": node_title,
+        "node_status": status,
+        "node_status_label": status_text,
+        "knowledge_tags": node.get("knowledge_tags") or [],
+        "focus": focus,
+        "mastery_percent": mastery_percent,
+        "mastery_label": mastery_label,
+        "evidence": evidence,
+        "resource_label": resource_label,
+        "resource_count": resource_count,
+        "resources_viewed": resources_viewed,
+        "path_progress": {"completed": completed_count, "total": total_count},
+        "reason": reason,
+    }
+
+
+def _recommended_kind(context: dict) -> str:
+    """Choose the next practice mode from current evidence, not a fixed card."""
+    mastery_percent = context.get("mastery_percent")
+    if context.get("node_status") == "completed" or (mastery_percent is not None and mastery_percent >= 80):
+        return "project"
+    if mastery_percent is not None and mastery_percent >= 60:
+        return "transfer"
+    return "case"
+
+
 def _current_node(path: dict) -> dict:
     nodes = path.get("nodes") or []
     current_id = path.get("current_node_id")
@@ -83,7 +198,7 @@ def _current_node(path: dict) -> dict:
     ) or (nodes[-1] if nodes else {})
 
 
-def build_advanced_task(profile: dict, path: dict) -> dict:
+def build_advanced_task(profile: dict, path: dict, mastery_records: Iterable[Any] | None = None) -> dict:
     """Create the read-only task contract consumed by the advanced page."""
     identity = profile.get("identity") or "学习者"
     goal = profile.get("goal") or "建立系统化知识基础"
@@ -93,15 +208,13 @@ def build_advanced_task(profile: dict, path: dict) -> dict:
     mode = classify_goal(goal)
     template = TASK_TEMPLATES[mode]
     diagnosis = path.get("diagnosis") or {}
-    weak_points = diagnosis.get("weak_points") or []
-    weak = weak_points[0] if weak_points else None
+    mastery = _normalise_mastery_records(mastery_records)
     completed = [item for item in path.get("nodes") or [] if item.get("status") == "completed"]
+    focus, weak = _find_focus(node, diagnosis, mastery)
 
     if weak:
-        focus = weak.get("tag") or topic
         weak_copy = f"“{focus}”当前掌握度约为 {_percent(weak.get('accuracy'))}%"
     else:
-        focus = (node.get("knowledge_tags") or [topic])[0]
         weak_copy = f"当前还缺少“{focus}”的充分练习证据"
 
     completed_copy = f"已完成 {len(completed)} 个路径节点" if completed else "尚未完成完整路径节点"
@@ -111,15 +224,18 @@ def build_advanced_task(profile: dict, path: dict) -> dict:
         f"本次先围绕“{topic}”完成{first_deliverable}，再进入结果验证。"
     )
     resources = node.get("resources") or []
+    context = _build_learning_context(node, focus, weak, len(completed), len(path.get("nodes") or []))
 
     return {
         "id": f"path-{path.get('path_id')}-node-{node.get('id', 'current')}",
         "mode": mode,
         "title": template["title"].format(topic=topic),
         "brief": template["brief"],
-        "problem": f"围绕“{topic}”解决一个与“{goal}”直接相关的实际问题。",
+        "problem": f"在“{topic}”的学习情境中，针对“{focus}”完成一次与“{goal}”直接相关、可被复查的判断。",
+        "scenario": f"你正在学习“{topic}”。现在需要把“{focus}”用到一个具体问题中，交付{first_deliverable}。",
         "focus": focus,
         "recommendation": recommendation,
+        "context": context,
         "deliverables": [
             {"id": f"deliverable-{index}", "label": label, "completed": False}
             for index, label in enumerate(template["deliverables"], start=1)
@@ -141,15 +257,16 @@ def build_advanced_task(profile: dict, path: dict) -> dict:
     }
 
 
-def build_advanced_tasks(profile: dict, path: dict) -> list[dict]:
+def build_advanced_tasks(profile: dict, path: dict, mastery_records: Iterable[Any] | None = None) -> list[dict]:
     """Create distinct practice entry points for the same current knowledge gap.
 
     The task list is deliberately derived from the existing task contract so the
     overview and practice pages share one source of truth.  ``status`` describes
     the suggested order only; completing a task is not inferred on the client.
     """
-    base = build_advanced_task(profile, path)
+    base = build_advanced_task(profile, path, mastery_records)
     topic = _current_node(path).get("title") or profile.get("direction") or "当前知识点"
+    recommended_kind = _recommended_kind(base["context"])
 
     transfer = {
         **base,
@@ -161,7 +278,7 @@ def build_advanced_tasks(profile: dict, path: dict) -> list[dict]:
         "support_level": "high",
         "title": f"把“{topic}”迁移到一个新情境",
         "brief": "换一个与原例子不同的情境，说明你会如何识别问题、选择方法并验证结果。",
-        "why": "先在相近但不同的情境中练习迁移，确认你不是只记住了例子。",
+        "why": f"{base['context']['mastery_label']}；换一个情境检查“{base['context']['focus']}”能否迁移。",
     }
     case = {
         **base,
@@ -182,9 +299,15 @@ def build_advanced_tasks(profile: dict, path: dict) -> list[dict]:
         "support_level": "low",
         "title": f"围绕“{topic}”完成一段项目交付",
         "brief": "把当前知识点放进一个更开放的项目目标中，独立完成方案、验证和复盘。",
-        "why": "当你能解释方法并完成案例诊断后，再用开放任务检验独立交付能力。",
+        "why": f"{base['context']['node_status_label']}；当“{base['context']['focus']}”已有足够证据后，用开放交付检验独立完成能力。",
     }
-    return [transfer, case, project]
+    tasks = [transfer, case, project]
+    for item in tasks:
+        item["status"] = "active" if item["kind"] == recommended_kind else "available"
+        item["is_recommended"] = item["kind"] == recommended_kind
+        if item["kind"] == recommended_kind:
+            item["difficulty_label"] = "建议先做"
+    return tasks
 
 
 class AdvancedLearningService:
@@ -193,6 +316,7 @@ class AdvancedLearningService:
         from backend.src.models.usermodel import User
         from backend.src.service.path.service import PathService
         from backend.src.service.portrait.service import parse_traits
+        from backend.src.models.exam_model import KnowledgeMastery
 
         user = await User.filter(id=user_id).first()
         if not user:
@@ -211,7 +335,8 @@ class AdvancedLearningService:
         if not current_path:
             return {"status": "path_required", "profile": profile, "path": None, "tasks": [], "task": None}
 
-        tasks = build_advanced_tasks(profile, current_path)
+        mastery_records = await KnowledgeMastery.filter(user_id=user_id).all()
+        tasks = build_advanced_tasks(profile, current_path, mastery_records)
 
         return {
             "status": "ready",
@@ -220,6 +345,8 @@ class AdvancedLearningService:
                 "id": current_path.get("path_id"),
                 "stage": current_path.get("stage"),
                 "progress": current_path.get("progress", 0),
+                "current_node_id": current_path.get("current_node_id"),
+                "diagnosis": current_path.get("diagnosis") or {},
             },
             "tasks": tasks,
             # Keep the original field for clients that only render one task.
