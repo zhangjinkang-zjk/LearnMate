@@ -45,13 +45,13 @@ GET /study/overview
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `profile` | object | 用户首次学习定向保存的身份、方向和目标 |
-| `path` | object | 当前学习路径及整体节点进度 |
+| `path` | object | 当前学习路径、整体节点进度和路径内相对难度序列 |
 | `subjects` | array | 用户已加入路径对应的科目完成度和学习时长 |
 | `goals` | array | 当前路径节点清单，可用于目标勾选列表 |
 | `next_content` | array | 当前处于进行中或已解锁状态的下一步内容 |
 | `blind_spots` | array | 按掌握度筛选后的薄弱知识点 |
 | `diagnosis` | object | 当前综合掌握度、阶段和已作答数量 |
-| `mastery_bars` | array | 图表用掌握度数据，优先使用科目完成度，无科目时使用六维能力 |
+| `mastery_bars` | array | 图表用知识点掌握度数据；没有练习记录时使用六维能力 |
 | `radar` | object | 记忆、理解、应用、分析、广度、坚持六维能力数据 |
 | `study_history` | array | 最近 7 天实际累计学习时长，可用于学习轨迹图 |
 | `summary` | object | 学习总时长、活跃天数、节点完成数和掌握度摘要 |
@@ -70,7 +70,11 @@ GET /study/overview
     "id": 12,
     "progress": 40,
     "completed_nodes": 2,
-    "total_nodes": 5
+    "total_nodes": 5,
+    "difficulty_trend": [
+      {"id": 101, "order_index": 1, "title": "文档切分", "status": "completed", "difficulty_score": 1.0, "relative_difficulty": 20},
+      {"id": 102, "order_index": 2, "title": "召回结果排查", "status": "unlocked", "difficulty_score": 1.8, "relative_difficulty": 90}
+    ]
   },
   "subjects": [
     {
@@ -98,7 +102,7 @@ GET /study/overview
     "answered": 6
   },
   "mastery_bars": [
-    {"label": "RAG", "score": 44, "type": "subject"}
+    {"label": "向量检索", "score": 44, "type": "knowledge", "attempts": 9, "correct_count": 4}
   ],
   "radar": {
     "dimensions": [
@@ -114,7 +118,7 @@ GET /study/overview
     "completed_nodes": 2,
     "total_nodes": 5,
     "mastery_score": 58,
-    "text": "当前综合掌握度为 58%。当前优先关注“向量检索”，先补强后再进入下一步。"
+    "text": "已记录 3 个知识点的练习，综合掌握度为 58%。当前优先关注“向量检索”，先补强后再进入下一步。"
   },
   "recommendation": {
     "judgement": "当前主要短板是向量检索能力",
@@ -134,6 +138,7 @@ GET /study/overview
 
 - `subjects`、`goals`、`next_content`、`blind_spots`、`study_history`、`mastery_bars` 返回空数组；
 - `path.id` 可以为 `null`，进度为 `0`；
+- 没有当前路径时 `path.difficulty_trend` 返回空数组；有路径时首节点的 `difficulty_score` 固定为 `1.0`，`relative_difficulty` 仅用于当前路径内的图表高度；
 - `diagnosis.score`、`summary.mastery_score` 可以为 `null`，`diagnosis.stage` 为 `正在生成`，`summary.text` 为空字符串；
 - `recommendation.status` 为 `generating`，没有可执行节点时 `target_id` 和 `action` 为 `null`。
 
@@ -158,4 +163,3 @@ GET /study/overview
 - Router：`backend/src/router/study_router.py`
 - Service：`backend/src/service/study/service.py` 的 `StudyService.get_overview`
 - JWT 依赖：`backend/src/utils/jwt.py` 的 `get_user_id_from_token`
-

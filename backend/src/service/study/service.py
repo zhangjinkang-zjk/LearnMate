@@ -17,8 +17,50 @@ from backend.src.service.portrait.service import (
 )
 from backend.src.service.notification.service import check_and_create_weekly_report
 from backend.src.service.path.helpers import reconcile_completed_prerequisites
+from backend.src.service.path.difficulty import (
+    clamp_difficulty_score,
+    derive_difficulty_score,
+    normalize_relative_difficulty,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _build_path_difficulty_trend(nodes: list[dict]) -> list[dict]:
+    """为当前路径生成难度折线数据；高度只表达路径内难度，不混入完成状态。"""
+    ordered_nodes = sorted(nodes, key=lambda item: item.get("order_index", 0))
+    raw_scores: list[float] = []
+    for index, node in enumerate(ordered_nodes, 1):
+        if index == 1:
+            score = 1.0
+        else:
+            spec = node.get("teaching_spec") if isinstance(node.get("teaching_spec"), dict) else {}
+            tags = node.get("knowledge_tags") if isinstance(node.get("knowledge_tags"), list) else []
+            prerequisites = node.get("prerequisites") if isinstance(node.get("prerequisites"), list) else []
+            score = clamp_difficulty_score(node.get("difficulty_score"))
+            if score is None:
+                score = derive_difficulty_score(
+                    order_index=index,
+                    total_nodes=len(ordered_nodes),
+                    cognitive_level=str(spec.get("cognitive_level") or ""),
+                    module=str(spec.get("module") or ""),
+                    key_points_count=len(spec.get("key_points") or tags),
+                    prerequisite_count=len(prerequisites),
+                )
+        raw_scores.append(score)
+
+    relative_scores = normalize_relative_difficulty(raw_scores)
+    return [
+        {
+            "id": node.get("id"),
+            "order_index": node.get("order_index", index),
+            "title": node.get("title") or "未命名学习节点",
+            "status": node.get("status", "locked"),
+            "difficulty_score": round(raw_scores[index], 2),
+            "relative_difficulty": relative_scores[index],
+        }
+        for index, node in enumerate(ordered_nodes)
+    ]
 
 
 class StudyService:
@@ -38,6 +80,7 @@ class StudyService:
         path_stats = await StudyService.get_path_stats(user_id)
         stats = await StudyService.get_stats(user_id)
         radar = await PortraitRadarService.get(user_id)
+        mastery_records = await KnowledgeMastery.filter(user_id=user_id).all()
 
         subjects = []
         for item in path_stats.get("paths", []):
@@ -53,6 +96,7 @@ class StudyService:
             })
 
         nodes = (current_path or {}).get("nodes", [])
+        difficulty_trend = _build_path_difficulty_trend(nodes)
         goals = [
             {
                 "id": node.get("id"),
@@ -86,10 +130,23 @@ class StudyService:
             })
         weak_points = weak_points[:6]
 
-        mastery_bars = [
-            {"label": item["name"], "score": item["progress"], "type": "subject"}
-            for item in subjects
-        ]
+        mastery_values = []
+        mastery_bars = []
+        for record in mastery_records:
+            attempts = max(record.total_attempts or 0, 0)
+            if attempts <= 0:
+                continue
+            score = round((record.correct_count or 0) / attempts * 100)
+            mastery_values.append(score)
+            mastery_bars.append({
+                "label": record.knowledge_tag,
+                "score": score,
+                "type": "knowledge",
+                "attempts": attempts,
+                "correct_count": record.correct_count or 0,
+            })
+        mastery_bars.sort(key=lambda item: (-item["attempts"], item["score"]))
+        mastery_bars = mastery_bars[:8]
         if not mastery_bars and radar:
             mastery_bars = [
                 {"label": item.get("label", item.get("key", "能力")), "score": item.get("score", 0), "type": "ability"}
@@ -107,8 +164,8 @@ class StudyService:
         completed_nodes = sum(1 for node in nodes if node.get("status") == "completed")
         total_nodes = len(nodes)
         diagnosis = (current_path or {}).get("diagnosis") or {}
-        latest_score = diagnosis.get("latest_score")
-        if latest_score is None and radar and radar.get("dimensions"):
+        latest_score = round(sum(mastery_values) / len(mastery_values)) if mastery_values else diagnosis.get("latest_score")
+        if not mastery_values and latest_score is None and radar and radar.get("dimensions"):
             latest_score = round(sum(item.get("score", 0) for item in radar["dimensions"]) / len(radar["dimensions"]))
         stage = "正在生成"
         if latest_score is not None:
@@ -129,7 +186,7 @@ class StudyService:
         }
         summary_text = ""
         if latest_score is not None:
-            summary_text = f"当前综合掌握度为 {latest_score}%。"
+            summary_text = f"已记录 {len(mastery_values)} 个知识点的练习，综合掌握度为 {latest_score}%。"
             if weak_tag:
                 summary_text += f" 当前优先关注“{weak_tag}”，先补强后再进入下一步。"
         elif stats.get("study_time", {}).get("total_seconds", 0) > 0:
@@ -146,6 +203,7 @@ class StudyService:
                 "progress": (current_path or {}).get("progress", 0),
                 "completed_nodes": completed_nodes,
                 "total_nodes": total_nodes,
+                "difficulty_trend": difficulty_trend,
             },
             "subjects": subjects,
             "goals": goals,

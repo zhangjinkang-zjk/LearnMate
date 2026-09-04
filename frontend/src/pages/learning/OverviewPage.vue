@@ -3,15 +3,16 @@
     <div v-if="loading" class="surface surface-pad loading-state">正在同步你的学习状态…</div>
     <div v-else class="overview-dashboard">
       <section class="path-trend-panel">
-        <div class="section-heading section-heading--compact"><div><p class="eyebrow path-eyebrow">LEARNING PATH</p><h2>学习路径</h2><small v-if="path.subject || profile.direction" class="path-subject">{{ path.subject || profile.direction }}</small></div><span class="trend-caption">当前路径进度 {{ path.progress }}%</span></div>
-        <div class="trend-chart" aria-label="当前学习路径进度">
-          <svg viewBox="0 0 920 180" role="img" aria-label="学习路径节点进度折线图" preserveAspectRatio="none">
+        <div class="section-heading section-heading--compact"><div><p class="eyebrow path-eyebrow">LEARNING PATH</p><h2>学习路径</h2><small v-if="path.subject || profile.direction" class="path-subject">{{ path.subject || profile.direction }}</small></div><div class="trend-caption"><span>当前路径进度 {{ path.progress }}%</span><small>折线高度：路径内相对难度（首节点 = 1.0）</small></div></div>
+        <div v-if="pathTrend.length > 1" class="trend-chart" aria-label="当前学习路径相对难度折线图">
+          <svg viewBox="0 0 920 180" role="img" aria-label="学习路径节点相对难度折线图" preserveAspectRatio="none">
             <line v-for="level in [25, 50, 75]" :key="level" x1="0" :y1="180 - level * 1.55" x2="920" :y2="180 - level * 1.55" class="chart-grid" />
             <polyline :points="trendPoints" class="trend-line" />
-            <circle v-for="(point, index) in pathTrend" :key="point.id" :cx="trendX(index)" :cy="trendY(point.rate)" r="4" class="trend-point" />
+            <circle v-for="(point, index) in pathTrend" :key="point.id" :cx="trendX(index)" :cy="trendY(point.relative_difficulty)" r="4" class="trend-point"><title>{{ point.label }}：相对难度 {{ point.difficulty_score }}</title></circle>
           </svg>
           <div class="trend-labels"><span v-for="point in pathTrend" :key="`${point.id}-label`">{{ point.label }}</span></div>
         </div>
+        <div v-else class="empty-state trend-empty">路径节点生成后，这里会显示每个节点的相对难度变化。</div>
       </section>
 
       <div class="overview-columns">
@@ -37,7 +38,7 @@ import { learningState } from '@/entities/learning/learningState'
 
 const loading = ref(true)
 const profile = reactive({ direction: learningState.direction, goal: learningState.goal })
-const path = reactive({ subject: '', currentNode: '', nextAction: null, nodes: [], progress: 0 })
+const path = reactive({ subject: '', currentNode: '', nextAction: null, nodes: [], difficultyTrend: [], progress: 0 })
 const stats = reactive({ studySeconds: 0, examAnswered: 0, weakPoints: [] })
 const goals = ref([])
 const nextContent = ref([])
@@ -48,12 +49,11 @@ const goalItems = computed(() => { const items = goals.value.map((item) => item.
 const nextTopic = computed(() => nextContent.value[0]?.title || path.currentNode || '从学习路径中选择一个节点开始')
 const nextAction = computed(() => ({ to: path.nextAction?.type === 'quiz' ? '/learning/advanced' : '/learning/fundamentals' }))
 const weakPoints = computed(() => { const values = stats.weakPoints || []; const unique = values.filter((item, index, all) => item.tag && all.findIndex((other) => other.tag === item.tag) === index); return unique.slice(0, 3).map((item) => { const raw = Number(item.accuracy || 0); return { tag: item.tag || item.knowledge_tag, accuracy: Math.round(raw <= 1 ? raw * 100 : raw) } }) })
-const pathNodeRate = (node, index) => { const routeLevels = [52, 70, 40, 76, 32, 62, 46]; const base = routeLevels[index % routeLevels.length]; const statusOffset = node.status === 'completed' ? 20 : node.status === 'in_progress' ? 10 : node.status === 'unlocked' ? 0 : -12; return Math.max(8, Math.min(96, base + statusOffset)) }
-const pathTrend = computed(() => { const nodes = (goals.value.length ? goals.value : path.nodes).slice(0, 7); if (nodes.length > 1) return nodes.map((node, index) => ({ id: node.id || index, label: String(node.title || `节点 ${index + 1}`).slice(0, 8), rate: pathNodeRate(node, index) })); const progress = Number(path.progress || 0); return [{ id: 'path-start', label: '开始', rate: 28 }, { id: 'path-middle', label: '学习中', rate: 68 }, { id: 'path-progress', label: '当前进度', rate: Math.max(18, progress) }] })
+const pathTrend = computed(() => path.difficultyTrend.slice(0, 12).map((node, index) => ({ id: node.id || index, label: String(node.title || `节点 ${index + 1}`).slice(0, 8), relative_difficulty: Number(node.relative_difficulty || 50), difficulty_score: Number(node.difficulty_score || 1).toFixed(2), status: node.status })))
 const masteryItems = computed(() => { const source = mastery.value.length ? mastery.value : weakPoints.value; return source.slice(0, 6).map((item) => { const tag = item.knowledge_tag || item.tag || item.label || '知识点'; const raw = Number(item.accuracy ?? item.score ?? 0); const score = Math.round(raw <= 1 ? raw * 100 : raw); return { tag, shortTag: tag.length > 6 ? `${tag.slice(0, 6)}…` : tag, score } }) })
 const masteryScore = computed(() => { const rawSummaryScore = overviewSummary.masteryScore; const summaryScore = Number(rawSummaryScore); if (rawSummaryScore !== null && rawSummaryScore !== undefined && rawSummaryScore !== '' && Number.isFinite(summaryScore)) return Math.round(summaryScore); const values = masteryItems.value.map((item) => item.score); return values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : 0 })
 const learningSummary = computed(() => overviewSummary.text || '完成练习后，这里会显示你的学习总结。')
-const trendPoints = computed(() => pathTrend.value.map((point, index) => `${trendX(index)},${trendY(point.rate)}`).join(' '))
+const trendPoints = computed(() => pathTrend.value.map((point, index) => `${trendX(index)},${trendY(point.relative_difficulty)}`).join(' '))
 const trendX = (index) => pathTrend.value.length < 2 ? 460 : Math.round(index * (920 / (pathTrend.value.length - 1)))
 const trendY = (rate) => 170 - Math.max(0, Math.min(100, Number(rate || 0))) * 1.45
 function formatDuration(seconds) { const value = Number(seconds || 0); if (value < 60) return `${value}秒`; const minutes = Math.round(value / 60); if (minutes < 60) return `${minutes}分钟`; return `${(minutes / 60).toFixed(1)}小时` }
@@ -65,7 +65,7 @@ async function loadOverview() {
   const subjects = Array.isArray(overview.subjects) ? overview.subjects : []
   const pathData = overview.path || {}
   const content = Array.isArray(overview.next_content) ? overview.next_content : []
-  Object.assign(path, { subject: subjects[0]?.name || '', currentNode: content[0]?.title || '', nextAction: { type: overview.recommendation?.action_type || '' }, nodes: content, progress: Number(pathData.progress || 0) })
+  Object.assign(path, { subject: subjects[0]?.name || '', currentNode: content[0]?.title || '', nextAction: { type: overview.recommendation?.action_type || '' }, nodes: content, difficultyTrend: Array.isArray(pathData.difficulty_trend) ? pathData.difficulty_trend : [], progress: Number(pathData.progress || 0) })
   goals.value = Array.isArray(overview.goals) ? overview.goals : []
   nextContent.value = content
   const summary = overview.summary || {}
@@ -101,6 +101,8 @@ onMounted(loadOverview)
 .path-trend-panel .trend-chart svg { height: 94px; }
 .path-trend-panel .trend-line { stroke: var(--accent-deep); stroke-width: 4; }
 .path-trend-panel .trend-point { stroke: var(--accent-deep); stroke-width: 2.5; }
+.path-trend-panel .trend-caption { display: grid; gap: 3px; text-align: right; }
+.path-trend-panel .trend-caption small { color: var(--muted); font-size: 10px; }
 .path-eyebrow { margin-bottom: 6px; color: var(--muted); }
 .module-eyebrow { margin-bottom: 6px; color: var(--muted); font-size: 11px; line-height: 1.3; }
 .path-subject { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; }
