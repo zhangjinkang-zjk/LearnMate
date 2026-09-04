@@ -16,3 +16,8 @@ export const readPortrait = async () => {
   const response = await httpClient.get('/ai_portrait/read_portrait')
   return unwrap(response)
 }
+
+export const readPortraitRadar = async () => {
+  const response = await httpClient.get('/ai_portrait/radar')
+  return unwrap(response)
+}

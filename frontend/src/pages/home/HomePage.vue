@@ -2,7 +2,7 @@
   <main class="home-cover">
     <section
       class="hero"
-      :class="{ 'is-open': isOpen }"
+      :class="{ 'is-open': isOpen, 'is-collected': isCollected }"
       aria-label="LearnMate home"
     >
       <div class="background-word" aria-hidden="true">
@@ -24,27 +24,26 @@
       </button>
 
       <div class="object-field" aria-label="Learning tools">
-        <button
+        <div
           v-for="item in floatingItems"
           :key="item.file"
           class="floating-item"
-          :class="{ 'is-link': item.to }"
-          type="button"
+          role="img"
           :aria-label="item.label"
           :title="item.label"
           :style="item.style"
-          @click="openItem(item)"
         >
           <img :src="item.image" :alt="item.label" draggable="false" />
-        </button>
+        </div>
       </div>
 
-      <div class="backpack-stage" :class="{ 'is-open': isOpen }">
+      <div class="backpack-stage" :class="{ 'is-open': isOpen, 'is-collected': isCollected }">
         <button
           class="backpack-trigger"
           type="button"
-          aria-label="Replay the backpack animation"
-          @click="replayAnimation"
+          :aria-label="isCollected ? 'Release the learning tools' : 'Collect the learning tools'"
+          :aria-pressed="isCollected"
+          @click="toggleBackpack"
         >
           <img
             class="backpack-image"
@@ -134,6 +133,7 @@ import backpackImage from "../../shared/assets/home/65f0199b0fe8d.png";
 
 const router = useRouter();
 const isOpen = ref(false);
+const isCollected = ref(false);
 const isLoginOpen = ref(false);
 const isAuthenticated = ref(Boolean(localStorage.getItem("token")));
 const displayUsername = ref(localStorage.getItem("learnmate_username") || "");
@@ -241,17 +241,17 @@ onBeforeUnmount(() => {
   if (codeTimer) window.clearInterval(codeTimer);
 });
 
-const item = (image, file, label, x, y, rotate, size, delay, to = "") => ({
+const item = (image, file, label, x, y, rotate, size, delay) => ({
   image,
   file,
   label,
-  to,
   style: {
     "--x": x,
     "--y": y,
     "--r": `${rotate}deg`,
     "--size": `${size}px`,
     "--delay": `${delay}ms`,
+    "--collect-delay": `${Math.round(delay * 0.35)}ms`,
   },
 });
 
@@ -264,8 +264,7 @@ const floatingItems = [
     "-24vh",
     -16,
     132,
-    80,
-    "/learning/navigation"
+    80
   ),
   item(
     laptopImage,
@@ -275,8 +274,7 @@ const floatingItems = [
     "-25vh",
     12,
     127,
-    150,
-    "/learning/overview"
+    150
   ),
   item(
     monitorImage,
@@ -286,8 +284,7 @@ const floatingItems = [
     "-19vh",
     11,
     135,
-    220,
-    "/resources"
+    220
   ),
   item(
     headsetImage,
@@ -297,8 +294,7 @@ const floatingItems = [
     "-17vh",
     18,
     130,
-    290,
-    "/learning/workspace"
+    290
   ),
   item(
     routerImage,
@@ -318,8 +314,7 @@ const floatingItems = [
     "13vh",
     -8,
     149,
-    430,
-    "/learning/workspace"
+    430
   ),
   item(
     mouseImage,
@@ -329,8 +324,7 @@ const floatingItems = [
     "1vh",
     12,
     200,
-    500,
-    "/learning/overview"
+    500
   ),
   item(
     penTabletImage,
@@ -340,8 +334,7 @@ const floatingItems = [
     "15vh",
     -12,
     137,
-    570,
-    "/resources"
+    570
   ),
   item(
     gpuImage,
@@ -351,8 +344,7 @@ const floatingItems = [
     "-29vh",
     7,
     132,
-    640,
-    "/resources"
+    640
   ),
   item(
     fanImage,
@@ -362,8 +354,7 @@ const floatingItems = [
     "21vh",
     -8,
     137,
-    710,
-    "/learning/workspace"
+    710
   ),
   item(
     tabletImage,
@@ -373,8 +364,7 @@ const floatingItems = [
     "-3vh",
     9,
     108,
-    780,
-    "/learning/navigation"
+    780
   ),
   item(
     monitorImage,
@@ -384,8 +374,7 @@ const floatingItems = [
     "-4vh",
     -9,
     111,
-    850,
-    "/resources"
+    850
   ),
   item(
     laptopImage,
@@ -395,8 +384,7 @@ const floatingItems = [
     "16vh",
     -13,
     111,
-    920,
-    "/resources"
+    920
   ),
   item(
     headsetAltImage,
@@ -406,14 +394,9 @@ const floatingItems = [
     "17vh",
     14,
     113,
-    990,
-    "/learning/workspace"
+    990
   ),
 ];
-
-const openItem = (target) => {
-  if (target.to) router.push(target.to);
-};
 
 onMounted(() => {
   window.setTimeout(() => {
@@ -421,11 +404,8 @@ onMounted(() => {
   }, 420);
 });
 
-const replayAnimation = () => {
-  isOpen.value = false;
-  window.setTimeout(() => {
-    isOpen.value = true;
-  }, 180);
+const toggleBackpack = () => {
+  isCollected.value = !isCollected.value;
 };
 </script>
 
@@ -625,10 +605,21 @@ const replayAnimation = () => {
     rotate(var(--r));
 }
 
+.is-collected .floating-item {
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) translate(0, 12vh) scale(0.08) rotate(0deg);
+  transition-delay: var(--collect-delay);
+}
+
 .floating-item:hover {
   z-index: 2;
   transform: translate(-50%, -50%) translate(var(--x), var(--y)) scale(1.08)
     rotate(var(--r));
+}
+
+.is-collected .floating-item:hover {
+  transform: translate(-50%, -50%) translate(0, 12vh) scale(0.08) rotate(0deg);
 }
 
 @keyframes item-drift {
@@ -665,7 +656,7 @@ const replayAnimation = () => {
   background: transparent;
   transform: translateX(-50%) translateY(18px) scale(0.08);
   cursor: pointer;
-  pointer-events: auto;
+  pointer-events: none;
   filter: drop-shadow(0 24px 18px rgba(3, 16, 12, 0.46));
   opacity: 0;
   transition: transform 1.25s cubic-bezier(0.17, 0.84, 0.35, 1.1),
@@ -682,6 +673,7 @@ const replayAnimation = () => {
 
 .backpack-stage.is-open .backpack-trigger {
   opacity: 1;
+  pointer-events: auto;
   transform: translateX(-50%) translateY(-28px) scale(1);
 }
 

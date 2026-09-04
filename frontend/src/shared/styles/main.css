@@ -26,9 +26,9 @@ button { cursor: pointer; }
 .brand-name { display: block; color: #ffffff; font-family: Georgia, serif; font-size: 16px; letter-spacing: .01em; white-space: nowrap; }
 .sidebar-nav-dock { width: 64px; margin: clamp(48px, 10vh, 112px) auto 0; padding: 12px 10px; border: 1px solid rgba(255,255,255,.82); border-radius: 34px; background: #ffffff; box-shadow: 0 20px 42px rgba(3,20,13,.2); pointer-events: auto; }
 .sidebar-section { padding: 0; }
-.sidebar-nav-group { margin-top: 11px; padding-top: 11px; border-top: 1px solid rgba(30,60,52,.15); }
+.sidebar-nav-group { margin-top: 11px; padding-top: 11px; border-top: 0; }
 .sidebar-group-label { display: none; margin: 0 10px 9px; color: rgba(239,243,232,.52); font-size: 10px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
-.sidebar-section--secondary { margin-top: 11px; padding-top: 11px; border-top: 1px solid rgba(30,60,52,.15); }
+.sidebar-section--secondary { margin-top: 11px; padding-top: 11px; border-top: 0; }
 .sidebar-label { display: none; margin: 0 10px 9px; color: rgba(239,243,232,.52); font-size: 10px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
 .sidebar-nav { display: grid; gap: 9px; }
 .sidebar-link { position: relative; display: flex; align-items: center; justify-content: center; width: 44px; min-height: 44px; margin: 0 auto; padding: 0; border-radius: 12px; color: rgba(30,60,52,.72); font-size: 0; text-decoration: none; transition: background .25s ease, color .25s ease, transform .25s ease; }
@@ -38,7 +38,6 @@ button { cursor: pointer; }
 .sidebar-link.router-link-active { background: #1e3c34; color: #e2f452; }
 .sidebar-footer { width: 64px; margin: auto auto 0; display: grid; gap: 9px; padding: 12px 10px; border: 1px solid rgba(255,255,255,.82); border-radius: 34px; background: #ffffff; box-shadow: 0 20px 42px rgba(3,20,13,.2); pointer-events: auto; }
 .profile-chip { display: grid; justify-items: center; gap: 12px; margin-top: 5px; padding: 12px 0 0; border-top: 1px solid rgba(30,60,52,.15); }
-.profile-avatar { display: grid; width: 29px; height: 29px; place-items: center; border-radius: 50%; background: #1e3c34; color: #e2f452; font-size: 12px; font-weight: 800; }
 .profile-copy { display: none; min-width: 0; flex: 1; gap: 2px; font-size: 11px; }
 .profile-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profile-copy small { color: rgba(239,243,232,.52); font-size: 10px; }
@@ -108,7 +107,7 @@ button { cursor: pointer; }
   .brand-name, .sidebar-label, .profile-copy { display: block; }
   .sidebar-label { margin-top: 0; }
   .sidebar-nav-dock { width: auto; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-  .sidebar-nav-group, .sidebar-section--secondary { border-top-color: rgba(255,255,255,.13); }
+  .sidebar-nav-group, .sidebar-section--secondary { border-top: 0; }
   .sidebar-group-label { display: block; }
   .sidebar-nav { gap: 5px; }
   .sidebar-link { justify-content: flex-start; width: auto; min-height: 40px; margin: 0; padding: 0 11px; border-radius: 6px; font-size: 13px; }

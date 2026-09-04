@@ -43,7 +43,6 @@
           <span>{{ item.label }}</span>
         </RouterLink>
         <div class="profile-chip">
-          <span class="profile-avatar">学</span>
           <span class="profile-copy"><strong>{{ displayName }}</strong><small>学习进行中</small></span>
           <button class="logout-button" type="button" title="退出登录" aria-label="退出登录" @click="logout">
             <LogOut :size="15" stroke-width="1.8" />
