@@ -1,6 +1,6 @@
 <template>
   <article class="lesson-document surface" :class="{ 'lesson-document--wide': wide, 'lesson-document--paged': paginate, 'lesson-document--without-title': !showTitle }">
-    <header class="lesson-document__header">
+    <header v-if="showTitle" class="lesson-document__header">
       <div class="lesson-document__meta">
         <span>第 {{ chapterNumber }} 章</span>
         <span>{{ paginate ? `第 ${currentPage + 1} / ${pageCount} 页 · ${pageEstimatedMinutes} 分钟` : `${estimatedMinutes} 分钟阅读` }}</span>
