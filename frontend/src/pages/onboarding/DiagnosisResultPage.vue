@@ -1,7 +1,37 @@
 <template>
-  <div class="onboarding-page"><PageTitle eyebrow="诊断结果确认" title="你的学习起点已经生成" description="结果会作为后续任务分析和课程难度的基线，你也可以返回重新诊断。" /><div class="grid grid--two"><section class="surface surface-pad score-card"><span class="score-label">当前综合起点</span><strong>基础建立期</strong><div class="score-ring"><span>42<small>%</small></span></div><p>你已经理解部分概念，下一步适合通过基础讲解建立完整方法，再进入项目练习。</p></section><section class="surface surface-pad result-list"><h2>建议学习顺序</h2><ol><li><span>01</span><div><strong>基础讲解</strong><small>补齐文档切分、召回与评估概念</small></div></li><li><span>02</span><div><strong>迁移练习</strong><small>在小型知识库中完成一次参数调整</small></div></li><li><span>03</span><div><strong>企业案例</strong><small>针对真实问题提交可验证方案</small></div></li></ol><div class="result-actions"><RouterLink class="button button--quiet" to="/onboarding/diagnosis">重新诊断</RouterLink><RouterLink class="button button--primary" to="/learning/overview">进入学习概览</RouterLink></div></section></div></div>
+  <div class="onboarding-page">
+    <PageTitle eyebrow="诊断结果确认" title="你的学习起点已经生成" description="结果会作为后续任务分析和课程难度的基线，你也可以返回重新诊断。" />
+    <div class="grid grid--two">
+      <section class="surface surface-pad score-card">
+        <span class="score-label">当前综合起点</span>
+        <strong>{{ level }}</strong>
+        <div class="score-ring"><span>{{ score }}<small>%</small></span></div>
+        <p>{{ description }}</p>
+      </section>
+      <section class="surface surface-pad result-list">
+        <h2>建议学习顺序</h2>
+        <ol>
+          <li><span>01</span><div><strong>基础讲解</strong><small>补齐当前方向的关键概念和方法</small></div></li>
+          <li><span>02</span><div><strong>迁移练习</strong><small>在小任务中验证是否能独立应用</small></div></li>
+          <li><span>03</span><div><strong>进阶案例</strong><small>结合你的目标完成可验证的综合任务</small></div></li>
+        </ol>
+        <div class="result-actions"><RouterLink class="button button--quiet" to="/onboarding/diagnosis">重新诊断</RouterLink><RouterLink class="button button--primary" to="/learning/overview">进入学习概览</RouterLink></div>
+      </section>
+    </div>
+  </div>
 </template>
-<script setup>import PageTitle from '@/shared/ui/PageTitle.vue'</script>
+
+<script setup>
+import { computed } from 'vue'
+import PageTitle from '@/shared/ui/PageTitle.vue'
+
+let storedResult = {}
+try { storedResult = JSON.parse(localStorage.getItem('learnmate_diagnosis_result') || '{}') } catch { storedResult = {} }
+const score = computed(() => Math.round(Number(storedResult.percentage ?? 42)))
+const level = computed(() => score.value >= 85 ? '应用进阶期' : score.value >= 60 ? '基础巩固期' : '基础建立期')
+const description = computed(() => storedResult.message || '你已经理解部分概念，下一步适合通过基础讲解建立完整方法，再进入项目练习。')
+</script>
+
 <style scoped>
 .onboarding-page { max-width: 980px; margin: 0 auto; }.score-card { display: grid; gap: 12px; align-content: start; }.score-label { color: var(--muted); font-size: 12px; }.score-card strong { font-size: 22px; }.score-ring { display: grid; width: 132px; height: 132px; margin: 15px 0 8px; place-items: center; border: 13px solid #dce8b1; border-right-color: var(--accent-deep); border-bottom-color: var(--accent-deep); border-radius: 50%; }.score-ring span { font-size: 30px; font-weight: 800; }.score-ring small { font-size: 14px; }.score-card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }.result-list h2 { margin: 0 0 18px; font-size: 18px; }.result-list ol { display: grid; gap: 18px; margin: 0; padding: 0; list-style: none; }.result-list li { display: flex; gap: 13px; }.result-list li > span { color: var(--accent-deep); font-size: 12px; font-weight: 800; }.result-list li div { display: grid; gap: 4px; }.result-list small { color: var(--muted); font-size: 12px; }.result-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 25px; }
 </style>
