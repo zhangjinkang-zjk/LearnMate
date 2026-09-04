@@ -4,8 +4,10 @@
       <component :is="Component" />
     </component>
   </RouterView>
+  <XiaozhiAssistant />
 </template>
 
 <script setup>
 import AppShell from '@/layouts/AppShell.vue'
+import XiaozhiAssistant from '@/features/xiaozhi/XiaozhiAssistant.vue'
 </script>
