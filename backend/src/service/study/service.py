@@ -127,6 +127,13 @@ class StudyService:
             "action_type": (current_path or {}).get("next_action", {}).get("type") if current_path else None,
             "status": "ready" if current_node or weak_tag else "generating",
         }
+        summary_text = ""
+        if latest_score is not None:
+            summary_text = f"当前综合掌握度为 {latest_score}%。"
+            if weak_tag:
+                summary_text += f" 当前优先关注“{weak_tag}”，先补强后再进入下一步。"
+        elif stats.get("study_time", {}).get("total_seconds", 0) > 0:
+            summary_text = "已有学习记录，完成练习后会形成更准确的掌握度总结。"
 
         return {
             "profile": {
@@ -158,6 +165,7 @@ class StudyService:
                 "completed_nodes": completed_nodes,
                 "total_nodes": total_nodes,
                 "mastery_score": latest_score,
+                "text": summary_text,
             },
             "recommendation": recommendation,
         }
