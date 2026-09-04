@@ -100,4 +100,8 @@ onMounted(loadPage)
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 760px) { .session-context { grid-template-columns: 1fr; align-items: flex-start; padding: 14px 15px; }.session-context__identity { width: 100%; }.session-context__facts { width: 100%; grid-auto-columns: minmax(0, 1fr); justify-content: space-between; }.session-context__facts span { text-align: left; } }
 @media (max-width: 560px) { .session-ended > div { align-items: stretch; flex-direction: column; width: 100%; }.session-ended .button { width: 100%; } }
+:global(.page-container:has(.consolidation-page)) { background: #f7f7f7; }
+:global(.app-content:has(.consolidation-page) .app-header) { border-bottom-color: #e8e8e8; background: #f7f7f7; }
+.consolidation-page h2 { color: #1e3c34; }
+.consolidation-page .surface { border-color: rgba(63, 91, 49, .28); box-shadow: 0 8px 24px rgba(45, 40, 92, .07); }
 </style>
