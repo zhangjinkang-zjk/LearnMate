@@ -52,6 +52,7 @@ services:
       SMTP_USER: ${SMTP_USER}
       SMTP_PASS: ${SMTP_PASS}
       REDIS_URL: redis://redis:6379/0
+      PATH_AUTO_PREGENERATE_FIRST_NODE: ${PATH_AUTO_PREGENERATE_FIRST_NODE:-true}
     depends_on:
       mysql:
         condition: service_healthy

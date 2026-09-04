@@ -24,6 +24,7 @@ from backend.src.service.path.difficulty import (
     derive_difficulty_score,
     normalize_relative_difficulty,
 )
+from backend.src.service.resource.matching import build_resource_difficulty_match
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +206,7 @@ class StudyService:
         )
         if not mastery_values and latest_score is None and radar and radar.get("dimensions"):
             latest_score = round(sum(item.get("score", 0) for item in radar["dimensions"]) / len(radar["dimensions"]))
+        resource_difficulty_match = build_resource_difficulty_match(nodes, latest_score)
         stage = "正在生成"
         if latest_score is not None:
             stage = "应用进阶期" if latest_score >= 85 else "基础巩固期" if latest_score >= 60 else "基础建立期"
@@ -243,6 +245,7 @@ class StudyService:
                 "completed_nodes": completed_nodes,
                 "total_nodes": total_nodes,
                 "difficulty_trend": difficulty_trend,
+                "resource_difficulty_match": resource_difficulty_match,
             },
             "subjects": subjects,
             "goals": goals,

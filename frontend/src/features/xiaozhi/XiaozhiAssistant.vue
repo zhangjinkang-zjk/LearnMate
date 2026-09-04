@@ -2,20 +2,20 @@
   <div
     ref="root"
     class="xiaozhi"
-    :class="{ 'is-dragging': isDragging, 'is-open': isOpen }"
+    :class="{ 'is-dragging': isDragging, 'is-open': isOpen, 'is-robert': variant === 'robert' }"
     :style="positionStyle"
   >
     <Transition name="xiaozhi-panel">
-      <section v-if="isOpen" class="xiaozhi-panel" role="dialog" aria-label="小知答疑">
+      <section v-if="isOpen" class="xiaozhi-panel" role="dialog" :aria-label="`${assistantName}答疑`">
         <header class="xiaozhi-panel__header">
           <div class="xiaozhi-panel__title">
             <span class="xiaozhi-panel__status"></span>
             <div>
-              <strong>小知</strong>
+              <strong>{{ assistantName }}</strong>
               <small>答疑与资源助手</small>
             </div>
           </div>
-          <button class="icon-button" type="button" aria-label="关闭小知" title="关闭" @click="isOpen = false">
+          <button class="icon-button" type="button" :aria-label="`关闭${assistantName}`" title="关闭" @click="isOpen = false">
             <X :size="16" />
           </button>
         </header>
@@ -43,7 +43,7 @@
 
         <p v-if="errorMessage" class="xiaozhi-panel__error">{{ errorMessage }}</p>
         <form class="xiaozhi-panel__composer" @submit.prevent="sendMessage">
-          <textarea v-model="draft" :disabled="isLoading" maxlength="1200" rows="2" placeholder="问问小知，或让它生成学习资源…" @keydown.ctrl.enter.prevent="sendMessage" @keydown.meta.enter.prevent="sendMessage"></textarea>
+          <textarea v-model="draft" :disabled="isLoading" maxlength="1200" rows="2" :placeholder="`问问${assistantName}，或让它生成学习资源…`" @keydown.ctrl.enter.prevent="sendMessage" @keydown.meta.enter.prevent="sendMessage"></textarea>
           <div class="xiaozhi-panel__composer-row">
             <span>{{ draft.length }} / 1200</span>
             <button type="submit" :disabled="!draft.trim() || isLoading" aria-label="发送消息" title="发送">
@@ -58,7 +58,7 @@
     <button
       class="xiaozhi-fab"
       type="button"
-      aria-label="打开小知答疑"
+      :aria-label="`打开${assistantName}答疑`"
       :aria-expanded="isOpen"
       @pointerdown="startDrag"
       @pointermove="moveDrag"
@@ -67,8 +67,8 @@
       @click="toggleOpen"
     >
       <span class="xiaozhi-fab__halo"></span>
-      <img :src="robotImage" alt="小知" draggable="false" />
-      <span class="xiaozhi-fab__label">小知</span>
+      <img :src="displayedRobotImage" :alt="assistantName" draggable="false" />
+      <span class="xiaozhi-fab__label">{{ assistantName }}</span>
     </button>
   </div>
 </template>
@@ -80,7 +80,17 @@ import { chatApi } from '@/shared/api/chatApi'
 import robotImage from '@/shared/assets/xiaozhi-robot.png'
 import { applyWorkflowEvent, applyWorkflowProgress, finishWorkflow, resetWorkflow } from '@/entities/agent/agentWorkflowState'
 
+const props = defineProps({
+  assistantName: { type: String, default: '小知' },
+  robotImage: { type: String, default: '' },
+  variant: { type: String, default: 'xiaozhi' },
+  sessionKey: { type: String, default: 'learnmate_xiaozhi_group' },
+})
+
 const root = ref(null)
+const assistantName = computed(() => props.assistantName.trim() || '小知')
+const variant = computed(() => props.variant)
+const displayedRobotImage = computed(() => props.robotImage || robotImage)
 const messagesEl = ref(null)
 const isOpen = ref(false)
 const isDragging = ref(false)
@@ -88,11 +98,11 @@ const hasMoved = ref(false)
 const draft = ref('')
 const isLoading = ref(false)
 const errorMessage = ref('')
-const chatGroupId = ref(Number(sessionStorage.getItem('learnmate_xiaozhi_group')) || null)
+const chatGroupId = ref(Number(sessionStorage.getItem(props.sessionKey)) || null)
 const position = ref({ x: null, y: null })
 const dragOffset = ref({ x: 0, y: 0 })
 const pointerStart = ref({ x: 0, y: 0 })
-const messages = ref([{ id: 'welcome', role: 'assistant', text: '你好，我是小知。可以帮你答疑解惑，也可以整理并生成学习资源。' }])
+const messages = ref([{ id: 'welcome', role: 'assistant', text: `你好，我是${assistantName.value}。可以帮你答疑解惑，也可以整理并生成学习资源。` }])
 
 const positionStyle = computed(() => {
   if (position.value.x === null) return {}
@@ -171,7 +181,7 @@ async function sendMessage() {
       else applyWorkflowProgress(event)
       if (event?.chat_group_id) {
         chatGroupId.value = Number(event.chat_group_id)
-        sessionStorage.setItem('learnmate_xiaozhi_group', String(chatGroupId.value))
+        sessionStorage.setItem(props.sessionKey, String(chatGroupId.value))
       }
       if (event?.content && ['chunk', 'content'].includes(event.type)) reply.text += String(event.content)
       const resource = event?.resource || (Array.isArray(event?.resources) ? event.resources[0] : null)
@@ -233,6 +243,16 @@ onBeforeUnmount(() => {
 .xiaozhi-panel__composer { padding: 10px 12px 12px; border-top: 1px solid var(--line); background: #fbfcfa; }.xiaozhi-panel__composer textarea { display: block; width: 100%; box-sizing: border-box; resize: none; padding: 8px 9px; border: 1px solid var(--line); border-radius: 5px; outline: none; background: var(--paper); color: var(--ink); font: inherit; font-size: 12px; line-height: 1.5; }.xiaozhi-panel__composer textarea:focus { border-color: var(--accent-deep); box-shadow: 0 0 0 2px rgba(63, 91, 49, .1); }.xiaozhi-panel__composer-row { display: flex; align-items: center; justify-content: space-between; margin-top: 7px; }.xiaozhi-panel__composer-row span { color: var(--muted); font-size: 9px; }.xiaozhi-panel__composer-row button { display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 5px; background: var(--ink); color: #fff; cursor: pointer; }.xiaozhi-panel__composer-row button:disabled { opacity: .4; cursor: not-allowed; }.spin { animation: spin .8s linear infinite; }
 .xiaozhi-panel-enter-active,.xiaozhi-panel-leave-active { transition: opacity .2s ease, transform .2s ease; }.xiaozhi-panel-enter-from,.xiaozhi-panel-leave-to { opacity: 0; transform: translateY(8px) scale(.97); }
 @keyframes pulse { 0%,70%,100% { opacity: .3; transform: translateY(0); } 35% { opacity: 1; transform: translateY(-2px); } } @keyframes spin { to { transform: rotate(360deg); } } @keyframes halo { 0%,100% { transform: scale(1); opacity: .6; } 50% { transform: scale(1.05); opacity: 1; } }
-@media (max-width: 620px) { .xiaozhi { right: 15px; bottom: 15px; }.xiaozhi-panel { position: fixed; right: 15px; bottom: 111px; width: calc(100vw - 30px); max-height: calc(100vh - 130px); } }
-@media (prefers-reduced-motion: reduce) { .xiaozhi-fab__halo { animation: none; } }
+/* Robert stays as a transparent, animated cutout without the assistant badge. */
+.xiaozhi.is-robert { right: 22px; bottom: 16px; width: 136px; }
+.xiaozhi.is-robert .xiaozhi-fab { width: 136px; height: 154px; border: 0; border-radius: 0; background: transparent; box-shadow: none; animation: robert-float 3.6s ease-in-out infinite; }
+.xiaozhi.is-robert .xiaozhi-fab img { width: 136px; height: 154px; border-radius: 0; filter: sepia(.2) saturate(1.25) hue-rotate(340deg) brightness(1.06) drop-shadow(0 14px 12px rgba(12, 24, 20, .26)); animation: robert-sway 4.8s ease-in-out infinite; }
+.xiaozhi.is-robert .xiaozhi-panel { bottom: 178px; }
+.xiaozhi.is-robert .xiaozhi-fab:hover img { animation: robert-greet .7s ease-in-out both; }
+.xiaozhi.is-robert .xiaozhi-fab__halo, .xiaozhi.is-robert .xiaozhi-fab__label { display: none; }
+@keyframes robert-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+@keyframes robert-sway { 0%,100% { transform: rotate(-1.5deg) translateX(0); } 50% { transform: rotate(1.5deg) translateX(2px); } }
+@keyframes robert-greet { 0% { transform: rotate(0); } 35% { transform: rotate(-5deg) translateY(-3px); } 70% { transform: rotate(4deg) translateY(-1px); } 100% { transform: rotate(0); } }
+@media (max-width: 620px) { .xiaozhi { right: 15px; bottom: 15px; }.xiaozhi-panel { position: fixed; right: 15px; bottom: 111px; width: calc(100vw - 30px); max-height: calc(100vh - 130px); } .xiaozhi.is-robert { right: 10px; bottom: 8px; width: 112px; } .xiaozhi.is-robert .xiaozhi-fab, .xiaozhi.is-robert .xiaozhi-fab img { width: 112px; height: 128px; } .xiaozhi.is-robert .xiaozhi-panel { bottom: 146px; } }
+@media (prefers-reduced-motion: reduce) { .xiaozhi-fab__halo, .xiaozhi.is-robert .xiaozhi-fab, .xiaozhi.is-robert .xiaozhi-fab img { animation: none; } }
 </style>

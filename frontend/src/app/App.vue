@@ -4,13 +4,10 @@
       <component :is="Component" />
     </component>
   </RouterView>
-  <XiaozhiAssistant />
-  <AgentWorkflowDrawer :state="workflowState" />
+  <RobertAssistant />
 </template>
 
 <script setup>
 import AppShell from '@/layouts/AppShell.vue'
-import AgentWorkflowDrawer from '@/features/agent/AgentWorkflowDrawer.vue'
-import XiaozhiAssistant from '@/features/xiaozhi/XiaozhiAssistant.vue'
-import { workflowState } from '@/entities/agent/agentWorkflowState'
+import RobertAssistant from '@/features/xiaozhi/RobertAssistant.vue'
 </script>

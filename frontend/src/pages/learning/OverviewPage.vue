@@ -4,16 +4,17 @@
     <div v-else-if="errorMessage" class="surface surface-pad error-state"><strong>学习概览暂时无法读取</strong><p>{{ errorMessage }}</p><button class="button button--secondary" type="button" @click="loadOverview">重试 <ArrowRight :size="14" /></button></div>
     <div v-else class="overview-dashboard">
       <section class="path-trend-panel">
-        <div class="section-heading section-heading--compact"><div><p class="eyebrow path-eyebrow">LEARNING PATH</p><h2>学习路径</h2><small v-if="path.subject || profile.direction" class="path-subject">{{ path.subject || profile.direction }}</small></div><div class="trend-caption"><span>当前路径进度 {{ pathProgressLabel }}</span><small>折线高度：路径内相对难度（首节点 = 1.0）</small></div></div>
-        <div v-if="pathTrend.length > 1" class="trend-chart" aria-label="当前学习路径相对难度折线图">
-          <svg viewBox="0 0 920 180" role="img" aria-label="学习路径节点相对难度折线图" preserveAspectRatio="none">
+        <div class="section-heading section-heading--compact"><div><p class="eyebrow path-eyebrow">LEARNING PATH</p><h2>{{ trendMode === 'path' ? '学习路径' : '资源难度匹配' }}</h2><small v-if="path.subject || profile.direction" class="path-subject">{{ path.subject || profile.direction }}</small></div><div class="trend-heading-side"><div class="trend-switch" role="tablist" aria-label="难度曲线类型"><button type="button" :class="{ 'is-active': trendMode === 'path' }" role="tab" :aria-selected="trendMode === 'path'" @click="trendMode = 'path'">学习路径</button><button type="button" :class="{ 'is-active': trendMode === 'resource' }" role="tab" :aria-selected="trendMode === 'resource'" @click="trendMode = 'resource'">资源匹配</button></div><div class="trend-caption"><span v-if="trendMode === 'path'">当前路径进度 {{ path.progress }}%</span><span v-else>资源难度与当前能力的匹配</span><small>{{ trendMode === 'path' ? '首节点难度 = 1.0' : '实线为资源难度，虚线为当前能力' }}</small></div></div></div>
+        <div v-if="activeTrend.length > 1" class="trend-chart" :aria-label="trendMode === 'path' ? '当前学习路径相对难度折线图' : '资源难度与当前能力匹配曲线'">
+          <svg viewBox="0 0 920 180" role="img" :aria-label="trendMode === 'path' ? '学习路径节点相对难度折线图' : '资源难度与当前能力匹配曲线'" preserveAspectRatio="none">
             <line v-for="level in [25, 50, 75]" :key="level" x1="0" :y1="180 - level * 1.55" x2="920" :y2="180 - level * 1.55" class="chart-grid" />
-            <polyline :points="trendPoints" class="trend-line" />
-            <circle v-for="(point, index) in pathTrend" :key="point.id" :cx="trendX(index)" :cy="trendY(point.relative_difficulty)" r="4" class="trend-point"><title>{{ point.label }}：相对难度 {{ point.difficulty_score }}</title></circle>
+            <polyline :points="trendPoints" class="trend-line" :class="{ 'resource-difficulty-line': trendMode === 'resource' }" />
+            <polyline v-if="trendMode === 'resource' && resourceTrendHasUserLevel" :points="userLevelPoints" class="user-level-line" />
+            <circle v-for="(point, index) in activeTrend" :key="point.id" :cx="trendX(index)" :cy="trendY(point.value)" r="4" class="trend-point"><title>{{ point.label }}：{{ point.tooltip }}</title></circle>
           </svg>
-          <div class="trend-labels"><span v-for="point in pathTrend" :key="`${point.id}-label`">{{ point.label }}</span></div>
+          <div class="trend-labels"><span v-for="point in activeTrend" :key="`${point.id}-label`">{{ point.label }}</span></div>
         </div>
-        <div v-else class="empty-state trend-empty">正在生成学习路径…</div>
+        <div v-else class="empty-state trend-empty">{{ trendMode === 'path' ? '路径节点生成后，这里会显示每个节点的相对难度变化。' : '打开学习章节并生成资源后，这里会显示资源难度与当前能力的匹配情况。' }}</div>
       </section>
 
       <div class="overview-columns">
@@ -37,9 +38,8 @@ import { ArrowRight, ArrowUpRight } from 'lucide-vue-next'
 import { learningApi } from '@/shared/api/learningApi'
 
 const loading = ref(true)
-const errorMessage = ref('')
-const profile = reactive({ direction: '', goal: '' })
-const path = reactive({ id: null, subject: '', currentNode: '', nextAction: null, nodes: [], difficultyTrend: [], progress: null })
+const profile = reactive({ direction: learningState.direction, goal: learningState.goal })
+const path = reactive({ subject: '', currentNode: '', nextAction: null, nodes: [], difficultyTrend: [], resourceDifficultyMatch: [], progress: 0 })
 const stats = reactive({ studySeconds: 0, examAnswered: 0, weakPoints: [] })
 const goals = ref([])
 const nextContent = ref([])
@@ -49,34 +49,18 @@ const unwrap = (response) => response?.data?.data ?? response?.data ?? null
 const goalItems = computed(() => goals.value.filter((item) => item && item.title).slice(0, 4))
 const nextTopic = computed(() => nextContent.value[0]?.title || '')
 const nextAction = computed(() => ({ to: path.nextAction?.type === 'quiz' ? '/learning/advanced' : '/learning/fundamentals' }))
-const hasNextAction = computed(() => Boolean(nextContent.value[0]?.id && path.nextAction?.type))
-const pathProgressLabel = computed(() => path.id && path.progress !== null ? `${path.progress}%` : '正在生成')
-const weakPoints = computed(() => {
-  const seen = new Set()
-  return (stats.weakPoints || []).reduce((items, item) => {
-    const tag = String(item?.tag || item?.knowledge_tag || '').trim()
-    if (!tag || seen.has(tag)) return items
-    seen.add(tag)
-    const numericAccuracy = Number(item.accuracy)
-    const accuracy = Number.isFinite(numericAccuracy)
-      ? Math.round(numericAccuracy <= 1 ? numericAccuracy * 100 : numericAccuracy)
-      : null
-    items.push({ tag, accuracy })
-    return items
-  }, []).slice(0, 3)
-})
-const pathTrend = computed(() => path.difficultyTrend.slice(0, 12).map((node) => {
-  const label = String(node?.title || '').trim()
-  const relativeDifficulty = Number(node?.relative_difficulty)
-  const difficultyScore = Number(node?.difficulty_score)
-  if (!label || !Number.isFinite(relativeDifficulty) || !Number.isFinite(difficultyScore)) return null
-  return { id: node.id, label: label.slice(0, 8), relative_difficulty: relativeDifficulty, difficulty_score: difficultyScore.toFixed(2), status: node.status }
-}).filter(Boolean))
-const masteryItems = computed(() => mastery.value.slice(0, 6).map((item) => { const tag = item.knowledge_tag || item.tag || item.label; if (!tag) return null; const raw = Number(item.accuracy ?? item.score); const score = Number.isFinite(raw) ? Math.round(raw <= 1 ? raw * 100 : raw) : null; return score === null ? null : { tag, shortTag: tag.length > 6 ? `${tag.slice(0, 6)}…` : tag, score } }).filter(Boolean))
-const masteryScore = computed(() => { const rawSummaryScore = overviewSummary.masteryScore; const summaryScore = Number(rawSummaryScore); return rawSummaryScore !== null && rawSummaryScore !== undefined && rawSummaryScore !== '' && Number.isFinite(summaryScore) ? Math.round(summaryScore) : null })
-const learningSummary = computed(() => overviewSummary.text || '正在生成学习总结…')
-const trendPoints = computed(() => pathTrend.value.map((point, index) => `${trendX(index)},${trendY(point.relative_difficulty)}`).join(' '))
-const trendX = (index) => pathTrend.value.length < 2 ? 460 : Math.round(index * (920 / (pathTrend.value.length - 1)))
+const weakPoints = computed(() => { const values = stats.weakPoints || []; const unique = values.filter((item, index, all) => item.tag && all.findIndex((other) => other.tag === item.tag) === index); return unique.slice(0, 3).map((item) => { const raw = Number(item.accuracy || 0); return { tag: item.tag || item.knowledge_tag, accuracy: Math.round(raw <= 1 ? raw * 100 : raw) } }) })
+const pathTrend = computed(() => path.difficultyTrend.slice(0, 12).map((node, index) => ({ id: node.id || index, label: String(node.title || `节点 ${index + 1}`).slice(0, 8), relative_difficulty: Number(node.relative_difficulty || 50), difficulty_score: Number(node.difficulty_score || 1).toFixed(2), status: node.status })))
+const resourceTrend = computed(() => path.resourceDifficultyMatch.slice(0, 12).map((item, index) => ({ id: item.resource_id || index, label: String(item.title || `资源 ${index + 1}`).slice(0, 8), value: Number(item.difficulty_score || 0), user_level: item.user_level === null || item.user_level === undefined ? null : Number(item.user_level), status: item.status, tooltip: item.status === 'well_matched' ? `难度 ${item.difficulty_score}，匹配度 ${item.match_score}%` : item.status === 'too_hard' ? `难度 ${item.difficulty_score}，当前偏难` : item.status === 'too_easy' ? `难度 ${item.difficulty_score}，当前偏简单` : `难度 ${item.difficulty_score}，等待能力数据` })))
+const trendMode = ref('path')
+const activeTrend = computed(() => trendMode.value === 'path' ? pathTrend.value.map((point) => ({ ...point, value: point.relative_difficulty, tooltip: `相对难度 ${point.difficulty_score}` })) : resourceTrend.value)
+const resourceTrendHasUserLevel = computed(() => resourceTrend.value.some((point) => point.user_level !== null))
+const userLevelPoints = computed(() => resourceTrend.value.map((point, index) => `${trendX(index)},${trendY(point.user_level)}`).join(' '))
+const masteryItems = computed(() => { const source = mastery.value.length ? mastery.value : weakPoints.value; return source.slice(0, 6).map((item) => { const tag = item.knowledge_tag || item.tag || item.label || '知识点'; const raw = Number(item.accuracy ?? item.score ?? 0); const score = Math.round(raw <= 1 ? raw * 100 : raw); return { tag, shortTag: tag.length > 6 ? `${tag.slice(0, 6)}…` : tag, score } }) })
+const masteryScore = computed(() => { const rawSummaryScore = overviewSummary.masteryScore; const summaryScore = Number(rawSummaryScore); if (rawSummaryScore !== null && rawSummaryScore !== undefined && rawSummaryScore !== '' && Number.isFinite(summaryScore)) return Math.round(summaryScore); const values = masteryItems.value.map((item) => item.score); return values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : 0 })
+const learningSummary = computed(() => overviewSummary.text || '完成练习后，这里会显示你的学习总结。')
+const trendPoints = computed(() => activeTrend.value.map((point, index) => `${trendX(index)},${trendY(point.value)}`).join(' '))
+const trendX = (index) => activeTrend.value.length < 2 ? 460 : Math.round(index * (920 / (activeTrend.value.length - 1)))
 const trendY = (rate) => 170 - Math.max(0, Math.min(100, Number(rate || 0))) * 1.45
 function formatDuration(seconds) { const value = Number(seconds || 0); if (value < 60) return `${value}秒`; const minutes = Math.round(value / 60); if (minutes < 60) return `${minutes}分钟`; return `${(minutes / 60).toFixed(1)}小时` }
 
@@ -91,38 +75,29 @@ function resetOverviewState() {
 }
 
 async function loadOverview() {
-  resetOverviewState()
-  loading.value = true
-  errorMessage.value = ''
-  try {
-    const result = await learningApi.getOverview()
-    const overview = unwrap(result) || {}
-    Object.assign(profile, overview.profile || {})
-    const subjects = Array.isArray(overview.subjects) ? overview.subjects : []
-    const pathData = overview.path || {}
-    const content = Array.isArray(overview.next_content) ? overview.next_content : []
-    const progress = Number(pathData.progress)
-    Object.assign(path, { id: pathData.id ?? null, subject: subjects[0]?.name || '', currentNode: content[0]?.title || '', nextAction: { type: overview.recommendation?.action_type || '' }, nodes: content, difficultyTrend: Array.isArray(pathData.difficulty_trend) ? pathData.difficulty_trend : [], progress: Number.isFinite(progress) ? progress : null })
-    goals.value = Array.isArray(overview.goals) ? overview.goals : []
-    nextContent.value = content
-    const summary = overview.summary || {}
-    const diagnosis = overview.diagnosis || {}
-    Object.assign(stats, { studySeconds: summary.total_study_seconds || 0, examAnswered: diagnosis.answered || 0, weakPoints: overview.blind_spots || [] })
-    overviewSummary.masteryScore = summary.mastery_score
-    overviewSummary.text = summary.text || ''
-    mastery.value = Array.isArray(overview.mastery_bars) ? overview.mastery_bars : []
-  } catch (error) {
-    errorMessage.value = error?.response?.data?.detail || error?.message || '请稍后重试。'
-  } finally {
-    loading.value = false
-  }
+  const result = await learningApi.getOverview()
+  const overview = unwrap(result) || {}
+  Object.assign(profile, overview.profile || {})
+  const subjects = Array.isArray(overview.subjects) ? overview.subjects : []
+  const pathData = overview.path || {}
+  const content = Array.isArray(overview.next_content) ? overview.next_content : []
+  Object.assign(path, { subject: subjects[0]?.name || '', currentNode: content[0]?.title || '', nextAction: { type: overview.recommendation?.action_type || '' }, nodes: content, difficultyTrend: Array.isArray(pathData.difficulty_trend) ? pathData.difficulty_trend : [], resourceDifficultyMatch: Array.isArray(pathData.resource_difficulty_match) ? pathData.resource_difficulty_match : [], progress: Number(pathData.progress || 0) })
+  goals.value = Array.isArray(overview.goals) ? overview.goals : []
+  nextContent.value = content
+  const summary = overview.summary || {}
+  const diagnosis = overview.diagnosis || {}
+  Object.assign(stats, { studySeconds: summary.total_study_seconds || 0, examAnswered: diagnosis.answered || 0, weakPoints: overview.blind_spots || [] })
+  overviewSummary.masteryScore = summary.mastery_score
+  overviewSummary.text = summary.text || summary.description || overview.recommendation?.reason || overview.recommendation?.judgement || ''
+  mastery.value = Array.isArray(overview.mastery_bars) ? overview.mastery_bars : []
+  loading.value = false
 }
 onMounted(loadOverview)
 </script>
 
 <style scoped>
 .overview-page { display: flex; height: calc(100vh - 64px); min-height: 0; flex-direction: column; overflow: hidden; }.overview-page :deep(.page-heading) { flex: 0 0 auto; margin-bottom: 18px; }.overview-dashboard { display: grid; min-height: 0; flex: 1; grid-template-rows: minmax(150px, .5fr) minmax(0, 1fr); gap: 18px; }.overview-columns { display: grid; min-height: 0; grid-template-columns: minmax(0, 1.08fr) minmax(320px, .92fr); gap: 18px; align-items: stretch; }.overview-left { display: grid; min-height: 0; grid-template-rows: minmax(0, .78fr) minmax(0, 1fr); gap: 18px; }.overview-top-cards { display: grid; min-height: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }.surface-pad { padding: 22px; }.path-trend-panel { min-height: 0; padding-bottom: 15px; }.section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }.section-heading--compact { align-items: center; margin-bottom: 16px; }.section-heading h2 { margin: 0; font-size: 18px; }.section-heading .eyebrow { margin-bottom: 6px; }.trend-caption,.muted { color: var(--muted); font-size: 11px; }.trend-chart { position: relative; min-height: 0; height: calc(100% - 47px); }.trend-chart svg { display: block; width: 100%; height: calc(100% - 20px); overflow: visible; }.chart-grid { stroke: var(--line); stroke-width: 1; stroke-dasharray: 4 6; }.trend-line { fill: none; stroke: var(--accent-deep); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }.trend-point { fill: var(--paper); stroke: var(--accent-deep); stroke-width: 2; }.trend-labels { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; }.compact-panel { min-height: 0; }.compact-panel .section-heading svg { color: var(--accent-deep); }.goal-list { display: grid; gap: 14px; margin: 28px 0 0; padding: 0; list-style: none; }.goal-list li { display: flex; align-items: center; gap: 11px; color: var(--ink); font-size: 12px; line-height: 1.4; }.check-circle { flex: 0 0 14px; width: 14px; height: 14px; border: 1px solid var(--accent-deep); border-radius: 50%; }.next-topic { min-height: 0; margin: 29px 0 15px; color: var(--ink); font-size: 14px; line-height: 1.65; }.text-link { display: inline-flex; align-items: center; gap: 5px; color: var(--accent-deep); font-size: 11px; font-weight: 800; text-decoration: none; }.blindspot-panel { min-height: 0; overflow: hidden; }.blindspot-list { display: grid; gap: 0; }.blindspot-item { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(100px, 1.2fr) 26px; align-items: center; gap: 14px; min-height: 50px; border-top: 1px solid var(--line); }.blindspot-item:first-child { border-top: 0; }.blindspot-item strong,.blindspot-item small { display: block; }.blindspot-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }.blindspot-item small { margin-top: 4px; color: var(--muted); font-size: 10px; }.mini-progress { height: 5px; overflow: hidden; border-radius: 99px; background: #e9eee8; }.mini-progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent-deep); }.icon-link { display: grid; width: 26px; height: 26px; place-items: center; border-radius: 50%; color: var(--accent-deep); }.icon-link:hover { background: var(--soft); }.mastery-panel { display: flex; min-height: 0; flex-direction: column; }.mastery-score { color: var(--accent-deep); font-size: 28px; }.mastery-chart { position: relative; display: flex; min-height: 0; flex: 1; padding: 10px 0 0 38px; border-bottom: 1px solid var(--ink); border-left: 1px solid var(--ink); }.mastery-axis { position: absolute; top: 8px; bottom: -4px; left: -36px; display: flex; flex-direction: column; justify-content: space-between; color: var(--muted); font-size: 10px; }.bars { display: flex; flex: 1; align-items: stretch; justify-content: space-around; gap: 14px; }.bar-column { display: grid; flex: 1; grid-template-rows: 1fr auto; gap: 9px; min-width: 0; }.bar-track { position: relative; display: flex; align-items: flex-end; justify-content: center; height: 100%; }.bar-value { display: block; width: min(42px, 70%); min-height: 4px; border: 1px solid var(--accent-deep); border-radius: 5px 5px 0 0; background: var(--accent); }.bar-label { overflow: hidden; color: var(--muted); font-size: 10px; text-align: center; text-overflow: ellipsis; white-space: nowrap; }.mastery-footer { display: flex; justify-content: space-between; gap: 10px; margin-top: 15px; color: var(--muted); font-size: 11px; }.empty-state,.loading-state { color: var(--muted); font-size: 12px; line-height: 1.6; }.empty-state { padding: 20px 0; }
-@media (max-width: 900px) { .overview-page { height: auto; min-height: 0; overflow: visible; }.overview-columns { grid-template-columns: 1fr; }.overview-left { grid-template-rows: auto auto; }.mastery-panel { min-height: 460px; } } @media (max-width: 620px) { .overview-top-cards { grid-template-columns: 1fr; }.compact-panel { min-height: auto; }.mastery-chart { height: 280px; flex: none; }.trend-chart { height: 155px; }.trend-chart svg { height: 135px; }.surface-pad { padding: 17px; } }
+@media (max-width: 900px) { .overview-page { height: auto; min-height: 0; overflow: visible; }.overview-columns { grid-template-columns: 1fr; }.overview-left { grid-template-rows: auto auto; }.mastery-panel { min-height: 460px; } } @media (max-width: 620px) { .overview-top-cards { grid-template-columns: 1fr; }.compact-panel { min-height: auto; }.mastery-chart { height: 280px; flex: none; }.trend-chart { height: 155px; }.trend-chart svg { height: 135px; }.surface-pad { padding: 17px; }.trend-heading-side { justify-items: start; }.trend-caption { text-align: left; } }
 </style>
 
 <style scoped>
@@ -143,6 +118,12 @@ onMounted(loadOverview)
 .path-trend-panel .trend-line { stroke: var(--accent-deep); stroke-width: 4; }
 .path-trend-panel .trend-point { stroke: var(--accent-deep); stroke-width: 2.5; }
 .path-trend-panel .trend-caption { display: grid; gap: 3px; text-align: right; }
+.trend-heading-side { display: grid; justify-items: end; gap: 8px; }
+.trend-switch { display: inline-flex; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
+.trend-switch button { min-height: 25px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 10px; }
+.trend-switch button.is-active { background: var(--ink); color: #fff; }
+.resource-difficulty-line { stroke: var(--accent-deep); }
+.user-level-line { fill: none; stroke: #8a4c43; stroke-width: 2; stroke-dasharray: 6 5; stroke-linecap: round; }
 .path-trend-panel .trend-caption small { color: var(--muted); font-size: 10px; }
 .path-eyebrow { margin-bottom: 6px; color: var(--muted); }
 .module-eyebrow { margin-bottom: 6px; color: var(--muted); font-size: 11px; line-height: 1.3; }
