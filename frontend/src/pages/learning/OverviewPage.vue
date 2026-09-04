@@ -1,6 +1,6 @@
 <template>
   <div>
-    <PageTitle eyebrow="学习概览" title="把下一步学习说清楚" :description="`围绕“${profile.goal}”，这里汇总你正在学习的内容、当前掌握情况和最值得先做的行动。`">
+    <PageTitle eyebrow="学习概览" title="把下一步学习说清楚" :description="`围绕“${profile.goal || '正在生成'}”，这里汇总你正在学习的内容、当前掌握情况和最值得先做的行动。`">
       <template #actions><RouterLink class="button button--quiet" to="/learning/navigation">查看学习导航</RouterLink></template>
     </PageTitle>
 
@@ -8,10 +8,10 @@
     <div v-else class="overview-layout">
       <main class="overview-main">
         <section class="surface surface-pad goal-panel">
-          <div class="section-heading"><div><p class="eyebrow">当前目标</p><h2>{{ profile.goal }}</h2></div><span class="goal-progress">{{ path.hasPath ? `${path.progress}%` : '待生成' }}</span></div>
-          <p class="muted goal-copy">学习方向：{{ profile.direction }}</p>
+          <div class="section-heading"><div><p class="eyebrow">当前目标</p><h2>{{ profile.goal || '正在生成' }}</h2></div><span class="goal-progress">{{ path.hasPath ? `${path.progress}%` : '正在生成' }}</span></div>
+          <p class="muted goal-copy">学习方向：{{ profile.direction || '正在生成' }}</p>
           <div class="progress-track" aria-label="学习路径完成度"><div class="progress-value" :style="{ width: `${path.progress}%` }"></div></div>
-          <div class="goal-meta"><span v-if="path.hasPath">已完成 {{ path.completedNodes }} / {{ path.totalNodes }} 个学习节点</span><span v-else>完成能力诊断后生成学习路径</span><span v-if="path.currentNode">当前节点：{{ path.currentNode }}</span></div>
+          <div class="goal-meta"><span v-if="path.hasPath">已完成 {{ path.completedNodes }} / {{ path.totalNodes }} 个学习节点</span><span v-else>正在生成学习路径</span><span v-if="path.currentNode">当前节点：{{ path.currentNode }}</span></div>
         </section>
 
         <section class="surface surface-pad">
@@ -23,14 +23,14 @@
               <time class="subject-time">{{ subject.time }}</time>
             </article>
           </div>
-          <div v-else class="empty-state"><strong>相关科目将在诊断后生成</strong><span>LearnMate 会根据你的方向、目标和答题结果拆解学习路径。</span><RouterLink class="text-link" to="/onboarding/diagnosis">开始能力诊断 →</RouterLink></div>
+          <div v-else class="empty-state">正在生成相关科目…</div>
         </section>
 
         <section class="surface surface-pad diagnosis-panel">
           <div class="section-heading section-heading--compact"><div><p class="eyebrow">当前诊断</p><h2>知道哪里需要补强</h2></div><RouterLink class="text-link" to="/onboarding/diagnosis">重新诊断 →</RouterLink></div>
-          <div class="diagnosis-summary"><div class="diagnosis-score"><strong>{{ diagnosis.hasData ? `${diagnosis.score}%` : '待诊断' }}</strong><span class="muted">{{ diagnosis.hasData ? '综合掌握度' : '尚未建立能力基线' }}</span></div><div class="diagnosis-stats"><span><strong>{{ stats.examAnswered }}</strong> 道题已作答</span><span><strong>{{ formatDuration(stats.studySeconds) }}</strong> 累计学习</span></div></div>
+          <div class="diagnosis-summary"><div class="diagnosis-score"><strong>{{ diagnosis.hasData ? `${diagnosis.score}%` : '正在生成' }}</strong><span class="muted">{{ diagnosis.hasData ? '综合掌握度' : '正在生成诊断' }}</span></div><div class="diagnosis-stats"><span><strong>{{ stats.examAnswered || '正在生成' }}</strong> 道题已作答</span><span><strong>{{ stats.studySeconds ? formatDuration(stats.studySeconds) : '正在生成' }}</strong> 累计学习</span></div></div>
           <div v-if="diagnosis.weakPoints.length" class="weak-points"><span class="muted">优先补强</span><span v-for="point in diagnosis.weakPoints" :key="point.tag" class="weak-point">{{ point.tag }} {{ point.accuracy }}%</span></div>
-          <p v-else class="muted diagnosis-note">先完成 3 道方向相关问题，系统会据此确定你的起点和第一阶段学习内容。</p>
+          <p v-else class="muted diagnosis-note">正在生成当前诊断…</p>
         </section>
       </main>
 
@@ -40,9 +40,9 @@
           <p class="recommendation-copy">{{ recommendation.guidance }}</p>
           <div class="recommendation-block"><span class="block-label">为什么现在做</span><p>{{ recommendation.reason }}</p></div>
           <div class="recommendation-block"><span class="block-label">完成标志</span><p>{{ recommendation.criteria }}</p></div>
-          <RouterLink class="button button--primary recommendation-action" :to="recommendation.to">{{ recommendation.actionLabel }} <span>→</span></RouterLink>
+          <RouterLink v-if="recommendation.to" class="button button--primary recommendation-action" :to="recommendation.to">{{ recommendation.actionLabel }} <span>→</span></RouterLink>
         </section>
-        <section class="surface surface-pad next-node-panel"><p class="eyebrow">路径进度</p><div class="next-node-heading"><h2>{{ path.hasPath ? '接下来会学' : '路径尚未生成' }}</h2><span class="muted">{{ path.hasPath ? path.stage : '等待诊断' }}</span></div><p class="muted">{{ path.currentNode || (path.hasPath ? '当前节点已完成，继续查看完整路径。' : '完成能力诊断后，系统会把学习方向拆成可执行的科目节点。') }}</p><RouterLink class="text-link" :to="path.hasPath ? '/learning/navigation' : '/onboarding/diagnosis'">{{ path.hasPath ? '查看完整路径 →' : '开始能力诊断 →' }}</RouterLink></section>
+        <section class="surface surface-pad next-node-panel"><p class="eyebrow">路径进度</p><div class="next-node-heading"><h2>{{ path.hasPath ? '接下来会学' : '正在生成' }}</h2><span class="muted">{{ path.hasPath ? path.stage : '正在生成' }}</span></div><p class="muted">{{ path.currentNode || '正在生成下一步学习内容…' }}</p><RouterLink v-if="path.hasPath" class="text-link" to="/learning/navigation">查看完整路径 →</RouterLink></section>
       </aside>
     </div>
   </div>
@@ -56,7 +56,7 @@ import { learningState } from '@/entities/learning/learningState'
 
 const loading = ref(true)
 const profile = reactive({ direction: learningState.direction, goal: learningState.goal })
-const path = reactive({ hasPath: false, progress: 0, stage: '尚未开始', currentNode: '', completedNodes: 0, totalNodes: 0, nodes: [], diagnosis: null, nextAction: null })
+const path = reactive({ hasPath: false, progress: 0, stage: '', currentNode: '', completedNodes: 0, totalNodes: 0, nodes: [], diagnosis: null, nextAction: null })
 const stats = reactive({ studySeconds: 0, examAnswered: 0, weakPoints: [] })
 const mastery = ref([])
 const guidance = ref('')
@@ -65,7 +65,7 @@ const unwrap = (response) => response?.data?.data ?? response?.data ?? null
 const subjects = computed(() => path.nodes.map((node, index) => {
   const status = node.status || 'locked'
   const progress = status === 'completed' ? 100 : status === 'in_progress' ? 55 : status === 'unlocked' ? 15 : 0
-  return { id: node.id || index, name: node.title || node.topic || `学习节点 ${index + 1}`, progress, statusLabel: ({ completed: '已完成', in_progress: '进行中', unlocked: '待开始', locked: '待解锁' })[status] || '待开始', time: node.time_spent ? formatDuration(node.time_spent) : '尚未记录' }
+  return { id: node.id || index, name: node.title || node.topic || '正在生成', progress, statusLabel: ({ completed: '已完成', in_progress: '进行中', unlocked: '待开始', locked: '待解锁' })[status] || '正在生成', time: node.time_spent ? formatDuration(node.time_spent) : '正在生成' }
 }))
 
 const diagnosis = computed(() => {
@@ -78,10 +78,10 @@ const diagnosis = computed(() => {
 
 const recommendation = computed(() => {
   const needsDiagnosis = !path.hasPath && !diagnosis.value.hasData
-  const current = needsDiagnosis ? '先完成能力诊断' : (path.currentNode || (path.progress >= 100 ? '复盘已完成内容' : '当前学习节点'))
+  const current = needsDiagnosis ? '正在生成' : (path.currentNode || (path.progress >= 100 ? '复盘已完成内容' : '当前学习节点'))
   const weak = diagnosis.value.weakPoints[0]?.tag
   const text = typeof guidance.value === 'string' ? guidance.value.trim() : ''
-  if (needsDiagnosis) return { title: current, guidance: '回答 3 道与你学习方向相关的问题，LearnMate 会据此生成你的第一条学习路径。', reason: '现在还没有能力基线，直接推荐科目会把你的起点判断错。', criteria: '完成 3 道诊断题，看到诊断结果并确认学习起点。', to: '/onboarding/diagnosis', actionLabel: '开始能力诊断' }
+  if (needsDiagnosis) return { title: current, guidance: '正在生成当前建议…', reason: '正在生成依据。', criteria: '正在生成完成标志。', to: '', actionLabel: '' }
   return { title: current, guidance: text || `先完成“${current}”的学习材料，再用节点测验验证是否真正掌握。`, reason: weak ? `诊断显示“${weak}”仍是当前薄弱点，先处理它能减少后续迁移练习中的反复。` : '当前还没有足够的练习数据，先完成一个完整节点，系统才能给出更精确的建议。', criteria: '能够用自己的话解释核心概念，并在节点测验中达到系统设定的通过线。', to: path.nextAction?.type === 'quiz' ? '/learning/advanced' : '/learning/fundamentals', actionLabel: path.nextAction?.label || '开始当前节点' }
 })
 
@@ -97,7 +97,7 @@ async function loadOverview() {
   if (currentPath) {
     const nodes = currentPath.nodes || []
     const nextActionNode = nodes.find((node) => node.id === currentPath.next_action?.target_id)
-    Object.assign(path, { hasPath: true, progress: Number(currentPath.progress || 0), stage: currentPath.stage || '尚未开始', currentNode: nodes.find((node) => node.id === currentPath.current_node_id)?.title || nextActionNode?.title || '', completedNodes: nodes.filter((node) => node.status === 'completed').length, totalNodes: nodes.length, nodes, diagnosis: currentPath.diagnosis || null, nextAction: currentPath.next_action || null })
+    Object.assign(path, { hasPath: true, progress: Number(currentPath.progress || 0), stage: currentPath.stage || '正在生成', currentNode: nodes.find((node) => node.id === currentPath.current_node_id)?.title || nextActionNode?.title || '', completedNodes: nodes.filter((node) => node.status === 'completed').length, totalNodes: nodes.length, nodes, diagnosis: currentPath.diagnosis || null, nextAction: currentPath.next_action || null })
     profile.goal = currentPath.goal || profile.goal
   }
   if (studyStats) { stats.studySeconds = studyStats.study_time?.total_seconds || 0; stats.examAnswered = studyStats.exam_summary?.completed_questions || 0; stats.weakPoints = studyStats.weak_points || [] }
