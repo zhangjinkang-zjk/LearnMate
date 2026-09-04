@@ -2,28 +2,29 @@
   <div class="app-shell">
     <aside class="app-sidebar" :class="{ 'is-open': sidebarOpen }">
       <div class="brand-lockup">
-        <span class="brand-mark">LM</span>
         <span class="brand-name">LearnMate</span>
       </div>
 
-      <div class="sidebar-section">
-        <p class="sidebar-label">学习主线</p>
-        <nav class="sidebar-nav" aria-label="学习主线">
-          <RouterLink v-for="item in primaryNavigation" :key="item.to" :to="item.to" class="sidebar-link">
-            <component :is="item.icon" :size="17" stroke-width="1.8" />
-            <span>{{ item.label }}</span>
-          </RouterLink>
-        </nav>
-      </div>
+      <div class="sidebar-nav-dock">
+        <div class="sidebar-section">
+          <p class="sidebar-label">学习主线</p>
+          <nav class="sidebar-nav" aria-label="学习主线">
+            <RouterLink v-for="item in primaryNavigation" :key="item.to" :to="item.to" class="sidebar-link">
+              <component :is="item.icon" :size="17" stroke-width="1.8" />
+              <span>{{ item.label }}</span>
+            </RouterLink>
+          </nav>
+        </div>
 
-      <div class="sidebar-section sidebar-section--secondary">
-        <p class="sidebar-label">工具</p>
-        <nav class="sidebar-nav" aria-label="学习工具">
-          <RouterLink v-for="item in secondaryNavigation" :key="item.to" :to="item.to" class="sidebar-link">
-            <component :is="item.icon" :size="17" stroke-width="1.8" />
-            <span>{{ item.label }}</span>
-          </RouterLink>
-        </nav>
+        <div class="sidebar-section sidebar-section--secondary">
+          <p class="sidebar-label">工具</p>
+          <nav class="sidebar-nav" aria-label="学习工具">
+            <RouterLink v-for="item in secondaryNavigation" :key="item.to" :to="item.to" class="sidebar-link">
+              <component :is="item.icon" :size="17" stroke-width="1.8" />
+              <span>{{ item.label }}</span>
+            </RouterLink>
+          </nav>
+        </div>
       </div>
 
       <div class="sidebar-footer">
@@ -50,7 +51,21 @@
           <span class="header-divider">/</span>
           <span>{{ currentTitle }}</span>
         </div>
-        <div class="header-actions"><span class="status-dot"></span><span>学习状态已同步</span></div>
+        <div class="header-actions">
+          <RouterLink class="header-icon-button" to="/notifications" title="通知" aria-label="通知">
+            <Bell :size="17" stroke-width="1.8" />
+          </RouterLink>
+          <button class="header-icon-button" type="button" :title="isDarkMode ? '开启亮色模式' : '开启深色模式'" :aria-label="isDarkMode ? '开启亮色模式' : '开启深色模式'" :aria-pressed="isDarkMode" @click="toggleTheme">
+            <Moon v-if="!isDarkMode" :size="17" stroke-width="1.8" />
+            <Sun v-else :size="17" stroke-width="1.8" />
+          </button>
+          <RouterLink class="header-icon-button" to="/planner" title="计划本" aria-label="计划本">
+            <ClipboardList :size="17" stroke-width="1.8" />
+          </RouterLink>
+          <RouterLink class="header-avatar" to="/profile" title="个人信息" aria-label="个人信息">
+            {{ avatarLetter }}
+          </RouterLink>
+        </div>
       </header>
       <section class="page-container"><slot /></section>
     </main>
@@ -60,7 +75,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { LogOut } from 'lucide-vue-next'
+import { Bell, ClipboardList, LogOut, Moon, Sun } from 'lucide-vue-next'
 import { primaryNavigation, secondaryNavigation, utilityNavigation } from '@/shared/config/navigation'
 import { clearAuthSession } from '@/shared/auth/session'
 
@@ -70,6 +85,16 @@ const sidebarOpen = ref(false)
 const allNavigation = [...primaryNavigation, ...secondaryNavigation, ...utilityNavigation]
 const currentTitle = computed(() => allNavigation.find((item) => route.path.startsWith(item.to))?.label || '学习概览')
 const displayName = computed(() => localStorage.getItem('learnmate_username') || '我的学习者')
+const avatarLetter = computed(() => displayName.value.trim().slice(0, 1).toUpperCase() || '学')
+const isDarkMode = ref(localStorage.getItem('learnmate_theme') === 'dark')
+
+if (isDarkMode.value) document.documentElement.classList.add('is-dark')
+
+function toggleTheme() {
+  isDarkMode.value = !isDarkMode.value
+  localStorage.setItem('learnmate_theme', isDarkMode.value ? 'dark' : 'light')
+  document.documentElement.classList.toggle('is-dark', isDarkMode.value)
+}
 
 async function logout() {
   clearAuthSession()

@@ -12,7 +12,7 @@
     </router-link>
 
     <section class="conversation-shell" aria-label="LearnMate conversation">
-      <div class="conversation-list" role="log" aria-live="polite">
+      <div ref="conversationList" class="conversation-list" role="log" aria-live="polite">
         <div v-for="(message, index) in messages" :key="`${message.role}-${index}`" class="chat-message" :class="`chat-message--${message.role}`">
           {{ message.text }}
         </div>
@@ -36,7 +36,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { getNextPortraitInterviewQuestion, initPortraitFromDialogue } from '../../shared/api/portraitApi'
 
@@ -48,9 +48,17 @@ const portraitQuestions = ref([])
 const portraitAnswers = ref([])
 const isLoading = ref(false)
 const isSaving = ref(false)
-const messages = ref([
-  { role: 'assistant', text: 'Hi, I am LearnMate. Let\'s get to know how you learn.' }
-])
+const messages = ref([])
+const conversationList = ref(null)
+
+const scrollToLatest = async () => {
+  await nextTick()
+  const element = conversationList.value
+  if (!element) return
+  element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' })
+}
+
+watch([messages, isLoading], scrollToLatest, { deep: true, flush: 'post' })
 
 const fallbackQuestions = [
   '最近你真正想学会、做成，或者认真搞明白的一件事是什么？',
@@ -100,9 +108,11 @@ const savePortrait = async () => {
   if (isSaving.value) return
   isSaving.value = true
   try {
-    await initPortraitFromDialogue({ dialogue: buildDialogue() })
+    const result = await initPortraitFromDialogue({ dialogue: buildDialogue() })
+    return getResponseData(result)
   } catch (error) {
     console.warn('[LearnMate] portrait save failed:', error)
+    return null
   } finally {
     isSaving.value = false
   }
@@ -120,8 +130,10 @@ const sendMessage = async () => {
     if (step.value < PORTRAIT_MAX_STEPS) {
       await askNextQuestion()
     } else {
-      await savePortrait()
-      messages.value.push({ role: 'assistant', text: 'Thanks. I have a clear picture now. Type start when you are ready.' })
+      const portraitSummary = await savePortrait()
+      sessionStorage.setItem('learnmate_portrait_dialogue', JSON.stringify(buildDialogue()))
+      sessionStorage.setItem('learnmate_portrait_summary', JSON.stringify(portraitSummary || {}))
+      router.push('/learnmate-summary')
     }
     return
   }
@@ -244,11 +256,28 @@ onMounted(() => {
   width: min(850px, 68vw);
   max-height: 58vh;
   overflow-y: auto;
-  scrollbar-width: none;
+  padding: 2px clamp(32px, 5vw, 72px) 18px 0;
+  box-sizing: border-box;
+  pointer-events: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(226, 244, 82, 0.36) transparent;
 }
 
 .conversation-list::-webkit-scrollbar {
-  display: none;
+  width: 4px;
+}
+
+.conversation-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.conversation-list::-webkit-scrollbar-thumb {
+  border-radius: 2px;
+  background: rgba(226, 244, 82, 0.36);
+}
+
+.conversation-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(226, 244, 82, 0.58);
 }
 
 .conversation-input {
@@ -351,12 +380,19 @@ onMounted(() => {
   border-radius: 18px;
   font-size: 14px;
   line-height: 1.45;
+  white-space: pre-line;
   animation: messageIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .chat-message--typing {
-  width: 30px;
-  letter-spacing: 0.18em;
+  width: 58px;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  letter-spacing: 0.22em;
+  text-indent: 0.22em;
 }
 
 .chat-message--assistant {

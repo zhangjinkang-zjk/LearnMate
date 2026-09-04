@@ -69,10 +69,12 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 const router = useRouter()
-const selectedIdentity = ref(localStorage.getItem('learnmate_identity') || '')
+const route = useRoute()
+const isFreshFlow = computed(() => Boolean(route.query.fresh))
+const selectedIdentity = ref(isFreshFlow.value ? '' : (localStorage.getItem('learnmate_identity') || ''))
 const canContinue = computed(() => Boolean(selectedIdentity.value))
 
 const identityOptions = [
@@ -161,16 +163,7 @@ const continueToStudy = () => {
 }
 
 .identity-wash {
-  position: absolute;
-  inset: -18%;
-  z-index: -1;
-  pointer-events: none;
-  opacity: 0.62;
-  filter: blur(96px);
-  background:
-    radial-gradient(ellipse at 35% 30%, rgba(209, 239, 148, 0.34), transparent 46%),
-    radial-gradient(ellipse at 72% 72%, rgba(82, 147, 104, 0.38), transparent 52%);
-  animation: washDrift 12s ease-in-out infinite alternate;
+  display: none;
 }
 
 .identity-word {
@@ -282,14 +275,14 @@ const continueToStudy = () => {
   transform: translateZ(0);
   transform-origin: center center;
   will-change: transform, box-shadow, background;
-  transition: transform 0.58s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.58s cubic-bezier(0.16, 1, 0.3, 1), background 0.45s ease;
+  transition: transform 1.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 1s cubic-bezier(0.16, 1, 0.3, 1), background 0.25s ease;
   animation: optionIn 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .identity-option:hover {
-  background: #d4e45b;
-  transform: translateY(-16px) scale(1.09);
-  box-shadow: 0 30px 48px rgba(4, 20, 15, 0.44);
+  background: #e4f36b;
+  transform: translate3d(0, -8px, 0) scale(1.08);
+  box-shadow: 0 18px 30px rgba(4, 20, 15, 0.32);
 }
 
 .identity-option:focus-visible,
@@ -300,19 +293,19 @@ const continueToStudy = () => {
 }
 
 .identity-option.selected {
-  background: #bdcc48 !important;
-  transform: translateY(-2px) scale(1.01);
-  box-shadow: 0 0 0 3px rgba(243, 240, 231, 0.9), 0 14px 26px rgba(4, 20, 15, 0.28);
+  background: #e8f775 !important;
+  transform: translateY(-2px) scale(1.04);
+  box-shadow: 0 14px 26px rgba(4, 20, 15, 0.28);
 }
 
 .identity-option:hover {
-  transform: translate3d(0, -22px, 0) scale(1.13);
-  box-shadow: 0 34px 54px rgba(4, 20, 15, 0.48);
+  transform: translate3d(0, -8px, 0) scale(1.08);
+  box-shadow: 0 18px 30px rgba(4, 20, 15, 0.32);
 }
 
 .identity-option.selected,
 .identity-option[aria-checked="true"] {
-  background: #bdcc48 !important;
+  background: #e8f775 !important;
 }
 
 .option-label {
@@ -386,13 +379,13 @@ const continueToStudy = () => {
 }
 
 @keyframes optionIn {
-  from { opacity: 0; transform: translate3d(-46px, 16px, 0) scale(0.96); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from { opacity: 0; translate: -46px 16px; scale: 0.96; }
+  to { opacity: 1; translate: 0 0; scale: 1; }
 }
 
 @keyframes optionInRight {
-  from { opacity: 0; transform: translate3d(46px, 16px, 0) scale(0.96); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from { opacity: 0; translate: 46px 16px; scale: 0.96; }
+  to { opacity: 1; translate: 0 0; scale: 1; }
 }
 
 @media (max-width: 640px) {
