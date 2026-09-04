@@ -18,7 +18,7 @@
 
       <section class="decision-layout">
         <article class="surface surface-pad recommendation-card">
-          <div class="recommendation-card__heading"><div><p class="eyebrow">本阶段推荐</p><h2>{{ task.kind_label || '案例诊断' }}</h2></div><span class="recommendation-badge">{{ task.difficulty_label || '建议先做' }}</span></div>
+          <div class="recommendation-card__heading"><div><p class="eyebrow">{{ task.is_recommended ? '系统推荐任务' : '当前选择任务' }}</p><h2>{{ task.kind_label || '案例诊断' }}</h2></div><span class="recommendation-badge">{{ task.difficulty_label || '建议先做' }}</span></div>
           <h3>{{ task.title }}</h3>
           <p>{{ task.brief }}</p>
           <div class="task-scenario"><span class="block-label">任务情境</span><p>{{ task.scenario || task.problem }}</p></div>
@@ -28,8 +28,8 @@
         <aside class="surface surface-pad decision-reason"><p class="eyebrow">推荐依据</p><h2>根据你的基础学习</h2><p>{{ task.context?.reason || task.recommendation || '系统会根据当前学习节点生成实践入口。' }}</p><div class="decision-reason__line"><span>学习节点</span><strong>{{ task.context?.node_title || '当前节点' }}</strong></div><div class="decision-reason__line"><span>节点状态</span><strong>{{ task.context?.node_status_label || path.stage || '学习中' }}</strong></div><div class="decision-reason__line"><span>学习材料</span><strong>{{ task.context?.resource_label || `${task.resources?.length || 0} 份关联材料` }}</strong></div><div class="decision-reason__line"><span>路径进度</span><strong>{{ path.stage || '基础到应用' }}</strong></div></aside>
       </section>
 
-      <section class="task-catalog"><div class="catalog-heading"><div><p class="eyebrow">实践任务目录</p><h2>也可以从这里换一个入口</h2></div><span>{{ tasks.length }} 个可选任务</span></div><div class="catalog-grid" role="list">
-        <button v-for="item in tasks" :key="item.id" type="button" class="catalog-card" :class="{ 'is-selected': item.id === task.id }" :aria-label="`进入${item.kind_label || '实践任务'}：${item.title}`" @click="openTask(item)"><span class="catalog-card__top"><strong>{{ item.kind_label || '实践任务' }}</strong><small>{{ item.difficulty_label || '当前阶段' }}</small></span><h3>{{ item.title }}</h3><p>{{ item.why || item.brief }}</p><span class="catalog-card__footer"><span>{{ item.is_recommended ? '建议先做' : item.status === 'completed' ? '已完成' : '可开始' }}</span><ArrowUpRight :size="14" /></span></button>
+      <section v-if="optionalTasks.length" class="task-catalog"><div class="catalog-heading"><div><p class="eyebrow">可选实践任务</p><h2>换一个情境练习迁移</h2></div><span>{{ optionalTasks.length }} 个可选任务</span></div><div class="catalog-grid" role="list">
+        <button v-for="item in optionalTasks" :key="item.id" type="button" class="catalog-card" :class="{ 'is-selected': item.id === task.id }" :aria-pressed="item.id === task.id" :aria-label="`选择${item.kind_label || '实践任务'}：${item.title}`" @click="selectTask(item)"><span class="catalog-card__top"><strong>{{ item.kind_label || '实践任务' }}</strong><small>{{ item.difficulty_label || '当前阶段' }}</small></span><h3>{{ item.title }}</h3><p>{{ item.why || item.brief }}</p><span class="catalog-card__footer"><span>{{ item.id === task.id ? '当前已选' : item.status === 'completed' ? '已完成' : '选择任务' }}</span><ArrowUpRight :size="14" /></span></button>
       </div></section>
     </template>
   </div>
@@ -38,12 +38,11 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ArrowRight, ArrowUpRight, CircleAlert, LoaderCircle, RefreshCw } from 'lucide-vue-next'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import PageTitle from '@/shared/ui/PageTitle.vue'
 import { advancedLearningApi } from '@/shared/api/advancedLearningApi'
 
 const route = useRoute()
-const router = useRouter()
 const loading = ref(true)
 const errorMessage = ref('')
 const task = ref(null)
@@ -68,6 +67,7 @@ function buildWorkspaceLocation(value) {
 }
 
 const workspaceLink = computed(() => buildWorkspaceLocation(task.value))
+const optionalTasks = computed(() => tasks.value.filter((item) => !item.is_recommended).slice(0, 2))
 
 async function loadTask() {
   loading.value = true
@@ -84,9 +84,8 @@ async function loadTask() {
   } finally { loading.value = false }
 }
 
-async function openTask(item) {
+function selectTask(item) {
   task.value = item
-  await router.push(buildWorkspaceLocation(item))
 }
 onMounted(loadTask)
 </script>
@@ -105,4 +104,8 @@ onMounted(loadTask)
 @media (max-width: 900px) { .learning-snapshot { grid-template-columns: repeat(2, minmax(0, 1fr)); }.decision-layout { grid-template-columns: 1fr; }.catalog-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 700px) { .catalog-grid { grid-template-columns: 1fr; } }
 @media (max-width: 560px) { .learning-snapshot { grid-template-columns: 1fr; }.catalog-heading { align-items: flex-start; flex-direction: column; gap: 6px; }.recommendation-card h3 { font-size: 19px; }.recommendation-facts { gap: 14px; }.recommendation-card .button { width: 100%; } }
+:global(.page-container:has(.advanced-page)) { background: #f7f7f7; }
+:global(.app-content:has(.advanced-page) .app-header) { border-bottom-color: #e8e8e8; background: #f7f7f7; }
+.advanced-page h2 { color: #1e3c34; }
+.advanced-page .surface { border-color: rgba(63, 91, 49, .28); box-shadow: 0 8px 24px rgba(45, 40, 92, .07); }
 </style>

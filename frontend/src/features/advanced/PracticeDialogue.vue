@@ -6,7 +6,11 @@
         <h2>先想清楚，再给方案</h2>
         <p>LearnMate 会根据你的回答追问证据、假设和取舍，不会直接替你完成任务。</p>
       </div>
-      <span class="practice-phase">{{ currentPhase.label }}</span>
+      <div class="phase-progress" aria-label="巩固阶段进度">
+        <span class="phase-progress__count">{{ currentPhaseIndex + 1 }} / {{ phases.length }}</span>
+        <strong>{{ currentPhase.label }}</strong>
+        <div class="phase-progress__track"><span :style="{ width: `${phaseProgress}%` }"></span></div>
+      </div>
     </header>
 
     <div class="practice-dialogue__body">
@@ -26,7 +30,7 @@
       <aside class="practice-guide">
         <div class="guide-block"><p class="eyebrow">当前任务</p><strong>{{ task.title }}</strong><p>{{ task.problem }}</p></div>
         <div class="guide-block"><p class="eyebrow">阶段</p>
-          <button v-for="phase in phases" :key="phase.id" type="button" :class="{ 'is-active': phase.id === currentPhase.id }" @click="selectPhase(phase)">{{ phase.label }}<small>{{ phase.hint }}</small></button>
+          <button v-for="(phase, index) in phases" :key="phase.id" type="button" :disabled="!isPhaseAvailable(index)" :class="{ 'is-active': phase.id === currentPhase.id, 'is-complete': isPhaseComplete(index) }" @click="selectPhase(phase)"><span class="phase-button__title"><span>{{ String(index + 1).padStart(2, '0') }}</span>{{ phase.label }}</span><small>{{ isPhaseComplete(index) ? '已完成' : phase.hint }}</small></button>
         </div>
         <div class="guide-block"><p class="eyebrow">需要留下</p><ul><li v-for="item in task.deliverables || []" :key="item.id">{{ item.label }}</li></ul></div>
       </aside>
@@ -49,7 +53,7 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { LoaderCircle, Send } from 'lucide-vue-next'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { renderMarkdown } from '@/shared/lib/markdown'
@@ -69,15 +73,18 @@ const phases = [
   { id: 'hypothesis', label: '提出假设', hint: '说明可能原因' },
   { id: 'compare', label: '比较方案', hint: '解释取舍关系' },
   { id: 'verify', label: '验证结果', hint: '设计检查方法' },
-  { id: 'review', label: '总结复盘', hint: '留下可复查结论' },
+  { id: 'review', label: '总结', hint: '留下可复查结论' },
 ]
 const currentPhase = ref(phases[0])
+const completedPhaseIds = ref([])
 const messages = ref([])
 const draft = ref('')
 const errorMessage = ref('')
 const isStreaming = ref(false)
 const messageList = ref(null)
 let requestController = null
+const currentPhaseIndex = computed(() => phases.findIndex((phase) => phase.id === currentPhase.value.id))
+const phaseProgress = computed(() => Math.round((completedPhaseIds.value.length / phases.length) * 100))
 
 function createWelcome() {
   return { role: 'assistant', text: `我们从“${currentPhase.value.label}”开始。先说说这个任务要解决的核心问题，以及你准备依据哪些信息判断。` }
@@ -87,6 +94,7 @@ function resetConversation() {
   requestController?.abort()
   requestController = null
   currentPhase.value = phases[0]
+  completedPhaseIds.value = []
   messages.value = [createWelcome()]
   draft.value = ''
   errorMessage.value = ''
@@ -94,11 +102,21 @@ function resetConversation() {
 }
 
 function selectPhase(phase) {
+  const index = phases.findIndex((item) => item.id === phase.id)
+  if (!isPhaseAvailable(index)) return
   currentPhase.value = phase
 }
 
+function isPhaseComplete(index) {
+  return completedPhaseIds.value.includes(phases[index]?.id)
+}
+
+function isPhaseAvailable(index) {
+  return index >= 0 && (index <= completedPhaseIds.value.length || isPhaseComplete(index))
+}
+
 function requestHint() {
-  sendMessage(`请围绕“${currentPhase.value.label}”给我一个不直接泄露答案的提示。`)
+  sendMessage(`请围绕“${currentPhase.value.label}”给我一个不直接泄露答案的提示。`, { advancesPhase: false })
 }
 
 async function scrollToLatest() {
@@ -106,7 +124,7 @@ async function scrollToLatest() {
   if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight
 }
 
-async function sendMessage(forcedText = '') {
+async function sendMessage(forcedText = '', options = { advancesPhase: true }) {
   const text = String(forcedText || draft.value).trim()
   if (!text || isStreaming.value) return
   messages.value.push({ role: 'user', text })
@@ -129,7 +147,7 @@ async function sendMessage(forcedText = '') {
         type: 'practice',
         title: props.task.title,
         phase: currentPhase.value.label,
-        script: [props.task.brief, props.task.problem, `当前阶段：${currentPhase.value.label}`, `重点能力：${props.task.focus}`, `验收标准：${(props.task.criteria || []).join('；')}`].filter(Boolean).join('\n'),
+        script: [props.task.brief, props.task.problem, `当前阶段：${currentPhase.value.label}`, `重点能力：${props.task.focus}`, `验收标准：${(props.task.criteria || []).join('；')}`, props.chapterContent ? `主讲材料摘要：${props.chapterContent.slice(0, 1200)}` : '当前没有可用主讲材料'].filter(Boolean).join('\n'),
         points: (props.task.constraints || []).slice(0, 6),
         question: { prompt: `请围绕${currentPhase.value.label}推进任务。` },
       },
@@ -141,6 +159,7 @@ async function sendMessage(forcedText = '') {
       }
     }, requestController.signal)
     if (!responseMessage.text.trim()) throw new Error('LearnMate 暂时没有返回有效追问')
+    if (options.advancesPhase !== false) advancePhase()
   } catch (error) {
     if (error.name === 'AbortError') return
     if (responseMessage.text.trim()) responseMessage.text += '\n\n> 回复中断了，你可以继续补充。'
@@ -153,19 +172,27 @@ async function sendMessage(forcedText = '') {
   }
 }
 
+function advancePhase() {
+  const index = currentPhaseIndex.value
+  if (index < 0) return
+  if (!completedPhaseIds.value.includes(currentPhase.value.id)) completedPhaseIds.value = [...completedPhaseIds.value, currentPhase.value.id]
+  const nextPhase = phases[index + 1]
+  if (nextPhase) currentPhase.value = nextPhase
+}
+
 watch(() => props.task?.id, resetConversation, { immediate: true })
 onBeforeUnmount(() => requestController?.abort())
 </script>
 
 <style scoped>
-.practice-dialogue { display: grid; min-height: 700px; grid-template-rows: auto minmax(360px, 1fr) auto auto; overflow: hidden; }.practice-dialogue__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 24px; border-bottom: 1px solid var(--line); background: #fbfcfa; }.practice-dialogue__header .eyebrow { margin-bottom: 6px; }.practice-dialogue__header h2 { margin: 0; font-size: 20px; }.practice-dialogue__header p:last-child { max-width: 640px; margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }.practice-phase { flex: 0 0 auto; padding: 7px 10px; border: 1px solid #d7e3c9; border-radius: 4px; background: #f3f8ea; color: var(--accent-deep); font-size: 11px; font-weight: 800; }.practice-dialogue__body { display: grid; grid-template-columns: minmax(0, 1fr) 260px; min-height: 0; }.practice-messages { display: grid; align-content: start; gap: 15px; overflow-y: auto; padding: 24px; border-right: 1px solid var(--line); }.practice-message { display: flex; align-items: flex-start; gap: 9px; max-width: min(720px, 90%); }.practice-message.is-user { justify-self: end; flex-direction: row-reverse; }.practice-avatar { display: grid; flex: 0 0 28px; width: 28px; height: 28px; place-items: center; border-radius: 50%; background: var(--accent); color: var(--accent-deep); font-size: 10px; font-weight: 900; }.practice-bubble { padding: 11px 14px; border-radius: 5px 12px 12px 12px; background: #edf3ed; color: var(--ink); font-size: 13px; line-height: 1.7; }.practice-message.is-user .practice-bubble { border-radius: 12px 5px 12px 12px; background: var(--ink); color: #fff; }.practice-bubble :deep(p) { margin: 0 0 8px; }.practice-bubble :deep(p:last-child) { margin-bottom: 0; }.practice-bubble :deep(ul), .practice-bubble :deep(ol) { margin: 7px 0 0; padding-left: 20px; }.typing { display: flex; gap: 4px; padding: 14px; }.typing span { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); animation: pulse 1s infinite ease-in-out; }.typing span:nth-child(2) { animation-delay: .15s; }.typing span:nth-child(3) { animation-delay: .3s; }.practice-guide { padding: 20px 18px; background: #fbfcfa; }.guide-block { padding: 0 0 18px; margin-bottom: 18px; border-bottom: 1px solid var(--line); }.guide-block:last-child { margin-bottom: 0; border-bottom: 0; }.guide-block .eyebrow { margin-bottom: 7px; }.guide-block > strong { display: block; font-size: 13px; line-height: 1.5; }.guide-block > p:last-child { margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.65; }.guide-block button { display: grid; width: 100%; gap: 3px; padding: 8px 9px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); text-align: left; font-size: 11px; }.guide-block button:hover, .guide-block button.is-active { background: #e8efdf; color: var(--accent-deep); }.guide-block button small { font-size: 10px; }.guide-block ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 11px; line-height: 1.5; }.guide-block li::before { margin-right: 6px; color: var(--accent-deep); content: '•'; }.practice-error { margin: 0; padding: 0 24px 10px; color: #a66442; font-size: 11px; }.practice-composer { padding: 14px 24px 20px; border-top: 1px solid var(--line); }.practice-composer textarea { width: 100%; min-height: 105px; resize: vertical; padding: 12px 13px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); outline: none; font-size: 13px; line-height: 1.7; }.practice-composer textarea:focus { border-color: var(--accent-deep); }.practice-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; color: var(--muted); font-size: 10px; }.practice-actions > div { display: flex; flex-wrap: wrap; gap: 8px; }.practice-actions .button { gap: 7px; }@keyframes pulse { 0%, 60%, 100% { opacity: .3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }@keyframes spin { to { transform: rotate(360deg); } }.spin { animation: spin .8s linear infinite; }
+.practice-dialogue { display: grid; min-height: 700px; grid-template-rows: auto minmax(360px, 1fr) auto auto; overflow: hidden; }.practice-dialogue__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 24px; border-bottom: 1px solid var(--line); background: #fbfcfa; }.practice-dialogue__header .eyebrow { margin-bottom: 6px; }.practice-dialogue__header h2 { margin: 0; font-size: 20px; }.practice-dialogue__header p:last-child { max-width: 640px; margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }.phase-progress { display: grid; flex: 0 0 150px; gap: 4px; padding: 7px 9px; border: 1px solid #d7e3c9; border-radius: 6px; background: #f3f8ea; color: var(--accent-deep); }.phase-progress__count { color: var(--muted); font-size: 10px; }.phase-progress strong { font-size: 11px; }.phase-progress__track { height: 4px; overflow: hidden; border-radius: 99px; background: #dfe9d4; }.phase-progress__track span { display: block; height: 100%; border-radius: inherit; background: var(--accent-deep); transition: width .25s ease; }.practice-dialogue__body { display: grid; grid-template-columns: minmax(0, 1fr) 260px; min-height: 0; }.practice-messages { display: grid; align-content: start; gap: 15px; overflow-y: auto; padding: 24px; border-right: 1px solid var(--line); }.practice-message { display: flex; align-items: flex-start; gap: 9px; max-width: min(720px, 90%); }.practice-message.is-user { justify-self: end; flex-direction: row-reverse; }.practice-avatar { display: grid; flex: 0 0 28px; width: 28px; height: 28px; place-items: center; border-radius: 50%; background: var(--accent); color: var(--accent-deep); font-size: 10px; font-weight: 900; }.practice-bubble { padding: 11px 14px; border-radius: 5px 12px 12px 12px; background: #edf3ed; color: var(--ink); font-size: 13px; line-height: 1.7; }.practice-message.is-user .practice-bubble { border-radius: 12px 5px 12px 12px; background: var(--ink); color: #fff; }.practice-bubble :deep(p) { margin: 0 0 8px; }.practice-bubble :deep(p:last-child) { margin-bottom: 0; }.practice-bubble :deep(ul), .practice-bubble :deep(ol) { margin: 7px 0 0; padding-left: 20px; }.typing { display: flex; gap: 4px; padding: 14px; }.typing span { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); animation: pulse 1s infinite ease-in-out; }.typing span:nth-child(2) { animation-delay: .15s; }.typing span:nth-child(3) { animation-delay: .3s; }.practice-guide { padding: 20px 18px; background: #fbfcfa; }.guide-block { padding: 0 0 18px; margin-bottom: 18px; border-bottom: 1px solid var(--line); }.guide-block:last-child { margin-bottom: 0; border-bottom: 0; }.guide-block .eyebrow { margin-bottom: 7px; }.guide-block > strong { display: block; font-size: 13px; line-height: 1.5; }.guide-block > p:last-child { margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.65; }.guide-block button { display: grid; width: 100%; gap: 3px; padding: 8px 9px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); text-align: left; font-size: 11px; }.guide-block button:hover, .guide-block button.is-active { background: #e8efdf; color: var(--accent-deep); }.guide-block button:disabled { cursor: not-allowed; opacity: .48; }.phase-button__title { display: flex; align-items: center; gap: 7px; }.phase-button__title > span { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }.guide-block button.is-complete .phase-button__title > span { color: var(--accent-deep); }.guide-block button small { font-size: 10px; }.guide-block ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 11px; line-height: 1.5; }.guide-block li::before { margin-right: 6px; color: var(--accent-deep); content: '•'; }.practice-error { margin: 0; padding: 0 24px 10px; color: #a66442; font-size: 11px; }.practice-composer { padding: 14px 24px 20px; border-top: 1px solid var(--line); }.practice-composer textarea { width: 100%; min-height: 105px; resize: vertical; padding: 12px 13px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); outline: none; font-size: 13px; line-height: 1.7; }.practice-composer textarea:focus { border-color: var(--accent-deep); }.practice-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; color: var(--muted); font-size: 10px; }.practice-actions > div { display: flex; flex-wrap: wrap; gap: 8px; }.practice-actions .button { gap: 7px; }@keyframes pulse { 0%, 60%, 100% { opacity: .3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }@keyframes spin { to { transform: rotate(360deg); } }.spin { animation: spin .8s linear infinite; }
 @media (max-width: 780px) { .practice-dialogue__header { flex-direction: column; padding: 18px; }.practice-dialogue__body { grid-template-columns: 1fr; }.practice-messages { min-height: 360px; border-right: 0; border-bottom: 1px solid var(--line); }.practice-guide { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 16px 18px; }.guide-block { margin: 0; padding: 0; border: 0; }.guide-block:last-child { grid-column: 1 / -1; }.practice-composer { padding: 12px 18px 18px; }.practice-actions { align-items: flex-start; flex-direction: column; }.practice-actions > div { width: 100%; }.practice-actions .button { flex: 1; } }
 /* Keep the conversation workspace within the viewport; long replies and phase lists scroll inside it. */
 .practice-dialogue { height: clamp(430px, calc(100vh - 330px), 700px); min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto auto; }
 .practice-dialogue__header { min-width: 0; padding: 18px 20px; }
 .practice-dialogue__header > div { min-width: 0; }
 .practice-dialogue__header h2 { font-size: 18px; line-height: 1.35; }
-.practice-phase { max-width: 180px; padding: 6px 9px; font-size: 10px; line-height: 1.35; text-align: center; }
+.phase-progress { flex-basis: 150px; max-width: 180px; padding: 6px 9px; font-size: 10px; line-height: 1.35; }
 .practice-dialogue__body { min-height: 0; overflow: hidden; }
 .practice-messages { min-width: 0; min-height: 0; gap: 14px; overflow-y: auto; padding: 20px; }
 .practice-message { min-width: 0; max-width: min(720px, 92%); }
@@ -182,7 +209,7 @@ onBeforeUnmount(() => requestController?.abort())
 @media (max-width: 780px) {
   .practice-dialogue { height: clamp(420px, calc(100vh - 300px), 620px); }
   .practice-dialogue__header { padding: 17px 18px; }
-  .practice-phase { max-width: 100%; }
+  .phase-progress { width: 100%; max-width: none; }
   .practice-dialogue__body { overflow: hidden; }
   .practice-guide { max-height: 150px; gap: 12px; padding: 13px 18px; }
   .practice-composer { padding: 10px 18px 15px; }

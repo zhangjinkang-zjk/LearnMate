@@ -158,18 +158,19 @@ onMounted(loadOverview)
 .bar-value { border-color: #d1d68c; background: #FAFFC4; }
 :global(.page-container:has(.overview-page)) { background: #f7f7f7; }
 :global(.app-content:has(.overview-page) .app-header) { border-bottom-color: #e8e8e8; background: #f7f7f7; }
-.overview-page .surface { border-color: #e8e7ef; box-shadow: 0 8px 24px rgba(45, 40, 92, .07); }
+.overview-page .surface { border: 1px solid rgba(63, 91, 49, .28); box-shadow: 0 8px 24px rgba(45, 40, 92, .07); }
+.overview-page h2 { color: #1e3c34; }
 .overview-page .goal-panel, .overview-page .next-panel { box-shadow: 0 8px 22px rgba(45, 40, 92, .06); }
 .compact-panel .section-heading > svg { width: 32px; height: 32px; padding: 8px; border-radius: 50%; background: rgba(255, 255, 255, .72); }
 .overview-start-button { box-shadow: 0 6px 14px rgba(30, 60, 52, .2); }
 .overview-start-button:hover { box-shadow: 0 8px 18px rgba(30, 60, 52, .26); }
-:global(.page-container:has(.overview-page)) { width: 100%; height: calc(100vh - 64px); box-sizing: border-box; margin: 0; padding: 20px; overflow: hidden; }
+:global(.page-container:has(.overview-page)) { width: 100%; height: calc(100vh - 64px); box-sizing: border-box; margin: 0; padding: 20px 20px 20px 28px; overflow: hidden; }
 @media (max-width: 900px) {
   .overview-page { height: auto; }
   .overview-dashboard { grid-template-rows: auto auto; }
   .path-trend-panel { min-height: 180px; }
   .path-trend-panel .trend-chart { height: 100px; }
   .overview-left { grid-template-rows: auto auto; }
-  :global(.page-container:has(.overview-page)) { height: auto; min-height: 0; padding: 24px 20px 58px; overflow: visible; }
+  :global(.page-container:has(.overview-page)) { height: auto; min-height: 0; padding: 24px 20px 58px 24px; overflow: visible; }
 }
 </style>
