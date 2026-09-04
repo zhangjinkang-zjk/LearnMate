@@ -226,7 +226,7 @@ const continueToStudy = () => {
   padding: 12px 20px;
   border: 0;
   border-radius: 999px;
-  background: #e2f452;
+  background: #bdcc48;
   color: #1e3c34;
   text-align: center;
   cursor: pointer;
@@ -238,9 +238,8 @@ const continueToStudy = () => {
   animation: optionIn 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.identity-option:hover,
-.identity-option.selected {
-  background: #f8ff91;
+.identity-option:hover {
+  background: #d4e45b;
   transform: translateY(-16px) scale(1.09);
   box-shadow: 0 30px 48px rgba(4, 20, 15, 0.44);
 }
@@ -253,7 +252,9 @@ const continueToStudy = () => {
 }
 
 .identity-option.selected {
-  box-shadow: 0 0 0 3px rgba(243, 240, 231, 0.9), 0 30px 48px rgba(4, 20, 15, 0.44);
+  background: #bdcc48 !important;
+  transform: translateY(-2px) scale(1.01);
+  box-shadow: 0 0 0 3px rgba(243, 240, 231, 0.9), 0 14px 26px rgba(4, 20, 15, 0.28);
 }
 
 .identity-option:hover {
@@ -263,7 +264,7 @@ const continueToStudy = () => {
 
 .identity-option.selected,
 .identity-option[aria-checked="true"] {
-  background: #b3f884 !important;
+  background: #bdcc48 !important;
 }
 
 .option-label {

@@ -72,16 +72,17 @@
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
-import tabletImage from "../../shared/assets/home/kr-100.png";
-import laptopImage from "../../shared/assets/home/kr-65.png";
-import monitorImage from "../../shared/assets/home/kr-68.png";
-import headsetImage from "../../shared/assets/home/kr-75.png";
-import routerImage from "../../shared/assets/home/kr-76.png";
-import keyboardImage from "../../shared/assets/home/kr-84.png";
-import mouseImage from "../../shared/assets/home/kr-89.png";
-import penTabletImage from "../../shared/assets/home/kr-93.png";
-import gpuImage from "../../shared/assets/home/kr-94.png";
-import fanImage from "../../shared/assets/home/kr-95.png";
+import tabletImage from "../../shared/assets/home/hdi-circle-8e23f1ab774009a1e1d254d85249c2f3-7g50i6bj4rpq-cutout.png";
+import laptopImage from "../../shared/assets/home/Late_2016_MacBook_Pro-cutout.png";
+import monitorImage from "../../shared/assets/home/800x-cutout.png";
+import headsetImage from "../../shared/assets/home/airpods-red-cutout.png";
+import headsetAltImage from "../../shared/assets/home/airpods-red-alt-cutout.png";
+import routerImage from "../../shared/assets/home/493349971887985986-cutout.png";
+import keyboardImage from "../../shared/assets/home/GSKBC065E_ML-cutout.png";
+import mouseImage from "../../shared/assets/home/mouse-red-cutout.png";
+import penTabletImage from "../../shared/assets/home/IBM_PC-IMG_7271_(transparent).png";
+import gpuImage from "../../shared/assets/home/Sapphire-Radeon-HD-5570-Video-Card-cutout.png";
+import fanImage from "../../shared/assets/home/493349971887985986-cutout.png";
 import backpackImage from "../../shared/assets/home/65f0199b0fe8d.png";
 
 const router = useRouter();
@@ -104,154 +105,154 @@ const item = (image, file, label, x, y, rotate, size, delay, to = "") => ({
 const floatingItems = [
   item(
     tabletImage,
-    "kr-100-a.png",
+    "hdi-board-a.png",
     "Learning path",
-    "-26vw",
-    "-19vh",
+    "16vw",
+    "-24vh",
     -16,
-    112,
+    132,
     80,
     "/learning/navigation"
   ),
   item(
     laptopImage,
-    "kr-65-a.png",
+    "macbook-a.png",
     "AI chat",
     "-16vw",
     "-25vh",
     12,
-    108,
+    127,
     150,
     "/learning/overview"
   ),
   item(
     monitorImage,
-    "kr-68-a.png",
+    "speakers-a.png",
     "Resource center",
-    "16vw",
-    "-24vh",
+    "-26vw",
+    "-19vh",
     11,
-    114,
+    135,
     220,
     "/resources"
   ),
   item(
     headsetImage,
-    "kr-75-a.png",
+    "airpods-red-a.png",
     "Study room",
     "27vw",
     "-17vh",
     18,
-    110,
+    130,
     290,
     "/learning/workspace"
   ),
   item(
     routerImage,
-    "kr-76-a.png",
+    "chip-a.png",
     "LearnMate network",
-    "-29vw",
-    "-2vh",
+    "24vw",
+    "2vh",
     -11,
-    108,
+    127,
     360
   ),
   item(
     keyboardImage,
-    "kr-84-a.png",
+    "keyboard-a.png",
     "Practice keyboard",
     "-20vw",
     "13vh",
     -8,
-    126,
+    149,
     430,
     "/learning/workspace"
   ),
   item(
     mouseImage,
-    "kr-89-a.png",
+    "mouse-red-a.png",
     "Learning situation",
-    "24vw",
-    "2vh",
+    "-25vw",
+    "1vh",
     12,
-    106,
+    200,
     500,
     "/learning/overview"
   ),
   item(
     penTabletImage,
-    "kr-93-a.png",
+    "ibm-pc-a.png",
     "Notes and review",
     "18vw",
     "15vh",
     -12,
-    116,
+    137,
     570,
     "/resources"
   ),
   item(
     gpuImage,
-    "kr-94-a.png",
+    "gpu-a.png",
     "Resource generation",
     "-4vw",
     "-29vh",
     7,
-    112,
+    132,
     640,
     "/resources"
   ),
   item(
     fanImage,
-    "kr-95-a.png",
+    "chip-b.png",
     "Focus mode",
     "4vw",
     "21vh",
     -8,
-    116,
+    137,
     710,
     "/learning/workspace"
   ),
   item(
     tabletImage,
-    "kr-100-b.png",
+    "hdi-board-b.png",
     "Learning path detail",
     "-12vw",
     "-3vh",
     9,
-    92,
+    108,
     780,
     "/learning/navigation"
   ),
   item(
     monitorImage,
-    "kr-68-b.png",
+    "speakers-b.png",
     "Resource preview",
     "12vw",
     "-4vh",
     -9,
-    94,
+    111,
     850,
     "/resources"
   ),
   item(
     laptopImage,
-    "kr-65-b.png",
+    "macbook-b.png",
     "Study notes",
     "-11vw",
     "16vh",
     -13,
-    94,
+    111,
     920,
     "/resources"
   ),
   item(
-    headsetImage,
-    "kr-75-b.png",
+    headsetAltImage,
+    "airpods-red-alt-b.png",
     "Focus listening",
     "11vw",
     "17vh",
     14,
-    96,
+    113,
     990,
     "/learning/workspace"
   ),
