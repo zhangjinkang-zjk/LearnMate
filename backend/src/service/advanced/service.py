@@ -303,9 +303,15 @@ def _normalise_agent_tasks(payload: Any, fallback_tasks: list[dict]) -> tuple[li
             item["stages"] = fallback["stages"]
         normalised.append(item)
 
-    recommended = payload.get("recommended_kind")
-    if recommended not in {item["kind"] for item in fallback_tasks}:
-        recommended = next((item["kind"] for item in fallback_tasks if item.get("is_recommended")), "case")
+    # The agent can propose a mode, but the server owns the progression gate.
+    # This prevents a low-evidence learner from jumping directly to project work.
+    recommended = next((item["kind"] for item in fallback_tasks if item.get("is_recommended")), "case")
+    if payload.get("recommended_kind") != recommended:
+        logger.info(
+            "advanced task recommendation constrained requested=%s applied=%s",
+            payload.get("recommended_kind"),
+            recommended,
+        )
     for item in normalised:
         item["status"] = "active" if item["kind"] == recommended else "available"
         item["is_recommended"] = item["kind"] == recommended
@@ -605,14 +611,31 @@ class AdvancedLearningService:
                 "task": None,
             }
 
-        snapshot = await _get_or_create_snapshot(
-            user_id,
-            int(current_path["path_id"]),
-            milestone,
-            profile,
-            current_path,
-            mastery_records,
-        )
+        try:
+            snapshot = await _get_or_create_snapshot(
+                user_id,
+                int(current_path["path_id"]),
+                milestone,
+                profile,
+                current_path,
+                mastery_records,
+            )
+        except Exception:
+            # Keep the page usable during a rolling deploy before the new table is created.
+            logger.exception(
+                "advanced task snapshot unavailable user_id=%s path_id=%s milestone=%s",
+                user_id,
+                current_path.get("path_id"),
+                milestone,
+            )
+            generated = build_advanced_tasks(profile, current_path, mastery_records)
+            snapshot = {
+                "tasks": generated,
+                "summary": "当前里程碑任务已生成，保存服务恢复后会继续沿用。",
+                "source": "fallback",
+                "generation_error": "任务快照暂不可用",
+                "generated_at": None,
+            }
         tasks = snapshot["tasks"]
         active_task = next((item for item in tasks if item.get("is_recommended")), tasks[0] if tasks else None)
 

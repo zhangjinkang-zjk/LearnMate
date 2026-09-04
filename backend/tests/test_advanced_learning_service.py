@@ -1,6 +1,13 @@
 """Pure task-contract tests for advanced learning."""
 
-from backend.src.service.advanced.service import build_advanced_task, build_advanced_tasks, classify_goal
+from backend.src.service.advanced.service import (
+    _normalise_agent_tasks,
+    advanced_milestone,
+    build_advanced_task,
+    build_advanced_tasks,
+    classify_goal,
+    completed_node_count,
+)
 
 
 def _path(weak_points=None):
@@ -77,3 +84,30 @@ def test_advanced_context_does_not_use_unrelated_global_weak_point():
 
     assert task["context"]["focus"] == "职责划分"
     assert "协同冲突处理" in task["scenario"]
+
+
+def test_advanced_tasks_unlock_only_after_ten_completed_nodes():
+    assert advanced_milestone(0) == 0
+    assert advanced_milestone(9) == 0
+    assert advanced_milestone(10) == 1
+    assert advanced_milestone(19) == 1
+    assert advanced_milestone(20) == 2
+
+    completed, total = completed_node_count({"nodes": [{"status": "completed"}, {"status": "in_progress"}]})
+    assert (completed, total) == (1, 2)
+
+
+def test_agent_cannot_bypass_server_owned_progression_gate():
+    profile = {"identity": "学生", "direction": "多智能体协同决策", "goal": "完成一个项目"}
+    fallback = build_advanced_tasks(profile, _path())
+    normalised = _normalise_agent_tasks(
+        {
+            "recommended_kind": "project",
+            "tasks": [{"kind": "case"}, {"kind": "transfer"}, {"kind": "project"}],
+        },
+        fallback,
+    )
+
+    assert normalised is not None
+    tasks, _ = normalised
+    assert next(task for task in tasks if task["is_recommended"])["kind"] == "case"
