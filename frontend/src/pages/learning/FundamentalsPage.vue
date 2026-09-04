@@ -129,6 +129,7 @@
               <MarkdownDocument
                 v-else
                 wide
+                :paginate="resourceView === 'document'"
                 :title="resourceView === 'mindmap' ? `${activeNode.title} · 知识结构` : activeNode.title"
                 :content="visibleResourceContent"
                 :tags="activeNode.knowledge_tags || []"
