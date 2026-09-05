@@ -154,14 +154,21 @@ _CLASSROOM_BRAINS: OrderedDict[str, Brain] = OrderedDict()
 _CLASSROOM_BRAIN_LIMIT = 40
 
 
-def _classroom_group_id(user_id: int, path_id: int, node_id: int) -> int:
-    """合成稳定正数组号，仅用于 Brain 实例 key 与 get_used_history 注入，不落库。"""
-    raw = (user_id * 1000003) ^ (path_id * 100003) ^ node_id
+def _classroom_group_id(user_id: int, path_id: int, node_id: int, session_key: str | None = None) -> int:
+    """合成稳定正数组号；实践会话使用独立历史组，避免不同任务串线。"""
+    session_hash = int(hashlib.sha1(str(session_key or "").encode("utf-8")).hexdigest()[:12], 16)
+    raw = (user_id * 1000003) ^ (path_id * 100003) ^ node_id ^ session_hash
     return (raw % 2_000_000_000) + 1
 
 
-def _get_classroom_brain(user_id: int, path_id: int, node_id: int, agent_id: int) -> Brain:
-    key = f"classroom_{user_id}_{path_id}_{node_id}_{agent_id or 0}"
+def _get_classroom_brain(
+    user_id: int,
+    path_id: int,
+    node_id: int,
+    agent_id: int,
+    session_key: str | None = None,
+) -> Brain:
+    key = f"classroom_{user_id}_{path_id}_{node_id}_{agent_id or 0}_{session_key or 'default'}"
     if key in _CLASSROOM_BRAINS:
         _CLASSROOM_BRAINS.move_to_end(key)
         return _CLASSROOM_BRAINS[key]
@@ -169,7 +176,7 @@ def _get_classroom_brain(user_id: int, path_id: int, node_id: int, agent_id: int
         _CLASSROOM_BRAINS.popitem(last=False)
     brain = Brain(
         user_id=user_id,
-        chat_group_id=_classroom_group_id(user_id, path_id, node_id),
+        chat_group_id=_classroom_group_id(user_id, path_id, node_id, session_key),
         agent_id=agent_id,
     )
     _CLASSROOM_BRAINS[key] = brain
@@ -497,10 +504,25 @@ async def stream_classroom_chat(
     scenario: str,
     text: str,
     resource_id: int | None = None,
+    practice_session_id: str | None = None,
 ):
     """async generator：以普通聊天相同的持久化和流式顺序产出 SSE 事件。"""
     fallback = _FALLBACK_REPLIES.get(scenario, _FALLBACK_REPLIES["free"])
     try:
+        if scenario == "practice" and practice_session_id:
+            from backend.src.models.advanced_practice_model import AdvancedPracticeSession
+
+            session = await AdvancedPracticeSession.filter(
+                user_id=user_id,
+                session_key=practice_session_id,
+                path_id=path_id,
+                node_id=node_id,
+            ).first()
+            if not session or session.status == "completed":
+                yield _sse({"error": "巩固会话不存在、无权访问或已经完成"})
+                yield _sse(None, done=True)
+                return
+
         path_ctx = await _build_classroom_path_context(
             path_id,
             node_id,
@@ -517,10 +539,15 @@ async def stream_classroom_chat(
 
         lock = await get_node_generation_lock(user_id, path_id, node_id, "classroom_chat")
         async with lock:
-            brain = _get_classroom_brain(user_id, path_id, node_id, agent_id)
+            brain = _get_classroom_brain(user_id, path_id, node_id, agent_id, practice_session_id if scenario == "practice" else None)
             user_prompt = _compose_user_prompt(scenario, text, segment)
             portrait_ctx = await _build_global_portrait_context(user_id)
-            chat_group_id = _classroom_group_id(user_id, path_id, node_id)
+            chat_group_id = _classroom_group_id(
+                user_id,
+                path_id,
+                node_id,
+                practice_session_id if scenario == "practice" else None,
+            )
 
             # 与普通流式聊天一致：先记下用户输入，再从该课堂专属组恢复短期历史。
             # 这样进程重启后仍能接上本节点的课堂对话，工具也能读取当前问题。

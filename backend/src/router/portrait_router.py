@@ -79,6 +79,9 @@ class DialogueTurn(BaseModel):
 
 class InitFromDialogueRequest(BaseModel):
     dialogue: List[DialogueTurn]
+    identity: str = Field(default="", max_length=80)
+    direction: str = Field(default="", max_length=120)
+    goal: str = Field(default="", max_length=160)
 
 
 class NextInterviewQuestionRequest(BaseModel):
@@ -117,6 +120,11 @@ async def init_from_dialogue(
         result = await PortraitChatHistory_Service.init_from_dialogue(
             user_id,
             [{"question": t.question, "answer": t.answer} for t in data.dialogue],
+            onboarding_context={
+                "identity": data.identity.strip(),
+                "direction": data.direction.strip(),
+                "goal": data.goal.strip(),
+            },
         )
         return {"code": 200, "msg": "画像初始化成功", "data": result}
     except ValueError as e:

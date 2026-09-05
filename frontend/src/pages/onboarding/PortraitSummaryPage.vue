@@ -21,11 +21,13 @@
 
       <div class="summary-actions">
         <button class="summary-edit" type="button" @click="router.push('/learnmate-chat')">修改回答</button>
-        <button class="summary-confirm" type="button" :disabled="!isComplete" @click="confirmProfile">
-          <span>确认画像</span>
+        <button class="summary-confirm" type="button" :disabled="!isComplete || isPreparing" @click="confirmProfile">
+          <span>{{ isPreparing ? '生成学习概览…' : '确认画像' }}</span>
           <span aria-hidden="true">↗</span>
         </button>
       </div>
+      <p v-if="isPreparing" class="summary-status">正在根据你的方向拆分科目并准备学习路径，完成后会自动进入学习概览。</p>
+      <p v-if="generationError" class="summary-error" role="alert">{{ generationError }}</p>
     </section>
   </main>
 </template>
@@ -33,10 +35,14 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { learningState, persistLearningProfile } from '@/entities/learning/learningState'
+import { learningApi } from '@/shared/api/learningApi'
 
 const router = useRouter()
 const streamedText = ref('')
 const isComplete = ref(false)
+const isPreparing = ref(false)
+const generationError = ref('')
 let streamTimer
 
 const readDialogue = () => {
@@ -66,19 +72,22 @@ const aiSummary = String(portraitSummary.profile_summary || '').trim()
 const cognition = String(portraitSummary.cognition || '').trim()
 const learningGoal = String(portraitSummary.learning_goal || '').trim()
 const traits = portraitSummary.traits && typeof portraitSummary.traits === 'object' ? portraitSummary.traits : {}
+const onboarding = traits.onboarding && typeof traits.onboarding === 'object' ? traits.onboarding : {}
 const traitText = key => {
   const value = traits[key]
   if (!value) return ''
   if (typeof value === 'string') return value
   return String(value.value || value.text || '').trim()
 }
+const direction = String(onboarding.direction || cognition || answerAt(0)).trim()
+const goal = String(onboarding.goal || learningGoal || answerAt(1)).trim()
 
 const fullSummary = computed(() => [
   aiSummary || '根据刚才的对话，我整理出了这份画像：',
   '',
   `身份：${identity}`,
-  `学习方向：${cognition || answerAt(0)}`,
-  `学习目标：${learningGoal || answerAt(1)}`,
+  `学习方向：${direction}`,
+  `学习目标：${goal}`,
   `当前基础：${traitText('knowbase') || answerAt(2)}`,
   `每周可投入时间：${answerAt(3)}`,
   `学习偏好：${traitText('learning_pace') || answerAt(4)}`,
@@ -103,13 +112,44 @@ const startStreaming = () => {
   tick()
 }
 
-const confirmProfile = () => {
-  if (!isComplete.value) return
-  const profile = { identity, dialogue }
-  sessionStorage.removeItem('learnmate_portrait_dialogue')
-  sessionStorage.removeItem('learnmate_portrait_summary')
-  window.dispatchEvent(new CustomEvent('learnmate:learning-profile-ready', { detail: profile }))
-  router.push('/chat')
+const unwrap = response => response?.data?.data ?? response?.data ?? response
+const hasOverviewContent = overview => Boolean(
+  overview?.path?.id ||
+  (Array.isArray(overview?.subjects) && overview.subjects.some(subject => subject?.id || subject?.name)),
+)
+
+const confirmProfile = async () => {
+  if (!isComplete.value || isPreparing.value) return
+  isPreparing.value = true
+  generationError.value = ''
+
+  learningState.identity = identity
+  learningState.direction = direction
+  learningState.goal = goal
+  persistLearningProfile()
+
+  try {
+    const response = await learningApi.generatePathsFromDirection(direction, goal)
+    const generated = unwrap(response)
+    const paths = Array.isArray(generated?.paths) ? generated.paths : []
+    const readyPath = paths.find(path => path && path.path_id)
+    if (!readyPath) throw new Error('学习路径暂未生成成功，请稍后重试')
+
+    // 路径生成完成后再读取一次概览快照，确保进入页面时目标、科目和节点已经可用。
+    const overview = unwrap(await learningApi.getOverview())
+    if (!hasOverviewContent(overview)) throw new Error('学习概览暂未准备完成，请稍后重试')
+
+    localStorage.setItem('learnmate_onboarding_complete', '1')
+    const profile = { identity, direction, goal, dialogue }
+    sessionStorage.removeItem('learnmate_portrait_dialogue')
+    sessionStorage.removeItem('learnmate_portrait_summary')
+    window.dispatchEvent(new CustomEvent('learnmate:learning-profile-ready', { detail: profile }))
+    await router.push('/learning/overview')
+  } catch (error) {
+    generationError.value = error?.response?.data?.detail || error?.message || '学习路径生成失败，请重试。'
+  } finally {
+    isPreparing.value = false
+  }
 }
 
 onMounted(startStreaming)
@@ -252,6 +292,16 @@ onBeforeUnmount(() => {
   gap: 14px;
   margin-top: 24px;
 }
+
+.summary-status,
+.summary-error {
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.summary-status { color: rgba(243, 240, 231, 0.72); }
+.summary-error { color: #ffb5a8; }
 
 .summary-edit,
 .summary-confirm {

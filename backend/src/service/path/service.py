@@ -37,6 +37,7 @@ from backend.src.utils.exceptions import ServiceError
 from backend.src.service.path.helpers import (
     check_resource_viewed,
     get_bound_node_resources,
+    _load_resource_ids,
     pre_generate_node,
     unlock_next_node,
     update_portrait_from_mastery,
@@ -785,6 +786,16 @@ class PathService:
 
         existing = await UserPathProgress.filter(user_id=user_id, path_id=path_id).count()
         if existing:
+            # 旧路径可能只有进度记录、没有完成首节点资源预热；只在确有缺口时补排后台任务。
+            first_node = nodes_sorted[0]
+            first_progress = await UserPathProgress.filter(
+                user_id=user_id,
+                path_id=path_id,
+                node_id=first_node.id,
+            ).first()
+            bound_resource_ids = _load_resource_ids(first_progress.resource_ids) if first_progress else []
+            if first_progress and (not bound_resource_ids or not first_progress.quiz_session_id):
+                _schedule_first_node_warmup(path_id, first_node.id, user_id)
             return {"message": "已加入该路径", "path_id": path_id}
 
         created = []
@@ -2195,7 +2206,7 @@ async def _create_video_html(topic: str, user_id: int, ppt_record) -> dict | Non
 
 
 def _schedule_first_node_warmup(path_id: int, node_id: int, user_id: int) -> None:
-    if not _env_bool("PATH_AUTO_PREGENERATE_FIRST_NODE", False):
+    if not _env_bool("PATH_AUTO_PREGENERATE_FIRST_NODE", True):
         return
     asyncio.create_task(_generate_first_node_warmup_background(path_id, node_id, user_id))
 

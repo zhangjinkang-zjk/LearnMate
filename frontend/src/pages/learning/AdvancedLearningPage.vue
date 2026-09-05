@@ -24,14 +24,14 @@
           <p>{{ task.brief }}</p>
           <p v-if="taskSummary" class="task-summary">{{ taskSummary }}</p>
           <div class="task-scenario"><span class="block-label">任务情境</span><p>{{ task.scenario || task.problem }}</p></div>
-          <div class="recommendation-facts"><span><strong>{{ task.context?.focus || task.focus || '当前薄弱点' }}</strong>重点能力</span><span><strong>{{ task.context?.mastery_label || '暂无测验证据' }}</strong>基础证据</span><span><strong>{{ task.deliverables?.length || 0 }}</strong>项交付</span></div>
+          <div class="recommendation-facts"><span><strong>{{ task.context?.focus || task.focus || '当前薄弱点' }}</strong>重点能力</span><span><strong>{{ task.context?.mastery_label || '暂无测验证据' }}</strong>基础证据</span><span><strong>{{ task.deliverables?.length || 0 }}</strong>项交付</span><span v-if="task.practice_status_label"><strong>{{ task.practice_status_label }}</strong>巩固状态</span></div>
           <button class="button button--primary" type="button" :disabled="practiceLoading" @click="startPractice"><LoaderCircle v-if="practiceLoading" class="spin" :size="15" /><ArrowRight v-else :size="15" />开始实践巩固</button>
         </article>
         <aside class="surface surface-pad decision-reason"><p class="eyebrow">推荐依据</p><h2>根据你的基础学习</h2><p>{{ task.context?.reason || task.recommendation || '系统会根据当前学习节点生成实践入口。' }}</p><div class="decision-reason__line"><span>学习节点</span><strong>{{ task.context?.node_title || '当前节点' }}</strong></div><div class="decision-reason__line"><span>节点状态</span><strong>{{ task.context?.node_status_label || path.stage || '学习中' }}</strong></div><div class="decision-reason__line"><span>学习材料</span><strong>{{ task.context?.resource_label || `${task.resources?.length || 0} 份关联材料` }}</strong></div><div class="decision-reason__line"><span>路径进度</span><strong>{{ path.stage || '基础到应用' }}</strong></div></aside>
       </section>
 
       <section v-if="optionalTasks.length" class="task-catalog"><div class="catalog-heading"><div><p class="eyebrow">可选实践任务</p><h2>换一个情境练习迁移</h2></div><span>第 {{ milestone.current }} 个里程碑 · {{ optionalTasks.length }} 个可选任务</span></div><div class="catalog-grid" role="list">
-        <button v-for="item in optionalTasks" :key="item.id" type="button" class="catalog-card" :class="{ 'is-selected': item.id === task.id }" :aria-pressed="item.id === task.id" :aria-label="`选择${item.kind_label || '实践任务'}：${item.title}`" @click="selectTask(item)"><span class="catalog-card__top"><strong>{{ item.kind_label || '实践任务' }}</strong><small>{{ item.difficulty_label || '当前阶段' }}</small></span><h3>{{ item.title }}</h3><p>{{ item.why || item.brief }}</p><span class="catalog-card__footer"><span>{{ item.id === task.id ? '当前已选' : item.status === 'completed' ? '已完成' : '选择任务' }}</span><ArrowUpRight :size="14" /></span></button>
+        <button v-for="item in optionalTasks" :key="item.id" type="button" class="catalog-card" :class="{ 'is-selected': item.id === task.id }" :aria-pressed="item.id === task.id" :aria-label="`选择${item.kind_label || '实践任务'}：${item.title}`" @click="selectTask(item)"><span class="catalog-card__top"><strong>{{ item.kind_label || '实践任务' }}</strong><small>{{ item.difficulty_label || '当前阶段' }}</small></span><h3>{{ item.title }}</h3><p>{{ item.why || item.brief }}</p><span class="catalog-card__footer"><span>{{ item.practice_status_label || (item.id === task.id ? '当前已选' : item.status === 'completed' ? '已完成' : '选择任务') }}</span><ArrowUpRight :size="14" /></span></button>
       </div></section>
       </template>
 
@@ -42,7 +42,7 @@
         </section>
         <PracticeDialogue v-if="!sessionEnded && hasWorkspace" :key="task.id" :path-id="selectedWorkspace.pathId" :node-id="selectedWorkspace.nodeId" :task="task" :chapter-content="chapterContent" :resource-id="resourceId" @end="endPractice" />
         <section v-else-if="!sessionEnded" class="surface surface-pad state-panel state-panel--error"><CircleAlert :size="20" /><div><strong>实践任务缺少关联节点</strong><p>请重新同步任务后再开始巩固。</p></div><button class="button button--quiet" type="button" @click="loadTask">重新同步</button></section>
-        <section v-else class="surface surface-pad session-ended"><span class="session-ended__mark">✓</span><p class="eyebrow">本次巩固已结束</p><h2>对话过程已经保存</h2><p>你可以返回任务选择，或继续当前实践。</p><div><button class="button button--quiet" type="button" @click="sessionEnded = false">继续这个任务</button><button class="button button--primary" type="button" @click="closePractice">返回任务选择</button></div></section>
+        <section v-else class="surface surface-pad session-ended"><span class="session-ended__mark">✓</span><p class="eyebrow">本次巩固已暂存</p><h2>对话过程已经保存</h2><p>这不是提交成果。你可以恢复本次会话继续思考，也可以返回任务选择。</p><div><button class="button button--quiet" type="button" @click="sessionEnded = false">恢复本次巩固</button><button class="button button--primary" type="button" @click="closePractice">返回任务选择</button></div></section>
       </template>
     </template>
   </div>

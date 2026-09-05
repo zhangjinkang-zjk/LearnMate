@@ -70,12 +70,22 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { directionOptions, goalOptions } from '@/features/onboarding/onboardingOptions'
+import { learningState, persistLearningProfile } from '@/entities/learning/learningState'
 
 const router = useRouter()
 const route = useRoute()
 const isFreshFlow = computed(() => Boolean(route.query.fresh))
 const selectedIdentity = ref(isFreshFlow.value ? '' : (localStorage.getItem('learnmate_identity') || ''))
-const canContinue = computed(() => Boolean(selectedIdentity.value))
+const storedDirection = localStorage.getItem('learnmate_direction') || ''
+const storedGoal = localStorage.getItem('learnmate_goal') || ''
+const selectedDirection = ref(directionOptions.includes(storedDirection) ? storedDirection : directionOptions[0])
+const selectedGoal = ref(goalOptions.includes(storedGoal) ? storedGoal : goalOptions[0])
+const customDirection = ref(directionOptions.includes(storedDirection) ? '' : storedDirection)
+const customGoal = ref(goalOptions.includes(storedGoal) ? '' : storedGoal)
+const resolvedDirection = computed(() => customDirection.value.trim() || selectedDirection.value)
+const resolvedGoal = computed(() => customGoal.value.trim() || selectedGoal.value)
+const canContinue = computed(() => Boolean(selectedIdentity.value && resolvedDirection.value && resolvedGoal.value))
 
 const identityOptions = [
   '在校大学生',
@@ -107,7 +117,10 @@ identityOptions.splice(
 
 const continueToStudy = () => {
   if (!canContinue.value) return
-  localStorage.setItem('learnmate_identity', selectedIdentity.value)
+  learningState.identity = selectedIdentity.value
+  learningState.direction = resolvedDirection.value
+  learningState.goal = resolvedGoal.value
+  persistLearningProfile()
   window.dispatchEvent(new CustomEvent('learnmate:identity-selected', { detail: selectedIdentity.value }))
   router.push('/learnmate-chat')
 }

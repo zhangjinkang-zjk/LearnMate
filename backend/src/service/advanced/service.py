@@ -494,6 +494,30 @@ def _read_snapshot(snapshot: Any) -> dict | None:
     }
 
 
+async def _attach_practice_status(user_id: int, path_id: int, tasks: list[dict]) -> None:
+    """把服务端巩固会话状态附加到当前任务快照，不让前端猜测完成状态。"""
+    task_keys = [str(item.get("id")) for item in tasks if isinstance(item, dict) and item.get("id")]
+    if not task_keys:
+        return
+    from backend.src.models.advanced_practice_model import AdvancedPracticeSession
+
+    sessions = await AdvancedPracticeSession.filter(
+        user_id=user_id,
+        path_id=path_id,
+        task_key__in=task_keys,
+    ).order_by("-updated_at").all()
+    latest_by_task = {}
+    for session in sessions:
+        latest_by_task.setdefault(session.task_key, session)
+    status_labels = {"active": "进行中", "paused": "已暂存", "completed": "已完成"}
+    for item in tasks:
+        session = latest_by_task.get(str(item.get("id")))
+        if session:
+            item["practice_status"] = session.status
+            item["practice_status_label"] = status_labels.get(session.status, "已保存")
+            item["practice_session_id"] = session.session_key
+
+
 async def _get_or_create_snapshot(
     user_id: int,
     path_id: int,
@@ -642,6 +666,15 @@ class AdvancedLearningService:
                 "generated_at": None,
             }
         tasks = snapshot["tasks"]
+        try:
+            await _attach_practice_status(user_id, int(current_path["path_id"]), tasks)
+        except Exception:
+            # 会话状态是增强信息；即使旧部署还没创建会话表，也不能阻断任务入口。
+            logger.exception(
+                "advanced practice status unavailable user_id=%s path_id=%s",
+                user_id,
+                current_path.get("path_id"),
+            )
         active_task = next((item for item in tasks if item.get("is_recommended")), tasks[0] if tasks else None)
 
         return {

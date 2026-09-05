@@ -535,7 +535,11 @@ class PortraitChatHistory_Service:
         return _fallback_interview_question(step, dialogue, max_steps)
 
     @staticmethod
-    async def init_from_dialogue(user_id: int, dialogue: list[dict]) -> dict:
+    async def init_from_dialogue(
+        user_id: int,
+        dialogue: list[dict],
+        onboarding_context: dict | None = None,
+    ) -> dict:
         """通过多轮问答对话让 LLM 提取并初始化用户画像"""
         user = await User.filter(id=user_id).first()
         if not user:
@@ -581,6 +585,12 @@ class PortraitChatHistory_Service:
 
         learning_direction = str(result.get("learning_direction", "") or "").strip()
         learning_goal_text = str(result.get("learning_goal_text", "") or "").strip()
+        onboarding_context = onboarding_context if isinstance(onboarding_context, dict) else {}
+        selected_identity = str(onboarding_context.get("identity") or "").strip()
+        selected_direction = str(onboarding_context.get("direction") or "").strip()
+        selected_goal = str(onboarding_context.get("goal") or "").strip()
+        learning_direction = selected_direction or learning_direction
+        learning_goal_text = selected_goal or learning_goal_text
         cognition = result.get("cognition", "") or ""
         learning_goal = result.get("learning_goal", "") or ""
         tags = result.get("personality_tags") or []
@@ -600,17 +610,19 @@ class PortraitChatHistory_Service:
 
         # 同步写入 traits 的 interest 维度（如果有对话提取的兴趣信息）
         traits = parse_traits(picture.traits)
-        if learning_direction:
+        if learning_direction or learning_goal_text or selected_identity:
             onboarding = traits.get("onboarding") if isinstance(traits.get("onboarding"), dict) else {}
-            onboarding["direction"] = learning_direction[:120]
+            if learning_direction:
+                onboarding["direction"] = learning_direction[:120]
             if learning_goal_text:
                 onboarding["goal"] = learning_goal_text[:160]
+            if selected_identity:
+                onboarding["identity"] = selected_identity[:80]
             traits["onboarding"] = onboarding
-            traits["learning_direction"] = learning_direction[:120]
-        elif learning_goal_text:
-            onboarding = traits.get("onboarding") if isinstance(traits.get("onboarding"), dict) else {}
-            onboarding["goal"] = learning_goal_text[:160]
-            traits["onboarding"] = onboarding
+            if learning_direction:
+                traits["learning_direction"] = learning_direction[:120]
+            if learning_goal_text:
+                traits["learning_direction_goal"] = learning_goal_text[:160]
         if tags:
             traits["interest"] = build_trait_entry(
                 "、".join(tags[:3]), "user_stated", traits.get("interest")
@@ -665,11 +677,33 @@ RADAR_DIMENSIONS = [
     {"key": "persistence",   "label": "坚持",   "desc": "学习投入与持续参与"},
 ]
 
+# 同一进程内同一用户的雷达重算只允许一个请求进入写入阶段，避免首次创建时
+# 多个画像/学习接口同时执行 get_or_create 导致 MySQL 唯一外键死锁。
+_RADAR_COMPUTE_LOCKS: dict[int, asyncio.Lock] = {}
+
+
+def _radar_compute_lock(user_id: int) -> asyncio.Lock:
+    lock = _RADAR_COMPUTE_LOCKS.get(user_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _RADAR_COMPUTE_LOCKS[user_id] = lock
+    return lock
+
+
+def _is_retryable_radar_write_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return any(marker in message for marker in ("1213", "deadlock", "1062", "duplicate"))
+
 
 class PortraitRadarService:
 
     @staticmethod
     async def compute(user_id: int) -> dict:
+        async with _radar_compute_lock(user_id):
+            return await PortraitRadarService._compute_locked(user_id)
+
+    @staticmethod
+    async def _compute_locked(user_id: int) -> dict:
         """从答题数据实时计算六维雷达分数并写入 PortraitRadar 表"""
         from datetime import datetime, timedelta
         from backend.src.models.exam_model import ExamRecord, ExamQuestion, KnowledgeMastery
@@ -726,8 +760,26 @@ class PortraitRadarService:
                 recent_dates.add(ct.date())
         persistence = min(100, round(len(recent_dates) / 30 * 100))
 
-        # 写入/更新 Radar 表
-        radar, _ = await PortraitRadar.get_or_create(user=user)
+        # 写入/更新 Radar 表。不要使用 Tortoise 的 select_for_update + create：
+        # 首次并发请求在 MySQL 上可能对用户外键和唯一索引形成死锁。
+        radar = await PortraitRadar.filter(user_id=user_id).first()
+        if not radar:
+            from tortoise.exceptions import IntegrityError, OperationalError
+
+            for attempt in range(3):
+                try:
+                    radar = await PortraitRadar.create(user_id=user_id)
+                    break
+                except (IntegrityError, OperationalError) as error:
+                    if not _is_retryable_radar_write_error(error) or attempt == 2:
+                        raise
+                    await asyncio.sleep(0.05 * (2 ** attempt))
+                    radar = await PortraitRadar.filter(user_id=user_id).first()
+                    if radar:
+                        break
+            if not radar:
+                raise RuntimeError(f"无法创建用户 {user_id} 的画像雷达记录")
+
         radar.memory = memory
         radar.understanding = understanding
         radar.application = application

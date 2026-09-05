@@ -1,5 +1,6 @@
 """学习路径路由"""
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, Depends, Body
@@ -25,6 +26,31 @@ from backend.src.schemas.path import (
 
 router = APIRouter(prefix="/path", tags=["学习路径"])
 logger = logging.getLogger(__name__)
+_BACKGROUND_PATH_TASKS: dict[int, asyncio.Task] = {}
+
+
+def _track_background_path_task(user_id: int, task: asyncio.Task) -> None:
+    """保留后台任务引用并统一记录异常，避免任务被回收或静默失败。"""
+    previous = _BACKGROUND_PATH_TASKS.get(user_id)
+    if previous and not previous.done():
+        task.cancel()
+        return
+    _BACKGROUND_PATH_TASKS[user_id] = task
+
+    def _finish(completed: asyncio.Task) -> None:
+        if _BACKGROUND_PATH_TASKS.get(user_id) is completed:
+            _BACKGROUND_PATH_TASKS.pop(user_id, None)
+        if completed.cancelled():
+            return
+        error = completed.exception()
+        if error:
+            logger.error(
+                "后台学习路径生成任务异常: %s",
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    task.add_done_callback(_finish)
 
 
 async def _assert_path_access(path_id: int, user_id: int, *, public_readable: bool = False) -> None:
@@ -61,7 +87,7 @@ async def generate_path_stream(data: GeneratePathRequest, user_id: int = Depends
 
 @router.post("/generate-from-direction")
 async def generate_paths_from_direction(data: GenerateFromDirectionRequest, user_id: int = Depends(get_user_id_from_token)):
-    """拆解用户学习方向，保存相关科目并为每个科目生成学习路径。"""
+    """拆解学习方向，先生成一条可进入的路径，其余路径在后台继续生成。"""
     from backend.src.service.curriculum.service import sync_direction_subjects
     direction = data.direction.strip()
     goal = data.goal.strip()
@@ -88,26 +114,77 @@ async def generate_paths_from_direction(data: GenerateFromDirectionRequest, user
         if data.force_regenerate:
             existing = await LearningPath.filter(user_id=user_id, subject=subject).first()
             if existing:
-                return await PathService.regenerate_path(existing.id, user_id)
-        return await PathService.generate_path(subject, user_id, data.difficulty, data.node_count)
+                result = await PathService.regenerate_path(existing.id, user_id)
+            else:
+                result = await PathService.generate_path(subject, user_id, data.difficulty, data.node_count)
+        else:
+            result = await PathService.generate_path(subject, user_id, data.difficulty, data.node_count)
 
-    import asyncio
-    results = await asyncio.gather(
-        *[generate_or_reuse(subject) for subject in subjects],
-        return_exceptions=True,
-    )
-    paths = []
-    for subject, result in zip(subjects, results):
-        if isinstance(result, Exception):
-            paths.append({"subject": subject, "status": "failed", "message": str(result)})
-            continue
-        paths.append({
+        # 生成接口也负责把路径接入当前学习进度。新路径在 generate_path
+        # 内已经完成初始化；缓存路径则需要在这里补齐，否则概览接口无法读取。
+        path_id = result.get("path_id") if isinstance(result, dict) else None
+        if path_id and result.get("cached"):
+            await PathService.enroll_path(path_id, user_id)
+        return result
+
+    first_result = None
+    first_subject_index = -1
+    failed_subjects = []
+    # 按课程架构师返回的依赖顺序尝试，确保至少有一条路径可进入学习空间。
+    for index, subject in enumerate(subjects):
+        try:
+            first_result = await generate_or_reuse(subject)
+            first_subject_index = index
+            break
+        except Exception as error:
+            failed_subjects.append(subject)
+            logger.exception("首条学习路径生成失败 subject=%s user_id=%s", subject, user_id)
+
+    if first_result is None:
+        raise HTTPException(
+            status_code=503,
+            detail="暂时无法生成学习路径，请稍后重试",
+        )
+
+    def serialize_path(subject: str, result: dict) -> dict:
+        return {
             "subject": subject,
             "status": "regenerated" if result.get("regenerated") else ("cached" if result.get("cached") else "created"),
             "path_id": result.get("path_id"),
             "node_count": result.get("node_count", len(result.get("nodes", []))),
-        })
-    return {"code": 200, "msg": "success", "data": {"direction": direction, "subjects": subjects, "paths": paths}}
+        }
+
+    paths = [serialize_path(subjects[first_subject_index], first_result)]
+    remaining_subjects = subjects[first_subject_index + 1:] + failed_subjects
+
+    async def generate_remaining_paths() -> None:
+        # 后台按顺序生成，避免首次进入时并发触发多组 LLM/数据库写入。
+        for subject in remaining_subjects:
+            try:
+                result = await generate_or_reuse(subject)
+                logger.info(
+                    "后台学习路径已生成 user_id=%s subject=%s path_id=%s",
+                    user_id,
+                    subject,
+                    result.get("path_id"),
+                )
+            except Exception:
+                logger.exception("后台学习路径生成失败 subject=%s user_id=%s", subject, user_id)
+
+    if remaining_subjects:
+        _track_background_path_task(user_id, asyncio.create_task(generate_remaining_paths()))
+
+    return {
+        "code": 200,
+        "msg": "首条学习路径已就绪，其余路径正在后台生成",
+        "data": {
+            "direction": direction,
+            "subjects": subjects,
+            "paths": paths,
+            "pending_subjects": remaining_subjects,
+            "generation_status": "partial" if remaining_subjects else "complete",
+        },
+    }
 
 
 @router.get("/list")
@@ -248,6 +325,7 @@ async def classroom_chat(data: ClassroomChatRequest, user_id: int = Depends(get_
             segment=data.segment,
             scenario=data.scenario,
             text=data.text,
+            practice_session_id=data.practice_session_id,
         ),
         media_type="text/event-stream",
         headers={

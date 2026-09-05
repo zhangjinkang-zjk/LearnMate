@@ -238,7 +238,7 @@ frontend/src/
 
 #### 5. 学习巩固
 
-建议文件：`frontend/src/pages/learning/LearningConsolidationPage.vue`
+实现文件：`frontend/src/pages/learning/AdvancedLearningPage.vue`、`frontend/src/features/advanced/PracticeDialogue.vue`
 
 - 这是应用实践的交互页面，不是普通聊天窗口。
 - 对话阶段建议为：理解问题、寻找证据、提出假设、比较方案、验证结果、总结。
@@ -247,8 +247,8 @@ frontend/src/
 - 用户始终可以选择：继续追问、请求提示、暂存退出、结束本次巩固、提交方案。
 - `结束本次巩固` 与 `提交方案并完成` 必须是两个不同动作。
 
-当前实现：`LearningConsolidationPage.vue` 只接收一个已选任务的上下文，使用 `PracticeDialogue.vue` 提供六个阶段、请求提示和结束会话；不重复展示进阶任务目录。结束只显示已保存提示，不伪造路径完成状态。后端 `classroom_chat.py` 新增 `practice` 追问和总结兜底规则，并继续使用文档绑定校验、JWT 与 ChatHistory。
-- 对话消息由现有 ChatHistory 持久化；当前阶段和本地草稿用于当前 Web 会话，尚未把“提交成果/完成评价”伪装成已实现能力。
+当前实现：`AdvancedLearningPage.vue` 只接收一个已选任务的上下文，使用 `PracticeDialogue.vue` 提供六个阶段、请求提示、暂存恢复和提交评价；不重复展示进阶任务目录。`advanced_practice_sessions` 保存消息、当前阶段、已完成阶段、事实/假设、提交物和评价结果，`结束本次巩固` 只把会话置为 `paused`，`提交方案并完成` 才会置为 `completed`。
+- 实践追问仍通过现有课堂流式接口由学习助教 Agent 完成；任务生成 Agent 和资源审核 Agent 属于独立工作流，页面会明确区分，不能把本页描述为完整的多智能体协同展示。
 
 ### 后端与提示词任务
 
@@ -264,12 +264,11 @@ frontend/src/
 
 ```text
 GET  /learning/advanced/current       # 返回推荐任务和少量可选任务
-POST /learning/session                # 创建基础测试/巩固会话
-POST /learning/session/{id}/message   # 流式或普通追问
-POST /learning/session/{id}/pause     # 用户暂存退出
-POST /learning/session/{id}/finish    # 用户主动结束，不等于完成
-POST /learning/session/{id}/submit    # 提交成果并触发评价
-GET  /learning/session/{id}           # 恢复会话
+POST /learning/advanced/practice/sessions                 # 创建或恢复巩固会话
+PATCH /learning/advanced/practice/sessions/{id}             # 保存阶段和消息
+POST /learning/advanced/practice/sessions/{id}/end          # 暂存退出
+POST /learning/advanced/practice/sessions/{id}/submit       # 提交成果并触发评价
+GET   /learning/advanced/practice/sessions/{id}             # 读取会话
 ```
 
 如果时间不足，第一版先完成一条垂直链路：一个节点的题目测试 + 费曼反讲 + 一个企业案例巩固对话 + 一次提交评价，不要同时铺开多个领域。

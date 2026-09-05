@@ -131,7 +131,12 @@ const savePortrait = async () => {
   if (isSaving.value) return
   isSaving.value = true
   try {
-    const result = await initPortraitFromDialogue({ dialogue: buildDialogue() })
+    const result = await initPortraitFromDialogue({
+      dialogue: buildDialogue(),
+      identity: localStorage.getItem('learnmate_identity') || '',
+      direction: localStorage.getItem('learnmate_direction') || '',
+      goal: localStorage.getItem('learnmate_goal') || '',
+    })
     return getResponseData(result)
   } catch (error) {
     console.warn('[LearnMate] portrait save failed:', error)

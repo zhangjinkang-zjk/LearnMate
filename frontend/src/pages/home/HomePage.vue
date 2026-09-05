@@ -59,8 +59,9 @@
         <span class="platform-edge"></span>
       </div>
 
-      <button class="enter-link" type="button" @click="handleEnter">
-        <span>LET'S GO</span>
+      <p v-if="entryMessage" class="entry-status" role="status">{{ entryMessage }}</p>
+      <button class="enter-link" type="button" :disabled="isEntering" @click="handleEnter">
+        <span>{{ isEntering ? "PREPARING" : "LET'S GO" }}</span>
         <span class="enter-arrow" aria-hidden="true">↗</span>
       </button>
 
@@ -117,6 +118,7 @@
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { authApi } from "../../shared/api/authApi";
+import { learningApi } from "../../shared/api/learningApi";
 
 import tabletImage from "../../shared/assets/home/hdi-circle-8e23f1ab774009a1e1d254d85249c2f3-7g50i6bj4rpq-cutout.png";
 import laptopImage from "../../shared/assets/home/Late_2016_MacBook_Pro-cutout.png";
@@ -149,6 +151,8 @@ const codeCountdown = ref(0);
 let codeTimer;
 const loginError = ref("");
 const loginIntent = ref("overview");
+const isEntering = ref(false);
+const entryMessage = ref("");
 
 const openLogin = (intent = "overview") => {
   loginIntent.value = intent;
@@ -158,15 +162,70 @@ const openLogin = (intent = "overview") => {
 
 const handleTopLogin = () => {
   if (isAuthenticated.value) {
-    router.push("/learning/overview");
+    void enterLearningSpace();
     return;
   }
   openLogin("overview");
 };
 
+const getResponseData = response => response?.data?.data ?? response?.data ?? response;
+const hasOverviewContent = overview => Boolean(
+  overview?.path?.id ||
+  (Array.isArray(overview?.subjects) && overview.subjects.some(subject => subject?.id || subject?.name)),
+);
+
+const enterLearningSpace = async () => {
+  if (isEntering.value) return;
+  isEntering.value = true;
+  entryMessage.value = "";
+  let hasSavedProfile = Boolean(
+    String(localStorage.getItem("learnmate_direction") || "").trim(),
+  );
+  try {
+    const currentPathResponse = await learningApi.getCurrentPath();
+    const currentPath = getResponseData(currentPathResponse);
+    if (currentPath?.path_id) {
+      await router.push("/learning/overview");
+      return;
+    }
+
+    // 画像已经保存但路径生成中断时，复用服务端画像自动补建路径，避免回到首次定向。
+    const overviewResponse = await learningApi.getOverview();
+    const overview = getResponseData(overviewResponse);
+    const profile = overview?.profile || {};
+    hasSavedProfile = hasSavedProfile || Boolean(String(profile.direction || "").trim());
+    if (String(profile.direction || "").trim()) {
+      const generatedResponse = await learningApi.generatePathsFromDirection(profile.direction, profile.goal || "");
+      const generated = getResponseData(generatedResponse);
+      const hasPath = Array.isArray(generated?.paths) && generated.paths.some(path => path?.path_id);
+      if (hasPath) {
+        const refreshedOverview = getResponseData(await learningApi.getOverview());
+        if (hasOverviewContent(refreshedOverview)) {
+          localStorage.setItem("learnmate_onboarding_complete", "1");
+          await router.push("/learning/overview");
+          return;
+        }
+      }
+    }
+  } catch {
+    // 已有画像时保留当前入口，允许用户稍后重试生成，不再回到首次定向形成循环。
+    if (hasSavedProfile) {
+      entryMessage.value = "学习概览正在准备，请稍后再次进入。";
+      return;
+    }
+  } finally {
+    isEntering.value = false;
+  }
+  if (hasSavedProfile) {
+    entryMessage.value = "学习概览正在准备，请稍后再次进入。";
+    return;
+  }
+  await router.push(`/select-identity?fresh=${Date.now()}`);
+};
+
 const handleEnter = () => {
   if (isAuthenticated.value) {
-    router.push(`/select-identity?fresh=${Date.now()}`);
+    void enterLearningSpace();
     return;
   }
   openLogin("identity");
@@ -229,7 +288,7 @@ const submitLogin = async () => {
     }
     isAuthenticated.value = true;
     isLoginOpen.value = false;
-    router.push(loginIntent.value === "overview" ? "/learning/overview" : `/select-identity?fresh=${Date.now()}`);
+    await enterLearningSpace();
   } catch (error) {
     loginError.value = error?.message || "Login failed. Please try again.";
   } finally {
@@ -889,6 +948,24 @@ const toggleBackpack = () => {
   box-shadow: 0 16px 30px rgba(4, 20, 15, 0.38), inset 0 1px 0 rgba(255, 255, 210, 0.72);
 }
 
+.enter-link:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.entry-status {
+  position: absolute;
+  right: clamp(22px, 5vw, 74px);
+  bottom: 88px;
+  z-index: 7;
+  max-width: min(300px, calc(100vw - 44px));
+  margin: 0;
+  color: rgba(243, 240, 231, 0.82);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: right;
+}
+
 .enter-arrow {
   font-size: 20px;
   line-height: 0.65;
@@ -1140,6 +1217,13 @@ const toggleBackpack = () => {
     right: 50%;
     bottom: 20px;
     transform: translateX(50%);
+  }
+
+  .entry-status {
+    right: 50%;
+    bottom: 78px;
+    transform: translateX(50%);
+    text-align: center;
   }
 
   .enter-link:hover {

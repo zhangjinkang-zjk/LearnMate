@@ -69,8 +69,13 @@ class ClassroomChatRequest(BaseModel):
         description="当前章节绑定的文档资源 ID；不传时兼容旧课堂上下文",
     )
     segment: dict = Field(default_factory=dict, description="前端当前幕快照（title/script/board_items/points/example/question）")
-    scenario: str = Field(default="free", description="open | feynman | free")
+    scenario: str = Field(default="free", description="open | feynman | practice | practice_summary | free")
     text: str = Field(default="", description="学生的话：选择结果 / 费曼反讲文本 / 自由提问")
+    practice_session_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="学习巩固会话 ID；实践对话按会话隔离历史",
+    )
 
 
 class GenerateNodeResourcesRequest(BaseModel):

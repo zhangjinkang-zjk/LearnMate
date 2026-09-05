@@ -5,6 +5,7 @@
         <p class="eyebrow">学习巩固 · {{ task.kind_label || '实践任务' }}</p>
         <h2>先想清楚，再给方案</h2>
         <p>LearnMate 会根据你的回答追问证据、假设和取舍，不会直接替你完成任务。</p>
+        <small class="practice-agent-note">本轮由学习助教 Agent 负责追问；任务生成与资源审核属于独立流程。</small>
       </div>
       <div class="phase-progress" aria-label="巩固阶段进度">
         <span class="phase-progress__count">{{ currentPhaseIndex + 1 }} / {{ phases.length }}</span>
@@ -13,7 +14,8 @@
       </div>
     </header>
 
-    <div class="practice-dialogue__body">
+    <div v-if="isLoadingSession" class="practice-session-loading" role="status">正在恢复本次巩固会话…</div>
+    <div v-else class="practice-dialogue__body">
       <div ref="messageList" class="practice-messages" aria-live="polite">
         <template v-for="(message, index) in messages" :key="`${message.role}-${index}`">
           <div v-if="message.text || message.role === 'user'" class="practice-message" :class="`is-${message.role}`">
@@ -36,16 +38,22 @@
       </aside>
     </div>
 
+    <section v-if="evaluation" class="practice-evaluation" aria-live="polite">
+      <div><p class="eyebrow">提交结果</p><strong>{{ evaluation.label }}</strong><p>{{ evaluation.passed ? '这次方案已经达到当前任务的验收线。' : '方案已经保存，下面是下一轮需要补强的地方。' }}</p></div>
+      <strong class="practice-evaluation__score">{{ evaluation.score }}<small>分</small></strong>
+      <ul><li v-for="item in evaluation.next_steps || []" :key="item">{{ item }}</li></ul>
+    </section>
     <p v-if="errorMessage" class="practice-error" role="status">{{ errorMessage }}</p>
-    <form class="practice-composer" @submit.prevent="sendMessage()">
+    <form v-if="!evaluation" class="practice-composer" @submit.prevent="sendMessage()">
       <label class="sr-only" for="practice-answer">你的方案思考</label>
-      <textarea id="practice-answer" v-model="draft" rows="4" maxlength="1800" :disabled="isStreaming" :placeholder="`围绕“${currentPhase.label}”写下你的判断…`" @keydown.ctrl.enter.prevent="sendMessage()" @keydown.meta.enter.prevent="sendMessage()"></textarea>
+      <textarea id="practice-answer" v-model="draft" rows="4" maxlength="1800" :disabled="isStreaming || isLoadingSession || isSubmitting" :placeholder="`围绕“${currentPhase.label}”写下你的判断…`" @keydown.ctrl.enter.prevent="sendMessage()" @keydown.meta.enter.prevent="sendMessage()"></textarea>
       <div class="practice-actions">
         <span>{{ draft.length }} / 1800</span>
         <div>
-          <button class="button button--quiet" type="button" :disabled="isStreaming" @click="requestHint">请求一个提示</button>
-          <button class="button button--quiet" type="button" :disabled="isStreaming" @click="$emit('end')">结束本次巩固</button>
-          <button class="button button--primary" type="submit" :disabled="!draft.trim() || isStreaming"><LoaderCircle v-if="isStreaming" class="spin" :size="16" /><Send v-else :size="16" />发送</button>
+          <button class="button button--quiet" type="button" :disabled="isStreaming || isLoadingSession || isSubmitting" @click="requestHint">请求一个提示</button>
+          <button class="button button--quiet" type="button" :disabled="isStreaming || isLoadingSession || isSubmitting || !sessionId" @click="endSession">结束本次巩固</button>
+          <button class="button button--secondary" type="button" :disabled="!canSubmit || isStreaming || isLoadingSession || isSubmitting" @click="submitSolution"><LoaderCircle v-if="isSubmitting" class="spin" :size="16" /><CheckCircle2 v-else :size="16" />提交方案并完成</button>
+          <button class="button button--primary" type="submit" :disabled="!draft.trim() || isStreaming || isLoadingSession || isSubmitting"><LoaderCircle v-if="isStreaming" class="spin" :size="16" /><Send v-else :size="16" />发送</button>
         </div>
       </div>
     </form>
@@ -54,8 +62,9 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { LoaderCircle, Send } from 'lucide-vue-next'
+import { CheckCircle2, LoaderCircle, Send } from 'lucide-vue-next'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
+import { advancedLearningApi } from '@/shared/api/advancedLearningApi'
 import { renderMarkdown } from '@/shared/lib/markdown'
 
 const props = defineProps({
@@ -65,7 +74,7 @@ const props = defineProps({
   chapterContent: { type: String, default: '' },
   resourceId: { type: [Number, String], default: null },
 })
-defineEmits(['end'])
+const emit = defineEmits(['end', 'completed'])
 
 const phases = [
   { id: 'understand', label: '理解问题', hint: '界定目标与限制' },
@@ -81,10 +90,18 @@ const messages = ref([])
 const draft = ref('')
 const errorMessage = ref('')
 const isStreaming = ref(false)
+const isLoadingSession = ref(false)
+const isSubmitting = ref(false)
+const sessionId = ref('')
+const evaluation = ref(null)
+const confirmedFacts = ref([])
+const assumptions = ref([])
 const messageList = ref(null)
 let requestController = null
+let sessionLoadVersion = 0
 const currentPhaseIndex = computed(() => phases.findIndex((phase) => phase.id === currentPhase.value.id))
 const phaseProgress = computed(() => Math.round((completedPhaseIds.value.length / phases.length) * 100))
+const canSubmit = computed(() => messages.value.some((message) => message.role === 'user' && message.text?.trim()))
 
 function createWelcome() {
   return { role: 'assistant', text: `我们从“${currentPhase.value.label}”开始。先说说这个任务要解决的核心问题，以及你准备依据哪些信息判断。` }
@@ -99,6 +116,70 @@ function resetConversation() {
   draft.value = ''
   errorMessage.value = ''
   isStreaming.value = false
+  isSubmitting.value = false
+  sessionId.value = ''
+  evaluation.value = null
+  confirmedFacts.value = []
+  assumptions.value = []
+}
+
+function unwrap(response) {
+  return response?.data?.data ?? response?.data ?? response
+}
+
+function hydrateSession(session) {
+  sessionId.value = String(session?.session_id || '')
+  const phase = phases.find((item) => item.id === session?.current_phase)
+  currentPhase.value = phase || phases[0]
+  completedPhaseIds.value = Array.isArray(session?.completed_phase_ids)
+    ? session.completed_phase_ids.filter((id) => phases.some((item) => item.id === id))
+    : []
+  const restoredMessages = Array.isArray(session?.messages)
+    ? session.messages.filter((message) => message && ['user', 'assistant'].includes(message.role) && String(message.text || '').trim())
+    : []
+  messages.value = restoredMessages.length ? restoredMessages : [createWelcome()]
+  confirmedFacts.value = Array.isArray(session?.confirmed_facts) ? session.confirmed_facts : []
+  assumptions.value = Array.isArray(session?.assumptions) ? session.assumptions : []
+  evaluation.value = session?.evaluation || null
+}
+
+async function initializeSession() {
+  const loadVersion = ++sessionLoadVersion
+  resetConversation()
+  if (!props.pathId || !props.nodeId || !props.task?.id) return
+  isLoadingSession.value = true
+  try {
+    const response = await advancedLearningApi.openPracticeSession({
+      task_id: String(props.task.id),
+      path_id: Number(props.pathId),
+      node_id: Number(props.nodeId),
+      task: props.task,
+    })
+    if (loadVersion !== sessionLoadVersion) return
+    hydrateSession(unwrap(response))
+    await scrollToLatest()
+  } catch (error) {
+    if (loadVersion === sessionLoadVersion) {
+      errorMessage.value = error.response?.data?.detail || error.message || '巩固会话暂时无法打开，请稍后重试。'
+    }
+  } finally {
+    if (loadVersion === sessionLoadVersion) isLoadingSession.value = false
+  }
+}
+
+function sessionPayload() {
+  return {
+    current_phase: currentPhase.value.id,
+    completed_phase_ids: completedPhaseIds.value,
+    messages: messages.value.map((message) => ({ role: message.role, text: message.text })),
+    confirmed_facts: confirmedFacts.value,
+    assumptions: assumptions.value,
+  }
+}
+
+async function saveSessionState() {
+  if (!sessionId.value || evaluation.value) return
+  await advancedLearningApi.savePracticeSession(sessionId.value, sessionPayload())
 }
 
 function selectPhase(phase) {
@@ -126,7 +207,7 @@ async function scrollToLatest() {
 
 async function sendMessage(forcedText = '', options = { advancesPhase: true }) {
   const text = String(forcedText || draft.value).trim()
-  if (!text || isStreaming.value) return
+  if (!text || isStreaming.value || isLoadingSession.value || isSubmitting.value || !sessionId.value || evaluation.value) return
   messages.value.push({ role: 'user', text })
   const responseMessage = reactive({ role: 'assistant', text: '' })
   messages.value.push(responseMessage)
@@ -136,10 +217,12 @@ async function sendMessage(forcedText = '', options = { advancesPhase: true }) {
   requestController = new AbortController()
   await scrollToLatest()
   try {
+    await saveSessionState()
     await fundamentalsApi.streamAssistantReply({
       path_id: Number(props.pathId),
       node_id: Number(props.nodeId),
       resource_id: props.resourceId ? Number(props.resourceId) : null,
+      practice_session_id: sessionId.value,
       scenario: 'practice',
       text,
       segment: {
@@ -160,6 +243,7 @@ async function sendMessage(forcedText = '', options = { advancesPhase: true }) {
     }, requestController.signal)
     if (!responseMessage.text.trim()) throw new Error('LearnMate 暂时没有返回有效追问')
     if (options.advancesPhase !== false) advancePhase()
+    await saveSessionState()
   } catch (error) {
     if (error.name === 'AbortError') return
     if (responseMessage.text.trim()) responseMessage.text += '\n\n> 回复中断了，你可以继续补充。'
@@ -172,6 +256,39 @@ async function sendMessage(forcedText = '', options = { advancesPhase: true }) {
   }
 }
 
+async function endSession() {
+  if (!sessionId.value || isStreaming.value || isSubmitting.value) return
+  errorMessage.value = ''
+  try {
+    await saveSessionState()
+    const response = await advancedLearningApi.endPracticeSession(sessionId.value)
+    hydrateSession(unwrap(response))
+    emit('end')
+  } catch (error) {
+    errorMessage.value = error.response?.data?.detail || error.message || '巩固状态保存失败，请稍后重试。'
+  }
+}
+
+async function submitSolution() {
+  if (!sessionId.value || !canSubmit.value || isStreaming.value || isSubmitting.value || evaluation.value) return
+  isSubmitting.value = true
+  errorMessage.value = ''
+  const finalSubmission = draft.value.trim() || [...messages.value].reverse().find((message) => message.role === 'user')?.text || ''
+  try {
+    const response = await advancedLearningApi.submitPracticeSession(sessionId.value, {
+      ...sessionPayload(),
+      final_submission: finalSubmission,
+    })
+    const saved = unwrap(response)
+    hydrateSession(saved)
+    emit('completed', saved?.evaluation || null)
+  } catch (error) {
+    errorMessage.value = error.response?.data?.detail || error.message || '方案提交失败，请稍后重试。'
+  } finally {
+    isSubmitting.value = false
+  }
+}
+
 function advancePhase() {
   const index = currentPhaseIndex.value
   if (index < 0) return
@@ -180,8 +297,11 @@ function advancePhase() {
   if (nextPhase) currentPhase.value = nextPhase
 }
 
-watch(() => props.task?.id, resetConversation, { immediate: true })
-onBeforeUnmount(() => requestController?.abort())
+watch(() => props.task?.id, () => { void initializeSession() }, { immediate: true })
+onBeforeUnmount(() => {
+  sessionLoadVersion += 1
+  requestController?.abort()
+})
 </script>
 
 <style scoped>
@@ -214,4 +334,19 @@ onBeforeUnmount(() => requestController?.abort())
   .practice-guide { max-height: 150px; gap: 12px; padding: 13px 18px; }
   .practice-composer { padding: 10px 18px 15px; }
 }
+</style>
+
+<style scoped>
+.practice-agent-note { display: block; margin-top: 7px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.practice-dialogue .button--secondary { border-color: #d5e2c8; background: #eef5e6; color: var(--accent-deep); }
+.practice-dialogue .button--secondary:hover { border-color: #b9c9b2; background: #e3eed9; }
+.practice-session-loading { display: grid; min-height: 280px; place-items: center; color: var(--muted); font-size: 12px; }
+.practice-evaluation { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(180px, .8fr); align-items: center; gap: 18px; padding: 18px 22px; border-top: 1px solid var(--line); background: #f3f8ea; }
+.practice-evaluation .eyebrow { margin-bottom: 5px; }
+.practice-evaluation > div > strong { color: var(--accent-deep); font-size: 15px; }
+.practice-evaluation p:not(.eyebrow) { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.practice-evaluation__score { color: var(--accent-deep); font-size: 30px; line-height: 1; }
+.practice-evaluation__score small { margin-left: 3px; font-size: 11px; }
+.practice-evaluation ul { display: grid; gap: 5px; margin: 0; padding-left: 17px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+@media (max-width: 780px) { .practice-evaluation { grid-template-columns: 1fr auto; gap: 12px; padding: 15px 18px; }.practice-evaluation ul { grid-column: 1 / -1; } }
 </style>
