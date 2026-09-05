@@ -55,8 +55,18 @@ const portrait = reactive({ cognition: '', learning_goal: '', profile_summary: '
 const radar = ref(null)
 
 const initial = computed(() => username.value.trim().slice(0, 1).toUpperCase() || '学')
-const traitLabels = { knowbase: '知识掌握', commonmis: '易错点', learning_pace: '学习节奏', interest: '兴趣方向', strengths: '学习强项', weaknesses: '学习弱项' }
-const traitItems = computed(() => Object.entries(portrait.traits || {}).map(([key, raw]) => { const value = typeof raw === 'object' ? raw.value : raw; if (!value) return null; const confidence = typeof raw === 'object' && Number.isFinite(Number(raw.confidence)) ? Math.round(Number(raw.confidence) * 100) : 0; return { key, label: traitLabels[key] || key, value: String(value), confidence } }).filter(Boolean))
+const traitLabels = { knowbase: '知识掌握', commonmis: '易错点', learning_pace: '学习节奏', interest: '兴趣方向', strengths: '学习强项', weaknesses: '学习弱项', updated_at: '更新时间', created_at: '创建时间', learning_direction: '学习方向', learning_direction_goal: '学习目标', learning_direction_subjects: '学习主题', personality_tags: '个性标签', cognition: '认知偏好', learning_goal: '学习目标', profile_summary: '画像总结', source: '信息来源', confidence: '可信度' }
+const formatTraitValue = (key, raw) => {
+  const value = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw.value ?? raw.text) : raw
+  if (Array.isArray(value)) return value.filter(Boolean).join('、')
+  if (!value) return ''
+  if (key === 'updated_at') {
+    const date = new Date(value)
+    if (!Number.isNaN(date.getTime())) return date.toLocaleString('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
+  }
+  return String(value)
+}
+const traitItems = computed(() => Object.entries(portrait.traits || {}).map(([key, raw]) => { const value = formatTraitValue(key, raw); if (!value) return null; const confidence = typeof raw === 'object' && Number.isFinite(Number(raw.confidence)) ? Math.round(Number(raw.confidence) * 100) : 0; return { key, label: traitLabels[key] || key, value, confidence } }).filter(Boolean))
 const fallbackDimensions = [{ key: 'memory', label: '记忆', score: 0, desc: '基础回忆与知识提取表现' }, { key: 'understanding', label: '理解', score: 0, desc: '概念理解与知识关联表现' }, { key: 'application', label: '应用', score: 0, desc: '场景迁移与实际应用表现' }, { key: 'analysis', label: '分析', score: 0, desc: '问题拆解与综合判断表现' }, { key: 'breadth', label: '广度', score: 0, desc: '知识覆盖与探索范围' }, { key: 'persistence', label: '坚持', score: 0, desc: '学习投入与持续参与' }]
 const radarDimensions = computed(() => { const dimensions = Array.isArray(radar.value?.dimensions) ? radar.value.dimensions : []; return fallbackDimensions.map((fallback) => { const current = dimensions.find((item) => item.key === fallback.key) || {}; return { ...fallback, ...current, desc: fallback.desc, score: Math.max(0, Math.min(100, Math.round(Number(current.score ?? fallback.score) || 0))) } }) })
 const hasRadarData = computed(() => Array.isArray(radar.value?.dimensions) && radar.value.dimensions.some((item) => Number(item.score) > 0))

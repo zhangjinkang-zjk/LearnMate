@@ -68,7 +68,7 @@
             <div class="panel-heading"><div><p class="eyebrow">当前交付</p><h2>把你的判断写下来</h2></div><span>{{ draft.length }} 字</span></div>
             <textarea v-model="draft" maxlength="6000" placeholder="记录问题判断、材料依据、方案取舍和下一步验证……"></textarea>
             <div class="submission-footer"><span>内容会保存在当前浏览器草稿中，后续接入评价服务后可提交验收。</span><button class="button button--primary" type="button" :disabled="!draft.trim()" @click="saveDraft"><Save :size="15" />保存阶段成果</button></div>
-            <p v-if="savedMessage" class="saved-message"><Check :size="14" />{{ savedMessage }}</p>
+            <Transition name="saved-message"><p v-if="savedMessage" class="saved-message"><Check :size="14" />{{ savedMessage }}</p></Transition>
           </section>
         </main>
 
@@ -192,4 +192,6 @@ onBeforeUnmount(() => {
 @media (max-width: 1120px) { .workspace-layout { grid-template-columns: 200px minmax(0, 1fr); }.workspace-layout > :last-child { grid-column: 1 / -1; } }
 @media (max-width: 760px) { .workspace-header { align-items: flex-start; flex-direction: column; }.workspace-layout { grid-template-columns: 1fr; }.workspace-materials { grid-template-columns: 1fr 1fr; align-items: start; }.workspace-layout > :last-child { grid-column: auto; }.submission-footer { align-items: flex-start; flex-direction: column; }.submission-footer .button { width: 100%; } }
 @media (max-width: 520px) { .workspace-materials { grid-template-columns: 1fr; }.task-document { padding: 27px 20px; }.document-toolbar { align-items: flex-start; flex-direction: column; }.workspace-header h1 { font-size: 25px; } }
+.saved-message-enter-active, .saved-message-leave-active { transition: opacity .18s ease, transform .18s ease; }
+.saved-message-enter-from, .saved-message-leave-to { opacity: 0; transform: translateY(-4px); }
 </style>
