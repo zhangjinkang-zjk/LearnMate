@@ -4,7 +4,6 @@
     <section class="planner-panel surface">
       <form class="todo-form" @submit.prevent="addTodo">
         <input v-model.trim="draft" type="text" placeholder="添加一个待办事项" aria-label="添加待办事项" />
-        <label class="duration-picker"><span>专注 {{ draftMinutes }} 分钟</span><input v-model.number="draftMinutes" type="range" min="5" max="120" step="5" aria-label="默认专注时长" /></label>
         <button class="button button--accent" type="submit" :disabled="!draft">添加</button>
       </form>
       <Transition name="planner-notice"><p v-if="notice" class="planner-notice" role="status">{{ notice }}</p></Transition>

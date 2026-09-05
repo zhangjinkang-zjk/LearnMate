@@ -2,7 +2,7 @@
   <div class="app-shell">
     <aside class="app-sidebar" :class="{ 'is-open': sidebarOpen }">
       <div class="brand-lockup">
-        <span class="brand-name">LearnMate</span>
+        <RouterLink class="brand-name" to="/" aria-label="返回首页">LearnMate</RouterLink>
       </div>
 
       <div class="sidebar-nav-dock">
@@ -128,6 +128,6 @@ function toggleTheme() {
 async function logout() {
   clearAuthSession()
   sidebarOpen.value = false
-  await router.replace({ name: 'login' })
+  await router.replace({ name: 'home' })
 }
 </script>
