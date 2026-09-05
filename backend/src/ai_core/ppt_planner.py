@@ -13,12 +13,14 @@ from backend.src.utils.json_parser import parse_llm_json
 logger = logging.getLogger(__name__)
 
 # PPT 并行生成参数
-PPT_PAGES_PER_SECTION = 2    # 每个章节 1-3 页（AI 按内容复杂度自行决定）
-PPT_DEFAULT_SECTIONS = 11    # 默认 11 章节（22 页左右，更接近完整学习课件）
+PPT_PAGES_PER_SECTION = 1    # 默认每章 1 页；复杂章节最多由提示词扩展到 2 页
+PPT_MAX_PAGES_PER_SECTION = 2
+PPT_MAX_PAGES_PER_DECK = 24  # 控制页面导航规模，标准课程可覆盖核心逻辑并保持两排以内
+PPT_DEFAULT_SECTIONS = 11    # 默认 11 章节（约 11-22 页，按章节复杂度调整）
 PPT_SECTION_COUNT_BY_DEPTH = {
-    "overview": 7,            # 快速概览 → 14 页左右
-    "standard": 11,           # 标准讲解 → 22 页左右
-    "deep": 14,               # 逐页详解 → 28 页左右
+    "overview": 7,            # 快速概览 → 约 7-14 页
+    "standard": 11,           # 标准讲解 → 约 11-22 页
+    "deep": 14,               # 逐页详解 → 约 14-28 页
 }
 PPT_SECTION_COUNT_BOUNDS = {
     "overview": (7, 9),
@@ -81,7 +83,7 @@ async def generate_ppt_outline(topic: str, kb: str = "", guidance: str = "", cou
 知识库参考：{kb[:1200] if kb and "暂无" not in kb else "无；请使用你作为教师的通用学科知识进行规划，但不要编造具体来源"}
 
 ## 课程规划原则
-- 固定 {count} 个章节（必须恰好 {count} 个），每章后续生成 2 页幻灯片，总共约 {total_pages} 页。
+- 固定 {count} 个章节（必须恰好 {count} 个），每章默认生成 1 页；只有复杂章节才增加第 2 页，总量约 {total_pages}-{count * 2} 页。
 - 章节数是根据课程内容广度估算的，不要主动压缩；如果主题是完整学科或课程导论，必须覆盖足够多的核心模块，不能只做 5-8 页式速览。
 - 即使没有知识库，也要按该学科的经典教学顺序规划：先修概念 → 核心定义 → 基本规则/原理 → 方法步骤 → 小例题 → 应用场景 → 易错辨析 → 总结迁移。
 - 不要平均分配“概念名”；每章必须有明确教学角色，例如：概念奠基、规则推导、方法操作、对比辨析、案例应用、综合检查。

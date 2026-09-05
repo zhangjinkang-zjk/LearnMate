@@ -18,7 +18,7 @@ from backend.src.models.usermodel import User
 from backend.src.utils.database import init_db
 from backend.src.utils.json_parser import parse_llm_json
 from backend.src.service.notification.service import check_and_create_ai_tip
-from backend.src.service.portrait.service import PortraitRadarService
+from backend.src.service.portrait.service import PortraitRadarService, record_learning_event
 
 
 def _normalize_db_answer(raw: str, multi: bool = False) -> str:
@@ -430,6 +430,24 @@ class ExamService:
         session_id = None
         saved_questions = []
         for r in saved_resources:
+            # 复用资源生成阶段已经建立的题目会话；旧资源的占位记录可能尚未
+            # 绑定节点，这里补齐 node_id 后再交给路径服务做门禁校验。
+            if r.session_id:
+                if node_id:
+                    await ExamRecord.filter(
+                        session_id=r.session_id,
+                        user_id=user_id,
+                        node_id__isnull=True,
+                    ).update(node_id=node_id)
+                existing = await ExamService.get_session(r.session_id, user_id)
+                if existing and existing.get("total_questions", 0) > 0:
+                    session_id = r.session_id
+                    saved_questions = [
+                        item["question"]
+                        for item in existing.get("records", [])
+                        if item.get("question")
+                    ]
+                    break
             if r.content:
                 try:
                     questions = parse_llm_json(r.content)
@@ -542,12 +560,14 @@ class ExamService:
             )
 
         # 更新知识点掌握度
+        tags = []
         if question.knowledge_tags:
             try:
                 tags = json.loads(question.knowledge_tags)
             except (json.JSONDecodeError, TypeError):
                 logger.warning("知识点标签 JSON 解析失败 question_id=%s", question_id)
                 tags = []
+            tags = [str(tag).strip()[:128] for tag in tags if str(tag).strip()][:12]
             for tag in tags:
                 mastery, _ = await KnowledgeMastery.get_or_create(
                     user_id=user_id, knowledge_tag=tag,
@@ -567,6 +587,24 @@ class ExamService:
                     mastery.mastery_level = "beginner"
                 mastery.last_practiced_at = datetime.now()
                 await mastery.save()
+
+        try:
+            await record_learning_event(
+                user_id,
+                "assessment",
+                path_id=None,
+                node_id=node_id,
+                knowledge_tags=tags,
+                score=100.0 if is_correct else 0.0,
+                metadata={
+                    "question_type": qt,
+                    "session_id": sid,
+                    "is_correct": bool(is_correct),
+                    "source": "diagnosis_or_exam",
+                },
+            )
+        except Exception:
+            logger.exception("学习事件记录失败 user_id=%s question_id=%s", user_id, question_id)
 
         await check_and_create_ai_tip(user_id)
 

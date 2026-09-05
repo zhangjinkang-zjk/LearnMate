@@ -37,6 +37,20 @@
         </div>
       </div>
 
+      <button
+        v-if="workflowState.available"
+        class="sidebar-workflow-launcher"
+        type="button"
+        title="查看智能体工作流"
+        aria-label="查看智能体工作流"
+        :aria-expanded="workflowState.open"
+        @click="setWorkflowOpen(!workflowState.open)"
+      >
+        <Workflow :size="18" stroke-width="1.8" />
+        <span>智能体流程</span>
+        <i v-if="isWorkflowActive" aria-hidden="true"></i>
+      </button>
+
       <div class="sidebar-footer">
         <RouterLink v-for="item in utilityNavigation" :key="item.to" :to="item.to" class="sidebar-link">
           <component :is="item.icon" :size="17" stroke-width="1.8" />
@@ -89,9 +103,10 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Bell, ClipboardList, LogOut, Moon, Sun } from 'lucide-vue-next'
+import { Bell, ClipboardList, LogOut, Moon, Sun, Workflow } from 'lucide-vue-next'
 import { allNavigation, learningNavigationGroups, primaryNavigation, secondaryNavigation, utilityNavigation } from '@/shared/config/navigation'
 import { clearAuthSession } from '@/shared/auth/session'
+import { setWorkflowOpen, workflowState } from '@/entities/agent/agentWorkflowState'
 
 const route = useRoute()
 const router = useRouter()
@@ -100,6 +115,7 @@ const currentTitle = computed(() => allNavigation.find((item) => route.path.star
 const displayName = computed(() => localStorage.getItem('learnmate_username') || '我的学习者')
 const avatarLetter = computed(() => displayName.value.trim().slice(0, 1).toUpperCase() || '学')
 const isDarkMode = ref(localStorage.getItem('learnmate_theme') === 'dark')
+const isWorkflowActive = computed(() => ['running', 'reviewing', 'retrying', 'saving'].includes(workflowState.nodes?.[workflowState.activeAgentId]?.status))
 
 if (isDarkMode.value) document.documentElement.classList.add('is-dark')
 

@@ -5,8 +5,10 @@ import logging
 import os
 import asyncio
 import time as _time
+from datetime import datetime
 from backend.src.models.usermodel import User
 from backend.src.models.portraitmodel import User_picture
+from backend.src.models.study_model import LearningEvent
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,123 @@ def parse_traits(raw: str | None) -> dict:
 
 def dump_traits(traits: dict) -> str:
     return json.dumps(traits, ensure_ascii=False)
+
+
+def _normalise_learning_score(score: float | int | None) -> float | None:
+    """Normalize an optional activity score to the persisted 0-100 range."""
+    if score is None:
+        return None
+    try:
+        value = float(score)
+    except (TypeError, ValueError):
+        return None
+    if value <= 1:
+        value *= 100
+    return round(max(0.0, min(100.0, value)), 1)
+
+
+async def record_learning_event(
+    user_id: int,
+    event_type: str,
+    *,
+    path_id: int | None = None,
+    node_id: int | None = None,
+    knowledge_tags: list[str] | None = None,
+    score: float | int | None = None,
+    evidence: str | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    """Persist one learning action and update the dynamic portrait snapshot.
+
+    The event table is the durable audit trail; ``traits.learning_signals`` is a
+    compact read model consumed by overview and prompt builders.  Keeping both
+    means a failed LLM enrichment cannot erase the fact that the learner acted.
+    """
+    user = await User.filter(id=user_id).prefetch_related("picture").first()
+    if not user:
+        raise ValueError("用户不存在")
+
+    clean_type = " ".join(str(event_type or "learning").split())[:32] or "learning"
+    clean_tags = []
+    for tag in knowledge_tags or []:
+        value = " ".join(str(tag or "").split())[:128]
+        if value and value not in clean_tags:
+            clean_tags.append(value)
+    clean_tags = clean_tags[:12]
+    clean_evidence = " ".join(str(evidence or "").split())[:500] or None
+    clean_metadata = metadata if isinstance(metadata, dict) else {}
+    normalised_score = _normalise_learning_score(score)
+
+    event = await LearningEvent.create(
+        user_id=user_id,
+        event_type=clean_type,
+        path_id=path_id,
+        node_id=node_id,
+        knowledge_tags=json.dumps(clean_tags, ensure_ascii=False) if clean_tags else None,
+        score=normalised_score,
+        evidence=clean_evidence,
+        metadata=json.dumps(clean_metadata, ensure_ascii=False) if clean_metadata else None,
+    )
+
+    picture = await user.picture
+    if not picture:
+        picture = await User_picture.create()
+        user.picture = picture
+        await user.save()
+
+    traits = parse_traits(picture.traits)
+    signals = traits.get("learning_signals")
+    if not isinstance(signals, dict):
+        signals = {}
+    activity_counts = signals.get("activity_counts")
+    if not isinstance(activity_counts, dict):
+        activity_counts = {}
+    activity_counts[clean_type] = int(activity_counts.get(clean_type, 0) or 0) + 1
+
+    recent = signals.get("recent_scores")
+    if not isinstance(recent, list):
+        recent = []
+    if normalised_score is not None:
+        recent.append({
+            "score": normalised_score,
+            "event_type": clean_type,
+            "node_id": node_id,
+            "created_at": str(event.created_at or datetime.now()),
+        })
+    recent = recent[-20:]
+    scored = [item for item in recent if isinstance(item, dict) and isinstance(item.get("score"), (int, float))]
+    average_score = round(sum(float(item["score"]) for item in scored) / len(scored), 1) if scored else None
+    signals.update({
+        "total_events": int(signals.get("total_events", 0) or 0) + 1,
+        "activity_counts": activity_counts,
+        "recent_scores": recent,
+        "average_score": average_score,
+        "last_event": {
+            "type": clean_type,
+            "path_id": path_id,
+            "node_id": node_id,
+            "knowledge_tags": clean_tags,
+            "score": normalised_score,
+            "created_at": str(event.created_at or datetime.now()),
+        },
+    })
+    traits["learning_signals"] = signals
+    traits["updated_at"] = str(datetime.now())
+    picture.traits = dump_traits(traits)
+    await picture.save()
+
+    try:
+        from backend.src.service.chat.service import invalidate_portrait_cache
+        invalidate_portrait_cache(user_id)
+    except Exception:
+        logger.debug("画像缓存刷新失败 user_id=%s", user_id, exc_info=True)
+
+    return {
+        "event_id": event.id,
+        "event_type": clean_type,
+        "total_events": signals["total_events"],
+        "average_score": average_score,
+    }
 
 
 def trait_display(traits: dict, key: str) -> str | None:
@@ -153,6 +272,19 @@ def format_portrait(picture, show_missing: bool = False, radar_data: dict | None
             level_cn = {"beginner": "入门", "learning": "学习中", "proficient": "熟练", "mastered": "已掌握"}.get(m.get("level"), m.get("level"))
             lines.append(f"  - {m.get('tag')}：{level_cn}（正确率 {m.get('accuracy', 0)}）")
 
+    # 学习行为读模型：供路径、资源和课堂智能体感知画像的持续变化。
+    signals = traits.get("learning_signals")
+    if isinstance(signals, dict) and signals.get("total_events"):
+        counts = signals.get("activity_counts") if isinstance(signals.get("activity_counts"), dict) else {}
+        count_text = "、".join(f"{key}:{value}" for key, value in list(counts.items())[:5])
+        last = signals.get("last_event") if isinstance(signals.get("last_event"), dict) else {}
+        last_score = last.get("score")
+        score_text = f"，最近一次得分 {last_score}" if isinstance(last_score, (int, float)) else ""
+        lines.append(
+            f"学习行为：累计 {signals.get('total_events', 0)} 次"
+            f"（{count_text or '暂无分类'}），近期平均得分 {signals.get('average_score') or '暂无'}{score_text}"
+        )
+
     if picture.profile_summary:
         lines.append(f"画像总结：{picture.profile_summary}")
 
@@ -197,9 +329,9 @@ def _fallback_interview_question(step: int, dialogue: list[dict], max_steps: int
     seed = sum(ord(char) for char in seed_text)
     question_variants = [
         [
-            "最近有没有一个你想亲手做成、处理好或交付的东西？不用专业术语，比如把数据分析清楚、做个小工具，或让知识库能回答问题。",
-            "有没有一件事是你现在总要照着别人做，但希望以后能自己完成？直接说事情就行，比如写接口、做分析或排查故障。",
-            "如果这段时间只练会一件能派上用场的本领，你最想是哪一件？可以说一个任务、一个作品，甚至一个关键词。",
+            "你现在最想系统学哪一个方向或主题？可以说一门学科、一个技术领域或一项工作技能，比如 Python 数据分析、智能体应用开发、机械制图。",
+            "如果先选一个方向开始学，你会选什么？说关键词就可以，比如前端开发、产品设计、数据分析；还没想好也可以直接说。",
+            "最近最想弄懂哪一类知识或技能？不用想得很完整，先告诉我一个方向，例如编程、项目管理或知识库应用。",
         ],
         [
             f"如果把「{first}」做好了，你最想拿它解决什么？可以说会用到的人、场景，或你希望看到的结果。",
@@ -270,6 +402,11 @@ class PortraitChatHistory_Service:
                 picture.personality_tags = personality_tags
 
         await picture.save()
+        try:
+            from backend.src.service.chat.service import invalidate_portrait_cache
+            invalidate_portrait_cache(user_id)
+        except Exception:
+            logger.debug("初始画像缓存刷新失败 user_id=%s", user_id, exc_info=True)
         return user, "画像初始化成功"
 
     @staticmethod
@@ -289,6 +426,7 @@ class PortraitChatHistory_Service:
             "traits": parse_traits(picture.traits),
             "profile_summary": picture.profile_summary,
         }
+        data["learning_signals"] = data["traits"].get("learning_signals", {})
         return data, "获取画像成功"
 
     @staticmethod
@@ -337,6 +475,11 @@ class PortraitChatHistory_Service:
         if cognition and not picture.cognition:
             picture.cognition = cognition
         await picture.save()
+        try:
+            from backend.src.service.chat.service import invalidate_portrait_cache
+            invalidate_portrait_cache(user_id)
+        except Exception:
+            logger.debug("画像摘要缓存刷新失败 user_id=%s", user_id, exc_info=True)
 
         data = {
             "cognition": picture.cognition,
@@ -674,6 +817,11 @@ class PortraitRadarService:
 
         picture.traits = dump_traits(traits)
         await picture.save()
+        try:
+            from backend.src.service.chat.service import invalidate_portrait_cache
+            invalidate_portrait_cache(user_id)
+        except Exception:
+            logger.debug("雷达画像缓存刷新失败 user_id=%s", user_id, exc_info=True)
 
 
 async def build_learning_guidance(user_id: int) -> str:

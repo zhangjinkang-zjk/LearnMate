@@ -27,6 +27,8 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173,
     strictPort: true,
+    // 允许通过 ngrok 预览开发环境，但不开放任意 Host，避免 DNS 重绑定风险。
+    allowedHosts: ['.ngrok-free.app', '.ngrok-free.dev'],
     proxy: {
       '/static': proxyTarget,
       '/ai_chat': proxyTarget,
@@ -43,10 +45,12 @@ export default defineConfig({
       '/video': proxyTarget,
       '/study': proxyTarget,
       '/study-room': proxyTarget,
+      '/mock-classroom': proxyTarget,
       '/presentation': proxyTarget,
       '/notification': proxyTarget,
       '/annotation': proxyTarget,
       '/debug': proxyTarget,
+      '/api/agents': proxyTarget,
     },
   }
 })

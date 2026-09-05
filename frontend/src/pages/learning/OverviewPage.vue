@@ -1,9 +1,10 @@
 <template>
   <div class="overview-page">
     <div v-if="loading" class="surface surface-pad loading-state">正在同步你的学习状态…</div>
+    <div v-else-if="errorMessage" class="surface surface-pad error-state"><strong>学习概览暂时无法读取</strong><p>{{ errorMessage }}</p><button class="button button--secondary" type="button" @click="loadOverview">重试 <ArrowRight :size="14" /></button></div>
     <div v-else class="overview-dashboard">
       <section class="path-trend-panel">
-        <div class="section-heading section-heading--compact"><div><p class="eyebrow path-eyebrow">LEARNING PATH</p><h2>{{ trendMode === 'path' ? '学习路径' : '资源难度匹配' }}</h2><small v-if="path.subject || profile.direction" class="path-subject">{{ path.subject || profile.direction }}</small></div><div class="trend-heading-side"><div class="trend-switch" :class="{ 'is-resource': trendMode === 'resource' }" role="tablist" aria-label="难度曲线类型"><span class="trend-switch-indicator" aria-hidden="true"></span><button type="button" :class="{ 'is-active': trendMode === 'path' }" role="tab" :aria-selected="trendMode === 'path'" @click="trendMode = 'path'">学习路径</button><button type="button" :class="{ 'is-active': trendMode === 'resource' }" role="tab" :aria-selected="trendMode === 'resource'" @click="trendMode = 'resource'">资源匹配</button></div><div class="trend-caption"><span v-if="trendMode === 'path'">当前路径进度 {{ path.progress }}%</span><span v-else>资源难度与当前能力的匹配</span><small>{{ trendMode === 'path' ? '首节点难度 = 1.0' : '实线为资源难度，虚线为当前能力' }}</small></div></div></div>
+        <div class="section-heading section-heading--compact"><div><p class="eyebrow path-eyebrow">LEARNING PATH</p><h2>{{ trendMode === 'path' ? '学习路径' : '资源难度匹配' }}</h2><small v-if="path.subject || profile.direction" class="path-subject">{{ path.subject || profile.direction }}</small></div><div class="trend-heading-side"><div class="trend-switch" :class="{ 'is-resource': trendMode === 'resource' }" role="tablist" aria-label="难度曲线类型"><span class="trend-switch-indicator" aria-hidden="true"></span><button type="button" :class="{ 'is-active': trendMode === 'path' }" role="tab" :aria-selected="trendMode === 'path'" @click="trendMode = 'path'">学习路径</button><button type="button" :class="{ 'is-active': trendMode === 'resource' }" role="tab" :aria-selected="trendMode === 'resource'" @click="trendMode = 'resource'">资源匹配</button></div><div class="trend-caption"><span v-if="trendMode === 'path'">当前路径进度 {{ pathProgressLabel }}</span><span v-else>资源难度与当前能力的匹配</span><small>{{ trendMode === 'path' ? '首节点难度 = 1.0' : '实线为资源难度，虚线为当前能力' }}</small></div></div></div>
         <div v-if="activeTrend.length > 1" class="trend-chart" :aria-label="trendMode === 'path' ? '当前学习路径相对难度折线图' : '资源难度与当前能力匹配曲线'">
           <svg viewBox="0 0 920 180" role="img" :aria-label="trendMode === 'path' ? '学习路径节点相对难度折线图' : '资源难度与当前能力匹配曲线'" preserveAspectRatio="none">
             <line v-for="level in [25, 50, 75]" :key="level" x1="0" :y1="180 - level * 1.55" x2="920" :y2="180 - level * 1.55" class="chart-grid" />
@@ -13,19 +14,19 @@
           </svg>
           <div class="trend-labels"><span v-for="point in activeTrend" :key="`${point.id}-label`">{{ point.label }}</span></div>
         </div>
-        <div v-else class="empty-state trend-empty">{{ trendMode === 'path' ? '路径节点生成后，这里会显示每个节点的相对难度变化。' : '打开学习章节并生成资源后，这里会显示资源难度与当前能力的匹配情况。' }}</div>
+        <div v-else class="empty-state trend-empty">{{ trendMode === 'path' ? '正在生成学习路径难度数据…' : '正在生成资源难度匹配数据…' }}</div>
       </section>
 
       <div class="overview-columns">
         <div class="overview-left">
           <div class="overview-top-cards">
-            <section class="surface surface-pad compact-panel goal-panel"><div class="goal-heading"><div><p class="eyebrow">CURRENT FOCUS</p><h2>当前学习目标</h2></div><span class="goal-count">{{ goalItems.length }}</span></div><ul class="goal-list"><li v-for="(item, index) in goalItems" :key="item"><span class="goal-index">{{ String(index + 1).padStart(2, '0') }}</span><span class="goal-copy">{{ item }}</span><span class="goal-status" aria-hidden="true"></span></li></ul></section>
-            <section class="surface surface-pad compact-panel next-panel"><div class="next-heading"><div><p class="eyebrow">NEXT STEP</p><h2>下一步学习内容</h2></div><span class="next-mark"><ArrowUpRight :size="19" /></span></div><div class="next-content"><span class="next-label">推荐学习节点</span><p class="next-topic">{{ nextTopic }}</p></div><RouterLink class="button button--primary overview-start-button" :to="nextAction.to">开始学习 <ArrowRight :size="14" /></RouterLink></section>
+            <section class="surface surface-pad compact-panel goal-panel"><div class="goal-heading"><div><p class="eyebrow">CURRENT FOCUS</p><h2>当前学习目标</h2></div><span v-if="goalItems.length" class="goal-count">{{ goalItems.length }}</span></div><ul v-if="goalItems.length" class="goal-list"><li v-for="(item, index) in goalItems" :key="item.id || item.title"><span class="goal-index">{{ String(index + 1).padStart(2, '0') }}</span><span class="goal-copy">{{ item.title }}</span><span class="goal-status" aria-hidden="true"></span></li></ul><div v-else class="empty-state">正在生成学习目标…</div></section>
+            <section class="surface surface-pad compact-panel next-panel"><div class="next-heading"><div><p class="eyebrow">NEXT STEP</p><h2>下一步学习内容</h2></div><span class="next-mark"><ArrowUpRight :size="19" /></span></div><div v-if="nextTopic" class="next-content"><span class="next-label">推荐学习节点</span><p class="next-topic">{{ nextTopic }}</p></div><div v-else class="empty-state next-empty">正在生成下一步学习内容…</div><RouterLink v-if="hasNextAction" class="button button--primary overview-start-button" :to="nextAction.to">开始学习 <ArrowRight :size="14" /></RouterLink></section>
           </div>
-          <section class="surface surface-pad blindspot-panel"><div class="section-heading section-heading--compact"><div><p class="eyebrow module-eyebrow">KNOWLEDGE GAPS</p><h2>知识盲区</h2></div><span class="muted">{{ weakPoints.length }} 个待巩固</span></div><div v-if="weakPoints.length" class="blindspot-list"><article v-for="(point, index) in weakPoints" :key="point.tag" class="blindspot-item"><div class="blindspot-copy"><span class="blindspot-index">{{ String(index + 1).padStart(2, '0') }}</span><div><strong>{{ point.tag }}</strong><small>正确率 {{ point.accuracy }}%</small></div></div><div class="mini-progress"><span :style="{ width: `${point.accuracy}%` }"></span></div><RouterLink class="icon-link" to="/learning/advanced" :aria-label="`练习${point.tag}`" title="开始练习"><ArrowRight :size="15" /></RouterLink></article></div><div v-else class="empty-state">完成几道练习后，这里会显示需要关注的知识点。</div></section>
+          <section class="surface surface-pad blindspot-panel"><div class="section-heading section-heading--compact"><div><p class="eyebrow module-eyebrow">KNOWLEDGE GAPS</p><h2>知识盲区</h2></div><span class="muted">{{ weakPoints.length }} 个待巩固</span></div><div v-if="weakPoints.length" class="blindspot-list"><article v-for="(point, index) in weakPoints" :key="point.tag" class="blindspot-item"><div class="blindspot-copy"><span class="blindspot-index">{{ String(index + 1).padStart(2, '0') }}</span><div><strong>{{ point.tag }}</strong><small>{{ point.accuracy === null ? '正在生成' : `正确率 ${point.accuracy}%` }}</small></div></div><div v-if="point.accuracy !== null" class="mini-progress"><span :style="{ width: `${point.accuracy}%` }"></span></div><RouterLink class="icon-link" to="/learning/advanced" :aria-label="`练习${point.tag}`" title="开始练习"><ArrowRight :size="15" /></RouterLink></article></div><div v-else class="empty-state">正在生成知识盲区…</div></section>
         </div>
 
-        <section class="surface surface-pad mastery-panel"><div class="mastery-card-header"><div><p class="eyebrow module-eyebrow">OVERALL MASTERY</p><h2>总体掌握度</h2><p class="muted">按知识点对比当前掌握度与达标线</p></div><div class="mastery-headline"><span>当前总计</span><strong>{{ masteryScore }}%</strong><em :class="{ 'is-positive': masteryDelta >= 0 }">{{ masteryDeltaLabel }} 达标线</em></div></div><div class="mastery-legend" aria-label="柱状图图例"><span><i class="legend-swatch legend-swatch--current"></i>当前掌握度</span><span><i class="legend-swatch legend-swatch--target"></i>达标线 60%</span></div><div class="mastery-chart" aria-label="知识点掌握度与达标线柱状图"><div class="mastery-axis"><span>100%</span><span>50%</span><span>0%</span></div><div class="bars"><div v-for="item in masteryItems" :key="item.tag" class="bar-column"><div class="bar-track"><span class="bar-value bar-value--current" :style="{ height: `${item.score}%` }" :title="`${item.tag}：当前掌握度 ${item.score}%`"><strong>{{ item.score }}%</strong></span><span class="bar-value bar-value--target" :style="{ height: `${item.target}%` }" :title="`${item.tag}：达标线 ${item.target}%`"></span></div><span class="bar-label" :title="item.tag">{{ item.shortTag }}</span></div></div></div><div class="mastery-footer"><span>已答 {{ stats.examAnswered }} 题</span><span>学习 {{ formatDuration(stats.studySeconds) }}</span></div></section>
+        <section class="surface surface-pad mastery-panel"><div class="mastery-card-header"><div><p class="eyebrow module-eyebrow">OVERALL MASTERY</p><h2>总体掌握度</h2><p class="muted">按知识点对比当前掌握度与达标线</p></div><div class="mastery-headline"><span>当前总计</span><strong>{{ masteryScore === null ? '正在生成' : `${masteryScore}%` }}</strong><em v-if="masteryDelta !== null" :class="{ 'is-positive': masteryDelta >= 0 }">{{ masteryDeltaLabel }} 达标线</em></div></div><div v-if="masteryItems.length" class="mastery-legend" aria-label="柱状图图例"><span><i class="legend-swatch legend-swatch--current"></i>当前掌握度</span><span><i class="legend-swatch legend-swatch--target"></i>达标线 60%</span></div><div v-if="masteryItems.length" class="mastery-chart" aria-label="知识点掌握度与达标线柱状图"><div class="mastery-axis"><span>100%</span><span>50%</span><span>0%</span></div><div class="bars"><div v-for="item in masteryItems" :key="item.tag" class="bar-column"><div class="bar-track"><span class="bar-value bar-value--current" :style="{ height: `${item.score}%` }" :title="`${item.tag}：当前掌握度 ${item.score}%`"><strong>{{ item.score }}%</strong></span><span class="bar-value bar-value--target" :style="{ height: `${item.target}%` }" :title="`${item.tag}：达标线 ${item.target}%`"></span></div><span class="bar-label" :title="item.tag">{{ item.shortTag }}</span></div></div></div><div v-else class="empty-state mastery-empty">正在生成掌握度数据…</div><div class="mastery-footer"><span>已答 {{ stats.examAnswered }} 题</span><span>学习 {{ formatDuration(stats.studySeconds) }}</span></div></section>
       </div>
     </div>
   </div>
@@ -35,55 +36,77 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ArrowRight, ArrowUpRight } from 'lucide-vue-next'
 import { learningApi } from '@/shared/api/learningApi'
-import { learningState } from '@/entities/learning/learningState'
 
 const loading = ref(true)
-const profile = reactive({ direction: learningState.direction, goal: learningState.goal })
-const path = reactive({ subject: '', currentNode: '', nextAction: null, nodes: [], difficultyTrend: [], resourceDifficultyMatch: [], progress: 0 })
+const errorMessage = ref('')
+const profile = reactive({ direction: '', goal: '' })
+const path = reactive({ id: null, subject: '', currentNode: '', nextAction: null, nodes: [], difficultyTrend: [], resourceDifficultyMatch: [], progress: null })
 const stats = reactive({ studySeconds: 0, examAnswered: 0, weakPoints: [] })
 const goals = ref([])
 const nextContent = ref([])
 const mastery = ref([])
 const overviewSummary = reactive({ masteryScore: null, text: '' })
 const unwrap = (response) => response?.data?.data ?? response?.data ?? null
-const toPercent = (value) => { const numeric = Number(value); return Number.isFinite(numeric) ? Math.max(0, Math.min(100, Math.round(numeric <= 1 ? numeric * 100 : numeric))) : 0 }
-const goalItems = computed(() => { const items = goals.value.map((item) => item.title).filter(Boolean).slice(0, 4); return items.length ? items : [profile.goal || '建立稳定的学习节奏', path.subject ? `完成「${path.subject}」学习路径` : '完成当前学习路径', `${stats.examAnswered || 0} 道练习题已记录`] })
-const nextTopic = computed(() => nextContent.value[0]?.title || path.currentNode || '从学习路径中选择一个节点开始')
+const toPercent = (value) => { const numeric = Number(value); return Number.isFinite(numeric) ? Math.max(0, Math.min(100, Math.round(numeric <= 1 ? numeric * 100 : numeric))) : null }
+const goalItems = computed(() => goals.value.filter((item) => item && item.title).slice(0, 4))
+const nextTopic = computed(() => nextContent.value[0]?.title || '')
 const nextAction = computed(() => ({ to: path.nextAction?.type === 'quiz' ? '/learning/advanced' : '/learning/fundamentals' }))
-const weakPoints = computed(() => { const values = stats.weakPoints || []; const unique = values.filter((item, index, all) => item.tag && all.findIndex((other) => other.tag === item.tag) === index); return unique.slice(0, 3).map((item) => { const raw = Number(item.accuracy || 0); return { tag: item.tag || item.knowledge_tag, accuracy: Math.round(raw <= 1 ? raw * 100 : raw) } }) })
-const pathTrend = computed(() => path.difficultyTrend.slice(0, 12).map((node, index) => ({ id: node.id || index, label: String(node.title || `节点 ${index + 1}`).slice(0, 8), relative_difficulty: Number(node.relative_difficulty || 50), difficulty_score: Number(node.difficulty_score || 1).toFixed(2), status: node.status })))
-const resourceTrend = computed(() => path.resourceDifficultyMatch.slice(0, 12).map((item, index) => ({ id: item.resource_id || index, label: String(item.title || `资源 ${index + 1}`).slice(0, 8), value: Number(item.difficulty_score || 0), user_level: item.user_level === null || item.user_level === undefined ? null : Number(item.user_level), status: item.status, tooltip: item.status === 'well_matched' ? `难度 ${item.difficulty_score}，匹配度 ${item.match_score}%` : item.status === 'too_hard' ? `难度 ${item.difficulty_score}，当前偏难` : item.status === 'too_easy' ? `难度 ${item.difficulty_score}，当前偏简单` : `难度 ${item.difficulty_score}，等待能力数据` })))
+const weakPoints = computed(() => { const values = stats.weakPoints || []; const unique = values.filter((item, index, all) => (item.tag || item.knowledge_tag) && all.findIndex((other) => (other.tag || other.knowledge_tag) === (item.tag || item.knowledge_tag)) === index); return unique.slice(0, 3).map((item) => { const raw = Number(item.accuracy); return { tag: item.tag || item.knowledge_tag, accuracy: Number.isFinite(raw) ? toPercent(raw) : null } }) })
+const pathTrend = computed(() => path.difficultyTrend.slice(0, 12).map((node, index) => { const relative = Number(node.relative_difficulty); const score = Number(node.difficulty_score); const label = String(node.title || '').trim(); return { id: node.id || index, label: label.slice(0, 8), relative_difficulty: relative, difficulty_score: Number.isFinite(score) ? score.toFixed(2) : '', status: node.status } }).filter((node) => node.label && Number.isFinite(node.relative_difficulty)))
+const resourceTrend = computed(() => path.resourceDifficultyMatch.slice(0, 12).map((item, index) => { const score = Number(item.difficulty_score); const label = String(item.title || '').trim(); const userLevel = item.user_level === null || item.user_level === undefined ? null : Number(item.user_level); if (!label || !Number.isFinite(score)) return null; const matchScore = Number(item.match_score); const tooltip = item.status === 'well_matched' && Number.isFinite(matchScore) ? `难度 ${score}，匹配度 ${matchScore}%` : item.status === 'too_hard' ? `难度 ${score}，当前偏难` : item.status === 'too_easy' ? `难度 ${score}，当前偏简单` : `难度 ${score}`; return { id: item.resource_id || index, label: label.slice(0, 8), value: score, user_level: Number.isFinite(userLevel) ? userLevel : null, status: item.status, tooltip } }).filter(Boolean))
 const trendMode = ref('path')
 const activeTrend = computed(() => trendMode.value === 'path' ? pathTrend.value.map((point) => ({ ...point, value: point.relative_difficulty, tooltip: `相对难度 ${point.difficulty_score}` })) : resourceTrend.value)
 const resourceTrendHasUserLevel = computed(() => resourceTrend.value.some((point) => point.user_level !== null))
 const userLevelPoints = computed(() => resourceTrend.value.map((point, index) => `${trendX(index)},${trendY(point.user_level)}`).join(' '))
-const masteryItems = computed(() => { const source = (mastery.value.length ? mastery.value : weakPoints.value).slice(0, 6); return source.map((item) => { const tag = item.knowledge_tag || item.tag || item.label || '知识点'; const score = toPercent(item.accuracy ?? item.score ?? 0); return { tag, shortTag: tag.length > 6 ? `${tag.slice(0, 6)}…` : tag, score, target: 60 } }) })
-const masteryScore = computed(() => { const rawSummaryScore = overviewSummary.masteryScore; const summaryScore = Number(rawSummaryScore); if (rawSummaryScore !== null && rawSummaryScore !== undefined && rawSummaryScore !== '' && Number.isFinite(summaryScore)) return Math.round(summaryScore); const values = masteryItems.value.map((item) => item.score); return values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : 0 })
-const masteryDelta = computed(() => masteryScore.value - 60)
+const masteryItems = computed(() => { const source = (mastery.value.length ? mastery.value : weakPoints.value).slice(0, 6); return source.map((item) => { const tag = item.knowledge_tag || item.tag || item.label; const score = toPercent(item.accuracy ?? item.score); return tag && score !== null ? { tag, shortTag: tag.length > 6 ? `${tag.slice(0, 6)}…` : tag, score, target: 60 } : null }).filter(Boolean) })
+const masteryScore = computed(() => { const summaryScore = Number(overviewSummary.masteryScore); if (overviewSummary.masteryScore !== null && overviewSummary.masteryScore !== undefined && overviewSummary.masteryScore !== '' && Number.isFinite(summaryScore)) return toPercent(summaryScore); const values = masteryItems.value.map((item) => item.score); return values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : null })
+const masteryDelta = computed(() => masteryScore.value === null ? null : masteryScore.value - 60)
 const masteryDeltaLabel = computed(() => `${masteryDelta.value >= 0 ? '+' : ''}${masteryDelta.value}%`)
-const learningSummary = computed(() => overviewSummary.text || '完成练习后，这里会显示你的学习总结。')
+const learningSummary = computed(() => overviewSummary.text || '正在生成学习总结…')
 const trendPoints = computed(() => activeTrend.value.map((point, index) => `${trendX(index)},${trendY(point.value)}`).join(' '))
 const trendX = (index) => activeTrend.value.length < 2 ? 460 : Math.round(index * (920 / (activeTrend.value.length - 1)))
 const trendY = (rate) => 170 - Math.max(0, Math.min(100, Number(rate || 0))) * 1.45
 function formatDuration(seconds) { const value = Number(seconds || 0); if (value < 60) return `${value}秒`; const minutes = Math.round(value / 60); if (minutes < 60) return `${minutes}分钟`; return `${(minutes / 60).toFixed(1)}小时` }
 
+const pathProgressLabel = computed(() => path.progress === null ? '正在生成' : `${path.progress}%`)
+const hasNextAction = computed(() => Boolean(path.nextAction?.type && nextTopic.value))
+function resetOverviewState() {
+  Object.assign(profile, { direction: '', goal: '' })
+  Object.assign(path, { id: null, subject: '', currentNode: '', nextAction: null, nodes: [], difficultyTrend: [], resourceDifficultyMatch: [], progress: null })
+  Object.assign(stats, { studySeconds: 0, examAnswered: 0, weakPoints: [] })
+  goals.value = []
+  nextContent.value = []
+  mastery.value = []
+  Object.assign(overviewSummary, { masteryScore: null, text: '' })
+}
+
 async function loadOverview() {
-  const result = await learningApi.getOverview()
-  const overview = unwrap(result) || {}
-  Object.assign(profile, overview.profile || {})
-  const subjects = Array.isArray(overview.subjects) ? overview.subjects : []
-  const pathData = overview.path || {}
-  const content = Array.isArray(overview.next_content) ? overview.next_content : []
-  Object.assign(path, { subject: subjects[0]?.name || '', currentNode: content[0]?.title || '', nextAction: { type: overview.recommendation?.action_type || '' }, nodes: content, difficultyTrend: Array.isArray(pathData.difficulty_trend) ? pathData.difficulty_trend : [], resourceDifficultyMatch: Array.isArray(pathData.resource_difficulty_match) ? pathData.resource_difficulty_match : [], progress: Number(pathData.progress || 0) })
-  goals.value = Array.isArray(overview.goals) ? overview.goals : []
-  nextContent.value = content
-  const summary = overview.summary || {}
-  const diagnosis = overview.diagnosis || {}
-  Object.assign(stats, { studySeconds: summary.total_study_seconds || 0, examAnswered: diagnosis.answered || 0, weakPoints: overview.blind_spots || [] })
-  overviewSummary.masteryScore = summary.mastery_score
-  overviewSummary.text = summary.text || summary.description || overview.recommendation?.reason || overview.recommendation?.judgement || ''
-  mastery.value = Array.isArray(overview.mastery_bars) ? overview.mastery_bars : []
-  loading.value = false
+  loading.value = true
+  errorMessage.value = ''
+  resetOverviewState()
+  try {
+    const result = await learningApi.getOverview()
+    const overview = unwrap(result) || {}
+    const profileData = overview.profile || {}
+    Object.assign(profile, { direction: profileData.direction || '', goal: profileData.goal || '' })
+    const subjects = Array.isArray(overview.subjects) ? overview.subjects : []
+    const pathData = overview.path || {}
+    const content = Array.isArray(overview.next_content) ? overview.next_content : []
+    const progress = Number(pathData.progress)
+    Object.assign(path, { id: pathData.id || null, subject: subjects[0]?.name || '', currentNode: content[0]?.title || '', nextAction: overview.recommendation?.action_type ? { type: overview.recommendation.action_type } : null, nodes: content, difficultyTrend: Array.isArray(pathData.difficulty_trend) ? pathData.difficulty_trend : [], resourceDifficultyMatch: Array.isArray(pathData.resource_difficulty_match) ? pathData.resource_difficulty_match : [], progress: Number.isFinite(progress) ? Math.round(progress) : null })
+    goals.value = Array.isArray(overview.goals) ? overview.goals : []
+    nextContent.value = content
+    const summary = overview.summary || {}
+    const diagnosis = overview.diagnosis || {}
+    Object.assign(stats, { studySeconds: Number(summary.total_study_seconds) || 0, examAnswered: Number(diagnosis.answered) || 0, weakPoints: Array.isArray(overview.blind_spots) ? overview.blind_spots : [] })
+    overviewSummary.masteryScore = summary.mastery_score ?? null
+    overviewSummary.text = summary.text || summary.description || overview.recommendation?.reason || overview.recommendation?.judgement || ''
+    mastery.value = Array.isArray(overview.mastery_bars) ? overview.mastery_bars : []
+  } catch (error) {
+    errorMessage.value = error?.response?.data?.detail || error?.message || '请稍后重试'
+  } finally {
+    loading.value = false
+  }
 }
 onMounted(loadOverview)
 </script>

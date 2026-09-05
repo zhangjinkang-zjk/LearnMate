@@ -80,6 +80,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { CheckCircle, FileDown, LoaderCircle, Send, X } from 'lucide-vue-next'
 import { chatApi } from '@/shared/api/chatApi'
 import robotImage from '@/shared/assets/xiaozhi-robot.png'
+import { applyWorkflowEvent, applyWorkflowProgress, finishWorkflow, resetWorkflow } from '@/entities/agent/agentWorkflowState'
 
 const props = defineProps({
   assistantName: { type: String, default: '小知' },
@@ -186,6 +187,8 @@ async function sendMessage() {
   try {
     const onEvent = (event) => {
       if (event?.error) throw new Error(event.error)
+      if (event?.type === 'agent_event') applyWorkflowEvent(event)
+      else applyWorkflowProgress(event)
       if (event?.chat_group_id) {
         chatGroupId.value = Number(event.chat_group_id)
         sessionStorage.setItem(props.sessionKey, String(chatGroupId.value))
@@ -199,8 +202,10 @@ async function sendMessage() {
       if (event?.download_url) reply.downloadUrl = event.download_url
     }
     if (isResourceRequest(text)) {
+      resetWorkflow({ title: text.slice(0, 60), resourceTypes: ['document', 'mindmap'] })
       reply.text = '正在整理主题并生成学习文档与思维导图，请稍候…'
       await chatApi.generateResource(text, chatGroupId.value, onEvent, controller.signal)
+      finishWorkflow(false)
       if (!reply.downloadUrl) reply.text = '资源已生成并保存到资料库。'
       showResourceNotice('资源已生成并保存到资料库')
     } else if (chatGroupId.value) {
@@ -210,6 +215,7 @@ async function sendMessage() {
     }
     if (!reply.text.trim()) reply.text = '我暂时没有生成有效回复，请换个方式再问我一次。'
   } catch (error) {
+    if (isResourceRequest(text) && error?.name !== 'AbortError') finishWorkflow(true)
     messages.value = messages.value.filter((item) => item !== reply)
     errorMessage.value = error?.message || '请求失败，请稍后重试。'
   } finally {

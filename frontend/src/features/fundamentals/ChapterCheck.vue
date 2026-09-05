@@ -179,15 +179,28 @@ async function loadQuiz() {
   errorMessage.value = ''
   result.value = null
   currentIndex.value = 0
+  questions.value = []
+  Object.keys(answers).forEach((key) => delete answers[key])
+  activeSessionId.value = props.sessionId || ''
 
   try {
-    await fundamentalsApi.generateQuiz(props.pathId, props.nodeId, (event) => {
-      if (event?.type === 'status') loadingMessage.value = event.msg || event.message || loadingMessage.value
-      if (event?.type === 'blocked') throw new Error(event.reason || '请先完成本章阅读')
-      if (event?.type === 'error') throw new Error(event.detail || event.message || '检查题生成失败')
-      if (event?.type === 'done' && event.session_id) activeSessionId.value = event.session_id
-    }, requestController.signal)
+    // 复用后端已经创建的会话；只有首次进入或会话缺失时才生成新题。
+    if (!activeSessionId.value) {
+      await fundamentalsApi.generateQuiz(props.pathId, props.nodeId, (event) => {
+        if (event?.type === 'status') loadingMessage.value = event.msg || event.message || loadingMessage.value
+        if (event?.type === 'blocked') throw new Error(event.reason || '请先完成本章阅读')
+        if (event?.type === 'error') throw new Error(event.detail || event.message || '检查题生成失败')
+        if (event?.type === 'done' && event.session_id) activeSessionId.value = event.session_id
+      }, requestController.signal)
+    }
 
+    // 流式生成可能因旧服务/代理丢失 done.session_id；用同一后端生成逻辑补取会话，
+    // 避免题目已生成但前端只能显示“没有可用检查题”。
+    if (!activeSessionId.value) {
+      loadingMessage.value = '正在确认检查题会话'
+      const generated = await fundamentalsApi.generateQuizNow(props.pathId, props.nodeId)
+      activeSessionId.value = generated?.session_id || ''
+    }
     if (!activeSessionId.value) throw new Error('检查题生成完成，但没有返回有效会话')
     const session = await fundamentalsApi.getQuizSession(activeSessionId.value)
     questions.value = (session?.records || []).map((record) => record.question).filter(Boolean)

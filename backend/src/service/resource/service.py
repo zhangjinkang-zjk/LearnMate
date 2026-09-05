@@ -249,6 +249,9 @@ class ResourceService:
                 payload["ppt_theme_id"] = _extract_ppt_theme_id(content) or _normalize_ppt_theme_id(ppt_theme_id)
             return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
+        def _make_agent_event(status: str, message: str) -> str:
+            return f"data: {json.dumps({'type': 'agent_event', 'agent_id': 'saver', 'agent_name': 'ResourceService', 'phase': 'saver', 'status': status, 'message': message}, ensure_ascii=False)}\n\n"
+
         user = await User.filter(id=user_id).first()
 
         initial_state = await _make_state(topic, user_id, resource_types, chat_group_id, exam_question_types, exam_count, exam_difficulty, answers=answers, skip_review=skip_review, user_notes=user_notes, ppt_prompt_key=ppt_prompt_key, llm_priority=llm_priority, ppt_theme_id=ppt_theme_id, teaching_context=teaching_context)
@@ -260,6 +263,7 @@ class ResourceService:
         saved_types: set[str] = set()
         saved_resources: list[dict] = []
         cached_resource_ids: set[int] = set()
+        saver_event_sent = False
 
         requested_types = list(dict.fromkeys(str(item).strip() for item in (resource_types or []) if str(item).strip()))
         # Keep path-node generation isolated from the global topic cache.  The
@@ -317,6 +321,9 @@ class ResourceService:
                     content = chunk.get("content")
                     if rt and rt not in saved_types and user and content is not None and not _is_failed_generation_content(content):
                         item_content = _apply_ppt_theme_to_content(content, ppt_theme_id) if rt == "ppt" else content
+                        if not saver_event_sent:
+                            yield _make_agent_event("saving", "正在保存生成资源")
+                            saver_event_sent = True
                         saved = await _save_single_generated_resource(
                             topic,
                             user,
@@ -342,6 +349,9 @@ class ResourceService:
                     for rt, content in resources.items():
                         if rt not in saved_types and rt not in yielded_types and user and not _is_failed_generation_content(content):
                             item_content = _apply_ppt_theme_to_content(content, ppt_theme_id) if rt == "ppt" else content
+                            if not saver_event_sent:
+                                yield _make_agent_event("saving", "正在保存生成资源")
+                                saver_event_sent = True
                             record = await GeneratedResource.create(
                                 topic=topic, resource_type=rt, content=item_content,
                                 review_passed=False, retry_count=0,
@@ -379,6 +389,9 @@ class ResourceService:
             r["retry_count"] = final_retry
         if save_to_chat_history and chat_group_id > 0:
             await _save_generation_to_history(user_id, chat_group_id, topic, saved_resources, include_request=include_request_in_history)
+
+        if saver_event_sent:
+            yield _make_agent_event("done", f"已保存 {len(saved_resources)} 个资源")
 
         # 后台预生成旁白（播放时秒开）
         done_data = {

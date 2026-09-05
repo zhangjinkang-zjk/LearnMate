@@ -10,7 +10,7 @@ from backend.src.models.exam_model import ExamQuestion, ExamRecord
 from backend.src.models.portraitmodel import User_picture
 from backend.src.models.usermodel import User
 from backend.src.service.exam.service import ExamService
-from backend.src.service.portrait.service import dump_traits, parse_traits
+from backend.src.service.portrait.service import dump_traits, parse_traits, record_learning_event
 from backend.src.utils.database import init_db
 from backend.src.utils.json_parser import parse_llm_json
 from backend.src.utils.prompt_loader import fill_prompt, load_prompt
@@ -246,6 +246,15 @@ async def start(user_id: int, identity: str, direction: str, goal: str, max_step
         raise ValueError("身份、学习方向和学习目标不能为空")
     max_steps = max(_MIN_QUESTIONS, min(int(max_steps or _MIN_QUESTIONS), _MAX_QUESTIONS))
     await _save_onboarding_context(user_id, identity, direction, goal)
+    try:
+        await record_learning_event(
+            user_id,
+            "onboarding",
+            evidence=f"学习方向：{direction}；学习目标：{goal}",
+            metadata={"identity": identity, "direction": direction, "goal": goal},
+        )
+    except Exception:
+        logger.exception("首次定向学习事件记录失败 user_id=%s", user_id)
     session_id = str(uuid.uuid4())[:12]
     payload = await _generate_question(user_id, identity, direction, goal, [], 0, max_steps)
     question = await _create_question(user_id, session_id, payload)
