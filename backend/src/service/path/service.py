@@ -53,12 +53,38 @@ from backend.src.service.path.teaching_context import (
     teaching_spec_payload,
 )
 from backend.src.service.path.difficulty import (
+    adjust_quiz_difficulty,
     clamp_difficulty_score,
     derive_difficulty_score,
 )
 
 
 _RESOURCE_GENERATION_ERROR_MESSAGE = "本章学习材料生成失败，请重试"
+
+
+async def _get_node_quiz_session_state(
+    session_id: str,
+    user_id: int,
+    node_id: int,
+) -> dict | None:
+    """读取当前用户、当前节点的一次测验状态，用于决定是否开启下一轮。"""
+    records = await (
+        ExamRecord.filter(session_id=session_id, user_id=user_id, node_id=node_id)
+        .order_by("id")
+        .prefetch_related("question")
+        .all()
+    )
+    if not records:
+        return None
+    judged = [record for record in records if record.is_correct is not None]
+    first_question = next((record.question for record in records if record.question), None)
+    return {
+        "is_complete": len(judged) == len(records),
+        "score": round(sum(1 for record in judged if record.is_correct) / len(records) * 100, 1)
+        if judged and len(judged) == len(records)
+        else None,
+        "difficulty": first_question.difficulty if first_question else "medium",
+    }
 
 
 def _node_difficulty_score(node_data: dict, order_index: int, total_nodes: int) -> float:
@@ -1191,21 +1217,28 @@ class PathService:
 
             quiz_config = json.loads(node.quiz_config) if node.quiz_config else {"count": 5, "threshold": 0.7}
 
-            # 已有预生成的 session → 直接复用；手动重新生成必须创建新会话，
-            # 不能继续把旧题库/旧答案位置返回给前端。
+            previous_state = None
             if progress.quiz_session_id and not force_regenerate:
                 existing = await ExamService.get_session(progress.quiz_session_id, user_id)
                 if existing and existing.get("total_questions", 0) > 0:
-                    # 查该 session 的 difficulty（从第一题推测）
-                    first_record = await ExamRecord.filter(session_id=progress.quiz_session_id).prefetch_related("question").first()
-                    return {
-                        "node_id": node_id,
-                        "session_id": progress.quiz_session_id,
-                        "questions": existing.get("records", []),
-                        "quiz_config": quiz_config,
-                        "reused": True,
-                        "difficulty": first_record.question.difficulty if first_record and first_record.question else "medium",
-                    }
+                    previous_state = await _get_node_quiz_session_state(
+                        progress.quiz_session_id, user_id, node_id
+                    )
+                    # 未作答会话继续复用；已通过的节点用于复习时也继续复用。
+                    # 只有已完成但未通过，才开启一轮新题，让成绩影响下一轮难度。
+                    if previous_state and (
+                        not previous_state["is_complete"]
+                        or progress.quiz_passed
+                        or progress.node_status == "completed"
+                    ):
+                        return {
+                            "node_id": node_id,
+                            "session_id": progress.quiz_session_id,
+                            "questions": existing.get("records", []),
+                            "quiz_config": quiz_config,
+                            "reused": True,
+                            "difficulty": previous_state["difficulty"],
+                        }
 
             if force_regenerate:
                 logger.info(
@@ -1216,7 +1249,7 @@ class PathService:
                 )
 
             # 没有可复用会话，或用户明确要求重新生成。
-            count = quiz_config.get("count", 10)
+            count = quiz_config.get("count", 5)
 
             if not pre_generate:
                 # 检查资源是否已查看，根据查看次数决定难度
@@ -1224,14 +1257,20 @@ class PathService:
                 if not has_viewed:
                     return {"blocked": True, "reason": "请先学习当前节点的学习资料后再进行检测"}
 
-                if total_views <= 1:
+                if previous_state and previous_state["score"] is not None:
+                    difficulty = adjust_quiz_difficulty(
+                        previous_state["difficulty"], previous_state["score"]
+                    )
+                elif total_views <= 1:
                     difficulty = "easy"
                 elif total_views <= 3:
                     difficulty = "medium"
                 else:
                     difficulty = "hard"
             else:
-                difficulty = "medium"
+                difficulty = adjust_quiz_difficulty(
+                    previous_state["difficulty"], previous_state["score"]
+                ) if previous_state and previous_state["score"] is not None else "medium"
 
             # 收集节点关联资源上的用户笔记，注入出题上下文
             user_notes = ""
@@ -1253,6 +1292,7 @@ class PathService:
                 user_notes=user_notes,
                 skip_review=pre_generate,
                 llm_priority="low" if pre_generate else "high",
+                force_regenerate=bool(previous_state and previous_state["score"] is not None),
             )
 
             sid = result.get("session_id")
@@ -1266,6 +1306,7 @@ class PathService:
                 "quiz_config": quiz_config,
                 "difficulty": difficulty,
                 "reused": False,
+                "adaptive_from_score": previous_state["score"] if previous_state else None,
             }
 
     @staticmethod
@@ -1293,16 +1334,24 @@ class PathService:
 
             quiz_config = json.loads(node.quiz_config) if node.quiz_config else {"count": 5, "threshold": 0.7}
 
-            # 已有预生成的 session → 秒返
+            previous_state = None
             if progress.quiz_session_id:
                 existing = await ExamService.get_session(progress.quiz_session_id, user_id)
                 if existing and existing.get("total_questions", 0) > 0:
-                    yield f"data: {json.dumps({'type': 'status', 'msg': '复用已有测验题目'}, ensure_ascii=False)}\n\n"
-                    yield f"data: {json.dumps({'type': 'done', 'session_id': progress.quiz_session_id, 'quiz_config': quiz_config, 'question_count': existing.get('total_questions', 0), 'reused': True}, ensure_ascii=False)}\n\n"
-                    yield "data: [DONE]\n\n"
-                    return
+                    previous_state = await _get_node_quiz_session_state(
+                        progress.quiz_session_id, user_id, node_id
+                    )
+                    if previous_state and (
+                        not previous_state["is_complete"]
+                        or progress.quiz_passed
+                        or progress.node_status == "completed"
+                    ):
+                        yield f"data: {json.dumps({'type': 'status', 'msg': '复用已有测验题目'}, ensure_ascii=False)}\n\n"
+                        yield f"data: {json.dumps({'type': 'done', 'session_id': progress.quiz_session_id, 'quiz_config': quiz_config, 'question_count': existing.get('total_questions', 0), 'reused': True, 'difficulty': previous_state['difficulty']}, ensure_ascii=False)}\n\n"
+                        yield "data: [DONE]\n\n"
+                        return
 
-            count = quiz_config.get("count", 10)
+            count = quiz_config.get("count", 5)
             difficulty = "medium"
 
             # 检查资源是否已查看，根据查看次数决定难度
@@ -1312,7 +1361,11 @@ class PathService:
                 yield "data: [DONE]\n\n"
                 return
 
-            if total_views <= 1:
+            if previous_state and previous_state["score"] is not None:
+                difficulty = adjust_quiz_difficulty(
+                    previous_state["difficulty"], previous_state["score"]
+                )
+            elif total_views <= 1:
                 difficulty = "easy"
             elif total_views <= 3:
                 difficulty = "medium"
@@ -1340,6 +1393,7 @@ class PathService:
                     difficulty=difficulty,
                     node_id=node_id,
                     user_notes=user_notes,
+                    force_regenerate=bool(previous_state and previous_state["score"] is not None),
                 ):
                     if isinstance(event, str) and event.startswith("data:"):
                         data_str = event[5:].strip()
@@ -1354,6 +1408,7 @@ class PathService:
                                     await UserPathProgress.filter(id=progress.id).update(quiz_session_id=session_id)
                                 payload["quiz_config"] = quiz_config
                                 payload["difficulty"] = difficulty
+                                payload["adaptive_from_score"] = previous_state["score"] if previous_state else None
                                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                                 continue
                             yield event

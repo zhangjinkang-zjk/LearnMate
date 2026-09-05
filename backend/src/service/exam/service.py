@@ -316,6 +316,7 @@ class ExamService:
         node_id: int | None = None, user_notes: str = "", chat_group_id: int = 0,
         skip_review: bool = False, llm_priority: str = "high",
         include_request_in_history: bool = True,
+        force_regenerate: bool = False,
     ) -> dict:
         """走 graph 出题（Leader→Executor→Reviewer→retry）→ 存库 → 返回 session_id + questions"""
         await init_db()
@@ -335,6 +336,7 @@ class ExamService:
             chat_group_id=chat_group_id, user_notes=user_notes,
             skip_review=skip_review, llm_priority=llm_priority,
             include_request_in_history=include_request_in_history,
+            force_regenerate=force_regenerate,
         )
 
         for r in saved_resources:
@@ -384,6 +386,7 @@ class ExamService:
         topic: str, user_id: int,
         question_types: list[str] | None = None, count: int = 10, difficulty: str = "medium",
         node_id: int | None = None, user_notes: str = "", chat_group_id: int = 0,
+        force_regenerate: bool = False,
     ):
         """流式走 graph 出题 → SSE 推送进度 → 存库 → 返回 session"""
         await init_db()
@@ -405,6 +408,7 @@ class ExamService:
             chat_group_id=chat_group_id,
             exam_question_types=types_str, exam_count=count, exam_difficulty=difficulty,
             user_notes=user_notes,
+            force_regenerate=force_regenerate,
         ):
             if isinstance(event, str) and event.startswith("data:"):
                 data_str = event[5:].strip()

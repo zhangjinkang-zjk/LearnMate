@@ -1,10 +1,24 @@
 from backend.src.service.path.difficulty import (
+    adjust_quiz_difficulty,
     clamp_difficulty_score,
     derive_difficulty_score,
     normalize_relative_difficulty,
 )
 from backend.src.service.resource.matching import build_resource_difficulty_match
 from backend.src.service.study.service import _build_path_difficulty_trend
+
+
+def test_quiz_difficulty_drops_one_level_after_low_score_and_stays_bounded():
+    assert adjust_quiz_difficulty("hard", 45) == "medium"
+    assert adjust_quiz_difficulty("medium", 59) == "easy"
+    assert adjust_quiz_difficulty("easy", 20) == "easy"
+
+
+def test_quiz_difficulty_increases_one_level_after_strong_score():
+    assert adjust_quiz_difficulty("easy", 85) == "medium"
+    assert adjust_quiz_difficulty("medium", 92) == "hard"
+    assert adjust_quiz_difficulty("hard", 100) == "hard"
+    assert adjust_quiz_difficulty("medium", None) == "medium"
 
 
 def test_clamp_difficulty_score_keeps_relative_baseline_and_rejects_invalid_values():

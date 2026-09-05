@@ -27,6 +27,34 @@ _MODULE_OFFSETS = {
     "综合迁移": 0.24,
 }
 
+QUIZ_DIFFICULTIES = ("easy", "medium", "hard")
+
+
+def adjust_quiz_difficulty(
+    current: str | None,
+    score: float | int | None,
+    *,
+    low_score: float = 60.0,
+    high_score: float = 85.0,
+) -> str:
+    """根据上一轮节点测验分数选择下一轮难度，每次最多调整一级。"""
+    normalized = str(current or "medium").strip().lower()
+    if normalized not in QUIZ_DIFFICULTIES:
+        normalized = "medium"
+    try:
+        result = float(score) if score is not None else None
+    except (TypeError, ValueError):
+        result = None
+    if result is None or not math.isfinite(result):
+        return normalized
+
+    index = QUIZ_DIFFICULTIES.index(normalized)
+    if result < low_score:
+        index = max(0, index - 1)
+    elif result >= high_score:
+        index = min(len(QUIZ_DIFFICULTIES) - 1, index + 1)
+    return QUIZ_DIFFICULTIES[index]
+
 
 def clamp_difficulty_score(value: Any, default: float | None = None) -> float | None:
     """规范路径内相对难度倍数，首节点基准为 1.0。"""
