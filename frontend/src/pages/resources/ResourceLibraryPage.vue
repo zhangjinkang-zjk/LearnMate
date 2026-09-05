@@ -7,24 +7,25 @@
       <div class="context-copy"><span class="context-icon"><Target :size="18" /></span><div><p class="eyebrow">PERSONALIZED FOR YOU</p><h2>{{ profile.direction || '正在生成学习方向…' }}</h2><p>{{ profile.stage || '正在生成学习阶段…' }}<span v-if="profile.goal"> · {{ profile.goal }}</span></p></div></div>
       <div class="context-stats"><div><strong>{{ filteredResources.length }}</strong><span>匹配材料</span></div><div><strong>{{ unreadCount }}</strong><span>待阅读</span></div><div><strong>{{ favoriteCount }}</strong><span>已收藏</span></div></div>
     </section>
+    <Transition name="library-toast"><div v-if="notice" class="library-toast" role="status">{{ notice }}</div></Transition>
     <div class="library-toolbar"><div class="filter-tabs" role="tablist" aria-label="材料类型"><button v-for="tab in tabs" :key="tab.key" type="button" :class="{ 'is-active': activeType === tab.key }" @click="activeType = tab.key">{{ tab.label }}<span>{{ countByType(tab.key) }}</span></button></div><label class="search-box"><Search :size="16" /><span class="sr-only">搜索资料</span><input v-model.trim="searchTerm" type="search" placeholder="搜索主题、来源或标签" /></label></div>
     <div v-if="loading" class="library-state surface"><LoaderCircle class="spin" :size="20" />正在同步你的资料库</div>
     <div v-else-if="errorMessage" class="library-state library-state--error surface"><CircleAlert :size="20" /><div><strong>资料库暂时无法加载</strong><p>{{ errorMessage }}</p></div><button class="button button--quiet" type="button" @click="loadResources">重试</button></div>
     <div v-else-if="!filteredResources.length" class="library-state surface"><BookOpen :size="20" /><div><strong>还没有匹配的材料</strong><p>调整筛选条件，或让 LearnMate 根据当前目标生成一份新资料。</p></div><RouterLink class="button button--primary" to="/learnmate-chat">开始生成</RouterLink></div>
-    <div v-else class="resource-list"><article v-for="resource in filteredResources" :key="resource.resource_id" class="resource-row surface" :class="{ 'is-read': resource.is_read }"><div class="resource-mark" :class="`mark-${resource.resource_type}`"><FileText v-if="resource.resource_type === 'document' || resource.resource_type === 'reading'" :size="19" /><PlayCircle v-else-if="resource.resource_type === 'video' || resource.resource_type === 'external_video'" :size="19" /><Code2 v-else-if="resource.resource_type === 'code' || resource.resource_type === 'template'" :size="19" /><ListChecks v-else :size="19" /></div><div class="resource-main"><div class="resource-title-line"><h2>{{ resource.topic }}</h2><span class="type-label">{{ typeLabel(resource.resource_type) }}</span></div><p v-if="resource.match_reason" class="resource-reason"><span>匹配理由</span>{{ resource.match_reason }}</p><div class="resource-meta"><span v-if="difficultyLabel(resource)"><BarChart3 :size="13" />{{ difficultyLabel(resource) }}</span><span v-if="resource.source_label"><Compass :size="13" />{{ resource.source_label }}</span><span v-if="formatDate(resource.created_at)"><Clock3 :size="13" />{{ formatDate(resource.created_at) }}</span></div></div><div class="resource-actions"><button class="icon-button" type="button" :class="{ 'is-favorite': resource.favorited }" :aria-label="resource.favorited ? '取消收藏' : '收藏资料'" :title="resource.favorited ? '取消收藏' : '收藏资料'" @click="toggleFavorite(resource)"><Star :size="16" :fill="resource.favorited ? 'currentColor' : 'none'" /></button><button class="button button--quiet open-button" type="button" @click="openPreview(resource)">打开 <ArrowUpRight :size="14" /></button></div></article></div>
+    <div v-else class="resource-list"><article v-for="resource in filteredResources" :key="resource.resource_id" class="resource-row surface" :class="{ 'is-read': resource.is_read, 'is-expanded': expandedResourceId === resource.resource_id }"><div class="resource-mark" :class="`mark-${resource.resource_type}`"><FileText v-if="resource.resource_type === 'document' || resource.resource_type === 'reading'" :size="19" /><PlayCircle v-else-if="resource.resource_type === 'video' || resource.resource_type === 'external_video'" :size="19" /><Code2 v-else-if="resource.resource_type === 'code' || resource.resource_type === 'template'" :size="19" /><ListChecks v-else :size="19" /></div><div class="resource-main"><div class="resource-title-line"><h2>{{ resource.topic }}</h2><span class="type-label">{{ typeLabel(resource.resource_type) }}</span></div><p v-if="resource.match_reason" class="resource-reason"><span>匹配理由</span>{{ resource.match_reason }}</p><div class="resource-meta"><span v-if="difficultyLabel(resource)"><BarChart3 :size="13" />{{ difficultyLabel(resource) }}</span><span v-if="resource.source_label"><Compass :size="13" />{{ resource.source_label }}</span><span v-if="formatDate(resource.created_at)"><Clock3 :size="13" />{{ formatDate(resource.created_at) }}</span></div></div><div class="resource-actions"><button class="icon-button" type="button" :class="{ 'is-favorite': resource.favorited }" :aria-label="resource.favorited ? '取消收藏' : '收藏资料'" :title="resource.favorited ? '取消收藏' : '收藏资料'" @click="toggleFavorite(resource)"><Star :size="16" :fill="resource.favorited ? 'currentColor' : 'none'" /></button><button class="icon-button resource-expand-button" type="button" :aria-expanded="expandedResourceId === resource.resource_id" aria-label="展开资源详情" title="展开资源详情" @click="toggleExpanded(resource)"><ChevronDown :size="16" /></button><button class="button button--quiet open-button" type="button" @click="openPreview(resource)">打开 <ArrowUpRight :size="14" /></button></div><Transition name="resource-details"><div v-if="expandedResourceId === resource.resource_id" class="resource-details"><div v-if="resource.match_reason"><span>推荐依据</span><p>{{ resource.match_reason }}</p></div><div v-if="difficultyLabel(resource) || resource.source_label || formatDate(resource.created_at)"><span>资源信息</span><p>{{ [difficultyLabel(resource), resource.source_label, formatDate(resource.created_at)].filter(Boolean).join(' · ') }}</p></div><div v-if="resource.knowledge_tags?.length"><span>关联知识点</span><div class="resource-tags"><span v-for="tag in resource.knowledge_tags" :key="tag">{{ tag }}</span></div></div></div></Transition></article></div>
     <div v-if="previewResource" class="preview-backdrop" @click.self="previewResource = null"><section class="preview-modal surface" role="dialog" aria-modal="true" aria-labelledby="preview-title"><button class="preview-close icon-button" type="button" aria-label="关闭预览" @click="previewResource = null"><X :size="17" /></button><p class="eyebrow">{{ typeLabel(previewResource.resource_type) }}<span v-if="difficultyLabel(previewResource)"> · {{ difficultyLabel(previewResource) }}</span></p><h2 id="preview-title">{{ previewResource.topic }}</h2><p v-if="previewResource.source_label || previewResource.match_reason" class="preview-source">{{ previewResource.source_label }}<span v-if="previewResource.source_label && previewResource.match_reason"> · </span>{{ previewResource.match_reason }}</p><div class="preview-content">{{ previewResource.preview || '这份材料还没有可预览的摘要，打开学习工作区查看完整内容。' }}</div><div class="preview-footer"><button class="button button--quiet" type="button" @click="previewResource = null">稍后阅读</button><button class="button button--primary" type="button" @click="markAndClose(previewResource)">标记为已读</button></div></section></div>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
-import { ArrowUpRight, BarChart3, BookOpen, CircleAlert, Clock3, Code2, Compass, FileText, ListChecks, LoaderCircle, PlayCircle, Search, Sparkles, Star, Target, X } from 'lucide-vue-next'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { ArrowUpRight, BarChart3, BookOpen, ChevronDown, CircleAlert, Clock3, Code2, Compass, FileText, ListChecks, LoaderCircle, PlayCircle, Search, Sparkles, Star, Target, X } from 'lucide-vue-next'
 import PageTitle from '@/shared/ui/PageTitle.vue'
 import { learningApi } from '@/shared/api/learningApi'
 import { resourceApi } from '@/shared/api/resourceApi'
 
 const unwrap = (response) => response?.data?.data ?? response?.data ?? []
-const loading = ref(true); const errorMessage = ref(''); const resources = ref([]); const activeType = ref('all'); const searchTerm = ref(''); const previewResource = ref(null)
+const loading = ref(true); const errorMessage = ref(''); const resources = ref([]); const activeType = ref('all'); const searchTerm = ref(''); const previewResource = ref(null); const expandedResourceId = ref(null); const notice = ref(''); let noticeTimer = null
 const profile = reactive({ direction: '', goal: '', stage: '' })
 const tabs = [{ key: 'all', label: '全部' }, { key: 'document', label: '文档' }, { key: 'video', label: '视频' }, { key: 'code', label: '代码模板' }, { key: 'exercise', label: '练习题' }]
 const typeLabel = (type) => ({ document: '文档', reading: '阅读材料', video: '视频', external_video: '视频', code: '代码模板', template: '代码模板', exercise: '练习题', case: '案例' }[type] || '学习材料')
@@ -57,11 +58,24 @@ async function loadResources() {
     loading.value = false
   }
 }
-async function toggleFavorite(resource) { const previous = resource.favorited; resource.favorited = !previous; try { await resourceApi.favorite(resource.resource_id) } catch { resource.favorited = previous } }
 async function markRead(resource) { if (resource.is_read) return; const previous = resource.is_read; resource.is_read = true; try { await resourceApi.markRead(resource.resource_id) } catch { resource.is_read = previous } }
+function showNotice(message) { notice.value = message; window.clearTimeout(noticeTimer); noticeTimer = window.setTimeout(() => { notice.value = '' }, 2200) }
+function toggleExpanded(resource) { expandedResourceId.value = expandedResourceId.value === resource.resource_id ? null : resource.resource_id }
+async function toggleFavorite(resource) {
+  const previous = resource.favorited
+  resource.favorited = !previous
+  showNotice(resource.favorited ? '已加入收藏' : '已取消收藏')
+  try {
+    await resourceApi.favorite(resource.resource_id)
+  } catch {
+    resource.favorited = previous
+    showNotice('收藏操作失败，请稍后重试')
+  }
+}
 function openPreview(resource) { previewResource.value = resource; markRead(resource) }; function markAndClose(resource) { markRead(resource); previewResource.value = null }
 function formatDate(value) { if (!value) return ''; const date = new Date(value); return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) + ' 更新' }
 onMounted(loadResources)
+onBeforeUnmount(() => window.clearTimeout(noticeTimer))
 </script>
 
 <style scoped>
@@ -93,4 +107,20 @@ onMounted(loadResources)
 :global(.page-container:has(.library-page)) { min-height: calc(100vh - 64px); background: #f7f7f7; }
 :global(.app-content:has(.library-page)) { background: #f7f7f7; }
 :global(.app-content:has(.library-page) .app-header) { border-bottom-color: #e8e8e8; background: #f7f7f7; }
+.resource-row.is-expanded { border-color: #a8ba9e; }
+.resource-expand-button svg { transition: transform .2s ease; }
+.resource-row.is-expanded .resource-expand-button svg { transform: rotate(180deg); }
+.resource-details { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 14px 0 1px 61px; border-top: 1px solid rgba(63, 91, 49, .13); }
+.resource-details > div { min-width: 0; }
+.resource-details > div > span { color: var(--muted); font-size: 10px; }
+.resource-details p { margin: 5px 0 0; color: var(--ink); font-size: 11px; line-height: 1.55; }
+.resource-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.resource-tags span { padding: 3px 7px; border-radius: 4px; background: var(--soft); color: var(--accent-deep); font-size: 10px; }
+.resource-details-enter-active, .resource-details-leave-active { overflow: hidden; transition: opacity .2s ease, max-height .24s ease; }
+.resource-details-enter-from, .resource-details-leave-to { max-height: 0; opacity: 0; }
+.resource-details-enter-to, .resource-details-leave-from { max-height: 220px; opacity: 1; }
+.library-toast { position: fixed; top: 78px; left: 50%; z-index: 20; padding: 9px 13px; border: 1px solid #d7e3c9; border-radius: 8px; background: #f3f8ea; box-shadow: 0 8px 20px rgba(45, 70, 40, .12); color: var(--accent-deep); font-size: 12px; transform: translateX(-50%); }
+.library-toast-enter-active, .library-toast-leave-active { transition: opacity .18s ease, transform .18s ease; }
+.library-toast-enter-from, .library-toast-leave-to { opacity: 0; transform: translate(-50%, -6px); }
+@media (max-width: 700px) { .resource-details { grid-template-columns: 1fr; gap: 10px; padding: 13px 0 1px 52px; } }
 </style>

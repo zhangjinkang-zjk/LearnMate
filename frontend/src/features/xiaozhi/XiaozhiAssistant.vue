@@ -20,6 +20,8 @@
           </button>
         </header>
 
+        <Transition name="xiaozhi-toast"><div v-if="resourceNotice" class="xiaozhi-toast" role="status"><CheckCircle :size="14" />{{ resourceNotice }}</div></Transition>
+
         <div ref="messagesEl" class="xiaozhi-panel__messages" aria-live="polite">
           <div v-for="message in messages" :key="message.id" class="xiaozhi-message" :class="`is-${message.role}`">
             <div v-if="message.role === 'assistant'" class="xiaozhi-message__avatar">知</div>
@@ -75,7 +77,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { FileDown, LoaderCircle, Send, X } from 'lucide-vue-next'
+import { CheckCircle, FileDown, LoaderCircle, Send, X } from 'lucide-vue-next'
 import { chatApi } from '@/shared/api/chatApi'
 import robotImage from '@/shared/assets/xiaozhi-robot.png'
 import { applyWorkflowEvent, applyWorkflowProgress, finishWorkflow, resetWorkflow } from '@/entities/agent/agentWorkflowState'
@@ -98,6 +100,8 @@ const hasMoved = ref(false)
 const draft = ref('')
 const isLoading = ref(false)
 const errorMessage = ref('')
+const resourceNotice = ref('')
+let resourceNoticeTimer = null
 const chatGroupId = ref(Number(sessionStorage.getItem(props.sessionKey)) || null)
 const position = ref({ x: null, y: null })
 const dragOffset = ref({ x: 0, y: 0 })
@@ -164,6 +168,12 @@ function isResourceRequest(text) {
   return /(生成|制作|整理|创建).{0,12}(资源|文档|资料|思维导图|笔记)/.test(text)
 }
 
+function showResourceNotice(message) {
+  resourceNotice.value = message
+  window.clearTimeout(resourceNoticeTimer)
+  resourceNoticeTimer = window.setTimeout(() => { resourceNotice.value = '' }, 2600)
+}
+
 async function sendMessage() {
   const text = draft.value.trim()
   if (!text || isLoading.value) return
@@ -197,6 +207,7 @@ async function sendMessage() {
       await chatApi.generateResource(text, chatGroupId.value, onEvent, controller.signal)
       finishWorkflow(false)
       if (!reply.downloadUrl) reply.text = '资源已生成并保存到资料库。'
+      showResourceNotice('资源已生成并保存到资料库')
     } else if (chatGroupId.value) {
       await chatApi.streamMessage(chatGroupId.value, text, onEvent, controller.signal)
     } else {
@@ -223,6 +234,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize)
+  window.clearTimeout(resourceNoticeTimer)
 })
 </script>
 
@@ -255,4 +267,7 @@ onBeforeUnmount(() => {
 @keyframes robert-greet { 0% { transform: rotate(0); } 35% { transform: rotate(-5deg) translateY(-3px); } 70% { transform: rotate(4deg) translateY(-1px); } 100% { transform: rotate(0); } }
 @media (max-width: 620px) { .xiaozhi { right: 15px; bottom: 15px; }.xiaozhi-panel { position: fixed; right: 15px; bottom: 111px; width: calc(100vw - 30px); max-height: calc(100vh - 130px); } .xiaozhi.is-robert { right: 10px; bottom: 8px; width: 112px; } .xiaozhi.is-robert .xiaozhi-fab, .xiaozhi.is-robert .xiaozhi-fab img { width: 112px; height: 128px; } .xiaozhi.is-robert .xiaozhi-panel { bottom: 146px; } }
 @media (prefers-reduced-motion: reduce) { .xiaozhi-fab__halo, .xiaozhi.is-robert .xiaozhi-fab, .xiaozhi.is-robert .xiaozhi-fab img { animation: none; } }
+.xiaozhi-toast { position: absolute; top: 58px; right: 12px; left: 12px; z-index: 2; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid #d7e3c9; border-radius: 6px; background: #f3f8ea; box-shadow: 0 7px 16px rgba(45, 70, 40, .12); color: var(--accent-deep); font-size: 11px; }
+.xiaozhi-toast-enter-active, .xiaozhi-toast-leave-active { transition: opacity .18s ease, transform .18s ease; }
+.xiaozhi-toast-enter-from, .xiaozhi-toast-leave-to { opacity: 0; transform: translateY(-5px); }
 </style>

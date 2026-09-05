@@ -33,9 +33,9 @@ button { cursor: pointer; }
 .sidebar-workflow-launcher > i { position: absolute; top: 1px; right: 1px; width: 7px; height: 7px; border-radius: 50%; background: #70aa63; box-shadow: 0 0 0 4px rgba(112,170,99,.18); animation: workflowLauncherPulse 1.3s ease-out infinite; }
 @keyframes workflowLauncherPulse { 0% { box-shadow: 0 0 0 0 rgba(112,170,99,.35); } 100% { box-shadow: 0 0 0 8px rgba(112,170,99,0); } }
 .sidebar-section { padding: 0; }
-.sidebar-nav-group { margin-top: 11px; padding-top: 11px; border-top: 1px solid rgba(30,60,52,.15); }
+.sidebar-nav-group { margin-top: 11px; padding-top: 11px; border-top: 0; }
 .sidebar-group-label { display: none; margin: 0 10px 9px; color: rgba(239,243,232,.52); font-size: 10px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
-.sidebar-section--secondary { margin-top: 11px; padding-top: 11px; border-top: 1px solid rgba(30,60,52,.15); }
+.sidebar-section--secondary { margin-top: 11px; padding-top: 11px; border-top: 0; }
 .sidebar-label { display: none; margin: 0 10px 9px; color: rgba(239,243,232,.52); font-size: 10px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
 .sidebar-nav { display: grid; gap: 9px; }
 .sidebar-link { position: relative; display: flex; align-items: center; justify-content: center; width: 44px; min-height: 44px; margin: 0 auto; padding: 0; border-radius: 12px; color: rgba(30,60,52,.72); font-size: 0; text-decoration: none; transition: background .25s ease, color .25s ease, transform .25s ease; }
@@ -45,7 +45,6 @@ button { cursor: pointer; }
 .sidebar-link.router-link-active { background: #1e3c34; color: #e2f452; }
 .sidebar-footer { width: 64px; margin: auto auto 0; display: grid; gap: 9px; padding: 12px 10px; border: 1px solid rgba(255,255,255,.82); border-radius: 34px; background: #ffffff; box-shadow: 0 20px 42px rgba(3,20,13,.2); pointer-events: auto; }
 .profile-chip { display: grid; justify-items: center; gap: 12px; margin-top: 5px; padding: 12px 0 0; border-top: 1px solid rgba(30,60,52,.15); }
-.profile-avatar { display: grid; width: 29px; height: 29px; place-items: center; border-radius: 50%; background: #1e3c34; color: #e2f452; font-size: 12px; font-weight: 800; }
 .profile-copy { display: none; min-width: 0; flex: 1; gap: 2px; font-size: 11px; }
 .profile-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profile-copy small { color: rgba(239,243,232,.52); font-size: 10px; }
@@ -118,7 +117,7 @@ button { cursor: pointer; }
   .sidebar-workflow-launcher { width: auto; height: 40px; margin: 14px 0 0; place-items: center start; grid-template-columns: 20px 1fr; gap: 9px; padding: 0 11px; border-radius: 6px; background: rgba(226,244,82,.12); color: #e2f452; box-shadow: none; }
   .sidebar-workflow-launcher > span { position: static; padding: 0; background: transparent; color: inherit; font-size: 13px; opacity: 1; pointer-events: auto; transform: none; }
   .sidebar-workflow-launcher > i { top: 10px; right: 12px; }
-  .sidebar-nav-group, .sidebar-section--secondary { border-top-color: rgba(255,255,255,.13); }
+  .sidebar-nav-group, .sidebar-section--secondary { border-top: 0; }
   .sidebar-group-label { display: block; }
   .sidebar-nav { gap: 5px; }
   .sidebar-link { justify-content: flex-start; width: auto; min-height: 40px; margin: 0; padding: 0 11px; border-radius: 6px; font-size: 13px; }

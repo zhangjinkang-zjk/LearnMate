@@ -657,12 +657,12 @@ class PortraitChatHistory_Service:
 # ═══════════════════════════════════════
 
 RADAR_DIMENSIONS = [
-    {"key": "memory",        "label": "记忆",   "desc": "easy 难度题目正确率"},
-    {"key": "understanding", "label": "理解",   "desc": "medium 难度题目正确率"},
-    {"key": "application",   "label": "应用",   "desc": "hard 难度题目正确率"},
-    {"key": "analysis",      "label": "分析",   "desc": "多选题正确率"},
-    {"key": "breadth",       "label": "广度",   "desc": "已覆盖知识标签种类数"},
-    {"key": "persistence",   "label": "坚持",   "desc": "近 30 天活跃天数占比"},
+    {"key": "memory",        "label": "记忆",   "desc": "基础回忆与知识提取表现"},
+    {"key": "understanding", "label": "理解",   "desc": "概念理解与知识关联表现"},
+    {"key": "application",   "label": "应用",   "desc": "场景迁移与实际应用表现"},
+    {"key": "analysis",      "label": "分析",   "desc": "问题拆解与综合判断表现"},
+    {"key": "breadth",       "label": "广度",   "desc": "知识覆盖与探索范围"},
+    {"key": "persistence",   "label": "坚持",   "desc": "学习投入与持续参与"},
 ]
 
 
@@ -758,12 +758,12 @@ class PortraitRadarService:
             "radar_id": radar.id,
             "user_id": radar.user_id,
             "dimensions": [
-                {"key": "memory",        "label": "记忆",   "score": radar.memory,        "desc": "简单题正确率"},
-                {"key": "understanding", "label": "理解",   "score": radar.understanding, "desc": "中等题正确率"},
-                {"key": "application",   "label": "应用",   "score": radar.application,   "desc": "困难题正确率"},
-                {"key": "analysis",      "label": "分析",   "score": radar.analysis,      "desc": "多选题正确率"},
-                {"key": "breadth",       "label": "广度",   "score": radar.breadth,       "desc": "知识标签覆盖度"},
-                {"key": "persistence",   "label": "坚持",   "score": radar.persistence,   "desc": "近30天活跃度"},
+                {"key": "memory",        "label": "记忆",   "score": radar.memory,        "desc": "基础回忆与知识提取表现"},
+                {"key": "understanding", "label": "理解",   "score": radar.understanding, "desc": "概念理解与知识关联表现"},
+                {"key": "application",   "label": "应用",   "score": radar.application,   "desc": "场景迁移与实际应用表现"},
+                {"key": "analysis",      "label": "分析",   "score": radar.analysis,      "desc": "问题拆解与综合判断表现"},
+                {"key": "breadth",       "label": "广度",   "score": radar.breadth,       "desc": "知识覆盖与探索范围"},
+                {"key": "persistence",   "label": "坚持",   "score": radar.persistence,   "desc": "学习投入与持续参与"},
             ],
             "updated_at": str(radar.updated_at),
         }

@@ -3,8 +3,8 @@
     <component :is="route.meta.layout === 'immersive' ? Component : AppShell">
       <component :is="Component" />
     </component>
+    <RobertAssistant v-if="route.path.startsWith('/learning/')" />
   </RouterView>
-  <RobertAssistant />
 </template>
 
 <script setup>
