@@ -178,9 +178,11 @@ const enterLearningSpace = async () => {
   if (isEntering.value) return;
   isEntering.value = true;
   entryMessage.value = "";
-  let hasSavedProfile = Boolean(
-    String(localStorage.getItem("learnmate_direction") || "").trim(),
-  );
+  // The server-side portrait is authoritative. Local onboarding values can
+  // belong to a previous account on the same browser and must not decide the
+  // current user's entry flow.
+  let hasSavedProfile = false;
+  let overviewLoaded = false;
   try {
     const currentPathResponse = await learningApi.getCurrentPath();
     const currentPath = getResponseData(currentPathResponse);
@@ -192,8 +194,9 @@ const enterLearningSpace = async () => {
     // 画像已经保存但路径生成中断时，复用服务端画像自动补建路径，避免回到首次定向。
     const overviewResponse = await learningApi.getOverview();
     const overview = getResponseData(overviewResponse);
+    overviewLoaded = true;
     const profile = overview?.profile || {};
-    hasSavedProfile = hasSavedProfile || Boolean(String(profile.direction || "").trim());
+    hasSavedProfile = Boolean(String(profile.direction || "").trim());
     if (String(profile.direction || "").trim()) {
       const generatedResponse = await learningApi.generatePathsFromDirection(profile.direction, profile.goal || "");
       const generated = getResponseData(generatedResponse);
@@ -211,6 +214,8 @@ const enterLearningSpace = async () => {
     // 已有画像时保留当前入口，允许用户稍后重试生成，不再回到首次定向形成循环。
     if (hasSavedProfile) {
       entryMessage.value = "学习概览正在准备，请稍后再次进入。";
+    } else if (!overviewLoaded) {
+      entryMessage.value = "暂时无法读取学习状态，请稍后重试。";
       return;
     }
   } finally {
