@@ -23,7 +23,8 @@ button { cursor: pointer; }
 .app-shell { display: flex; width: 100%; min-height: 100vh; overflow-x: hidden; background: var(--stage); }
 .app-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 20; display: flex; flex-direction: column; width: 112px; padding: 26px 0 22px; background: transparent; color: #eff3e8; pointer-events: none; }
 .brand-lockup { display: flex; align-items: center; justify-content: flex-start; width: 96px; margin: 0 0 0 14px; padding: 0; pointer-events: auto; }
-.brand-name { display: block; color: #ffffff; font-family: Georgia, serif; font-size: 16px; letter-spacing: .01em; white-space: nowrap; }
+.brand-name { display: block; color: #ffffff; font-family: Georgia, serif; font-size: 16px; letter-spacing: .01em; text-decoration: none; white-space: nowrap; }
+.brand-name:hover { color: #e2f452; }
 .sidebar-nav-dock { width: 64px; margin: clamp(48px, 10vh, 112px) auto 0; padding: 12px 10px; border: 1px solid rgba(255,255,255,.82); border-radius: 34px; background: #ffffff; box-shadow: 0 20px 42px rgba(3,20,13,.2); pointer-events: auto; }
 .sidebar-section { padding: 0; }
 .sidebar-nav-group { margin-top: 11px; padding-top: 11px; border-top: 0; }
