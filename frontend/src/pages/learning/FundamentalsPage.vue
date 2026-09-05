@@ -417,6 +417,62 @@ function normalizeResourceId(resource) {
   return resource?.resource_id || resource?.id || null
 }
 
+function normalizeAnnotations(payload) {
+  const data = payload?.data ?? payload
+  const list = Array.isArray(data) ? data : data?.records || data?.list || data?.annotations || []
+  return list.map((item) => ({
+    ...item,
+    id: item.id || item.annotation_id || item.annotationId,
+    selected_text: item.selected_text || item.selectedText || '',
+    note_text: item.note_text || item.note || '',
+  })).filter((item) => item.id)
+}
+
+async function refreshDocumentAnnotations(resourceId = normalizeResourceId(documentResource.value)) {
+  if (!resourceId) {
+    documentAnnotations.value = []
+    return
+  }
+  try {
+    documentAnnotations.value = normalizeAnnotations(await resourceApi.listAnnotations(resourceId, 'generated'))
+  } catch (error) {
+    // 标注是辅助能力，读取失败不应让正文进入错误态。
+    console.warn('[FundamentalsPage] load document annotations failed:', error)
+    documentAnnotations.value = []
+  }
+}
+
+async function createDocumentAnnotation(payload) {
+  const resourceId = normalizeResourceId(documentResource.value)
+  if (!resourceId || !payload?.selected_text) return
+  try {
+    await resourceApi.createAnnotation(resourceId, payload)
+    await refreshDocumentAnnotations(resourceId)
+  } catch (error) {
+    console.warn('[FundamentalsPage] save document annotation failed:', error)
+  }
+}
+
+async function updateDocumentAnnotation(annotationId, payload) {
+  if (!annotationId) return
+  try {
+    await resourceApi.updateAnnotation(annotationId, payload)
+    await refreshDocumentAnnotations()
+  } catch (error) {
+    console.warn('[FundamentalsPage] update document annotation failed:', error)
+  }
+}
+
+async function deleteDocumentAnnotation(annotationId) {
+  if (!annotationId) return
+  try {
+    await resourceApi.deleteAnnotation(annotationId)
+    await refreshDocumentAnnotations()
+  } catch (error) {
+    console.warn('[FundamentalsPage] delete document annotation failed:', error)
+  }
+}
+
 async function downloadActiveResource() {
   const resourceId = normalizeResourceId(activeResource.value)
   if (!resourceId || isResourceDownloading.value) return

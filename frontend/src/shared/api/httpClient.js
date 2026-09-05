@@ -1,9 +1,12 @@
 import axios from 'axios'
 import { clearAuthSession } from '@/shared/auth/session'
 
+// Keep development requests same-origin so Vite proxies them to the local API.
+// Deployments can provide an absolute VITE_API_BASE_URL when the API is hosted elsewhere.
+const apiBaseUrl = String(import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '')
+
 const httpClient = axios.create({
-  // Use the same-origin Vite/Nginx proxy by default; deployments may override it explicitly.
-  baseURL: "http://10.170.5.72:2221",
+  baseURL: apiBaseUrl,
   timeout: 15000,
   headers: { 'Content-Type': 'application/json' },
 })
