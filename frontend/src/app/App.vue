@@ -5,9 +5,12 @@
     </component>
     <RobertAssistant v-if="route.path.startsWith('/learning/')" />
   </RouterView>
+  <AgentWorkflowDrawer :state="workflowState" />
 </template>
 
 <script setup>
 import AppShell from '@/layouts/AppShell.vue'
+import AgentWorkflowDrawer from '@/features/agent/AgentWorkflowDrawer.vue'
 import RobertAssistant from '@/features/xiaozhi/RobertAssistant.vue'
+import { workflowState } from '@/entities/agent/agentWorkflowState'
 </script>
