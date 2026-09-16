@@ -250,15 +250,17 @@ def _normalize_score(weight: float, total_weight: float) -> float:
     return round(weight / total_weight * 100, 1)
 
 
-def _question_to_dict(q: ExamQuestion) -> dict:
-    def _safe_parse(text: str | None):
-        if not text:
-            return text
-        try:
-            return json.loads(text)
-        except (json.JSONDecodeError, TypeError):
-            return text
+def _safe_parse(text: str | None):
+    """解析数据库里的 JSON 文本，解析失败时原样返回。"""
+    if not text:
+        return text
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return text
 
+
+def _question_to_dict(q: ExamQuestion) -> dict:
     return {
         "question_id": q.id,
         "question_type": q.question_type,
@@ -271,6 +273,46 @@ def _question_to_dict(q: ExamQuestion) -> dict:
         "weight": 1.0,
         "created_at": str(q.created_at),
     }
+
+
+def _question_tags(raw_tags: Any) -> list[str]:
+    """把题目上的知识点标签规整成可入库的列表。"""
+    if not raw_tags:
+        return []
+    parsed = _safe_parse(raw_tags)
+    if not isinstance(parsed, list):
+        logger.warning("知识点标签 JSON 解析失败")
+        return []
+    return [str(tag).strip()[:128] for tag in parsed if str(tag).strip()][:12]
+
+
+async def update_knowledge_mastery(user_id: int, raw_tags: Any, is_correct: bool | None) -> list[str]:
+    """按一次作答更新知识点掌握度，返回本次计入的标签。
+
+    考试交卷与路径节点测验共用这一段：掌握度等级的口径只能有一处，
+    否则两条答题路径会算出不同结果。
+    """
+    tags = _question_tags(raw_tags)
+    for tag in tags:
+        mastery, _ = await KnowledgeMastery.get_or_create(
+            user_id=user_id, knowledge_tag=tag,
+            defaults={"total_attempts": 0, "correct_count": 0, "mastery_level": "beginner", "last_practiced_at": datetime.now()},
+        )
+        mastery.total_attempts += 1
+        if is_correct:
+            mastery.correct_count += 1
+        rate = mastery.correct_count / max(mastery.total_attempts, 1)
+        if rate >= 0.9:
+            mastery.mastery_level = "mastered"
+        elif rate >= 0.7:
+            mastery.mastery_level = "proficient"
+        elif rate >= 0.4:
+            mastery.mastery_level = "learning"
+        else:
+            mastery.mastery_level = "beginner"
+        mastery.last_practiced_at = datetime.now()
+        await mastery.save()
+    return tags
 
 
 class ExamService:
@@ -564,33 +606,7 @@ class ExamService:
             )
 
         # 更新知识点掌握度
-        tags = []
-        if question.knowledge_tags:
-            try:
-                tags = json.loads(question.knowledge_tags)
-            except (json.JSONDecodeError, TypeError):
-                logger.warning("知识点标签 JSON 解析失败 question_id=%s", question_id)
-                tags = []
-            tags = [str(tag).strip()[:128] for tag in tags if str(tag).strip()][:12]
-            for tag in tags:
-                mastery, _ = await KnowledgeMastery.get_or_create(
-                    user_id=user_id, knowledge_tag=tag,
-                    defaults={"total_attempts": 0, "correct_count": 0, "mastery_level": "beginner", "last_practiced_at": datetime.now()},
-                )
-                mastery.total_attempts += 1
-                if is_correct:
-                    mastery.correct_count += 1
-                rate = mastery.correct_count / max(mastery.total_attempts, 1)
-                if rate >= 0.9:
-                    mastery.mastery_level = "mastered"
-                elif rate >= 0.7:
-                    mastery.mastery_level = "proficient"
-                elif rate >= 0.4:
-                    mastery.mastery_level = "learning"
-                else:
-                    mastery.mastery_level = "beginner"
-                mastery.last_practiced_at = datetime.now()
-                await mastery.save()
+        tags = await update_knowledge_mastery(user_id, question.knowledge_tags, is_correct)
 
         try:
             await record_learning_event(

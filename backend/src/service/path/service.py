@@ -28,7 +28,7 @@ from backend.src.service.portrait.service import (
     build_learning_guidance,
     record_learning_event,
 )
-from backend.src.service.exam.service import ExamService, _answer_matches, _display_answer
+from backend.src.service.exam.service import ExamService, _answer_matches, _display_answer, update_knowledge_mastery
 from backend.src.service.resource.service import ResourceService
 from backend.src.service.resource.metadata import format_mindmap_content
 from backend.src.utils.knowledge_base import search as kb_search
@@ -1456,6 +1456,10 @@ class PathService:
             record.is_correct = is_correct
             record.score = 1.0 if is_correct else 0.0
             await record.save(update_fields=["user_answer", "is_correct", "score"])
+            # 与考试交卷共用同一段掌握度规则。此前主路径只写 ExamRecord，
+            # 于是紧随其后的 update_portrait_from_mastery 永远读到诊断流程留下的旧快照。
+            if record.question:
+                await update_knowledge_mastery(record.user_id, record.question.knowledge_tags, is_correct)
             logger.info(
                 "节点测验判分 question_id=%s answer=%r correct_answer=%r is_correct=%s",
                 record.question_id,
