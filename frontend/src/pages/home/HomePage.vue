@@ -183,6 +183,18 @@ const enterLearningSpace = async () => {
   // current user's entry flow.
   let hasSavedProfile = false;
   let overviewLoaded = false;
+  // 画像确认时置位，诊断答完清除。没有这一道闸，下面 currentPath 的短路会把
+  // 中途关掉标签页的用户直接送进概览，能力诊断就永久跳过了。
+  // 存量用户没有这个标记，入口行为不变。
+  // 每个浏览器会话只拦一次：诊断接口故障时用户再回首页就能进概览，不会被永久挡在门外。
+  if (
+    localStorage.getItem("learnmate_diagnosis_pending") === "1" &&
+    sessionStorage.getItem("learnmate_diagnosis_gate_shown") !== "1"
+  ) {
+    sessionStorage.setItem("learnmate_diagnosis_gate_shown", "1");
+    await router.push("/onboarding/diagnosis");
+    return;
+  }
   try {
     const currentPathResponse = await learningApi.getCurrentPath();
     const currentPath = getResponseData(currentPathResponse);

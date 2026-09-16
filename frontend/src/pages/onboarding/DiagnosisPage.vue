@@ -116,6 +116,8 @@ async function submitAnswer() {
     answerDraft.value = ''
     if (result.finished) {
       isFinished.value = true
+      // 诊断这一环走完了，撤掉首页那道闸，否则会一直把用户送回这里。
+      localStorage.removeItem('learnmate_diagnosis_pending')
       localStorage.setItem('learnmate_diagnosis_result', JSON.stringify(result.result || {}))
       messages.value.push({ role: 'assistant', text: result.result?.message || '正在生成诊断结果…' })
       window.setTimeout(() => router.push('/onboarding/diagnosis/result'), 500)

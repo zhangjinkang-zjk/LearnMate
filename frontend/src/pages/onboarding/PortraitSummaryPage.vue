@@ -146,6 +146,8 @@ const confirmProfile = async () => {
     window.dispatchEvent(new CustomEvent('learnmate:learning-profile-ready', { detail: profile }))
     // 画像确认后先做能力诊断，再进学习概览。诊断结果页的「进入学习概览」是这一步的出口，
     // 所以两条路都通；此前这里直接跳概览，导致 /onboarding/diagnosis 没有任何入口。
+    // 标记留到诊断答完才清除，中途关掉标签页的用户下次进来仍会被送回诊断。
+    localStorage.setItem('learnmate_diagnosis_pending', '1')
     await router.push('/onboarding/diagnosis')
   } catch (error) {
     generationError.value = error?.response?.data?.detail || error?.message || '学习路径生成失败，请重试。'
