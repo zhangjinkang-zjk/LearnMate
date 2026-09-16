@@ -114,6 +114,18 @@
                 <Presentation :size="16" />
                 <span>{{ isPptLoading ? '读取中' : pptError ? '重试 PPT' : 'PPT 辅助' }}</span>
               </button>
+              <button
+                type="button"
+                role="tab"
+                :aria-selected="resourceView === 'video'"
+                :class="{ 'is-active': resourceView === 'video' }"
+                :disabled="isVideoLoading"
+                :title="videoError || '查看当前学习路径的视频讲解'"
+                @click="showVideo"
+              >
+                <Video :size="16" />
+                <span>{{ isVideoLoading ? '准备中' : videoError ? '重试视频' : '视频讲解' }}</span>
+              </button>
             </div>
           </nav>
 
@@ -217,6 +229,25 @@
                 :title="activeNode.title"
               />
 
+              <div v-else-if="resourceView === 'video' && isVideoLoading" class="document-loading surface" aria-live="polite">
+                <LoaderCircle class="spin" :size="25" />
+                <strong>正在准备课程视频讲解</strong>
+                <p>首次生成会结合整条学习路径组织内容，请稍候。</p>
+              </div>
+
+              <div v-else-if="resourceView === 'video' && videoError" class="document-loading document-loading--error surface">
+                <CircleAlert :size="25" />
+                <strong>视频讲解暂时不可用</strong>
+                <p>{{ videoError }}</p>
+                <button class="button button--quiet" type="button" @click="showVideo">重新准备视频</button>
+              </div>
+
+              <VideoLessonFrame
+                v-else-if="resourceView === 'video' && videoResource?.file_url"
+                :src="videoResource.file_url"
+                :title="videoResource.topic || learningPath.goal"
+              />
+
               <footer v-if="resourceView !== 'document'" class="chapter-footer surface">
                 <button class="button button--quiet" type="button" :disabled="!previousNode" @click="previousNode && selectNode(previousNode.id)">
                   <ArrowLeft :size="15" />
@@ -304,7 +335,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, BookOpenText, CircleAlert, Download, ListTree, LoaderCircle, Network, Presentation, Route, X } from 'lucide-vue-next'
+import { ArrowLeft, ArrowRight, BookOpenText, CircleAlert, Download, ListTree, LoaderCircle, Network, Presentation, Route, Video, X } from 'lucide-vue-next'
 import ChapterCheck from '@/features/fundamentals/ChapterCheck.vue'
 import ChapterRail from '@/features/fundamentals/ChapterRail.vue'
 import LearningAssistant from '@/features/fundamentals/LearningAssistant.vue'
@@ -312,6 +343,7 @@ import MarkdownDocument from '@/features/fundamentals/MarkdownDocument.vue'
 import MindmapPreview from '@/features/fundamentals/MindmapPreview.vue'
 import PathPicker from '@/features/fundamentals/PathPicker.vue'
 import PptEditorFrame from '@/features/fundamentals/PptEditorFrame.vue'
+import VideoLessonFrame from '@/features/fundamentals/VideoLessonFrame.vue'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { readPortrait } from '@/shared/api/portraitApi'
 import { applyWorkflowEvent, applyWorkflowProgress, finishWorkflow, resetWorkflow } from '@/entities/agent/agentWorkflowState'
@@ -335,16 +367,19 @@ const pptResource = ref(null)
 const pptContent = ref('')
 const mindmapResource = ref(null)
 const mindmapContent = ref('')
+const videoResource = ref(null)
 const resourceView = ref('document')
 const isResourceLoading = ref(false)
 const isResourceGenerating = ref(false)
 const isMindmapLoading = ref(false)
 const isPptLoading = ref(false)
+const isVideoLoading = ref(false)
 const navigationDrawer = ref(null)
 const resourceLoadingMessage = ref('正在读取本章文档')
 const documentError = ref('')
 const mindmapError = ref('')
 const pptError = ref('')
+const videoError = ref('')
 const resourceGenerationError = ref('')
 const isResourceDownloading = ref(false)
 const resourceDownloadError = ref('')
@@ -361,8 +396,9 @@ const activeResource = computed(() => ({
   document: documentResource.value,
   ppt: pptResource.value,
   mindmap: mindmapResource.value,
+  video: videoResource.value,
 }[resourceView.value] || null))
-const activeResourceLabel = computed(() => ({ document: '主讲文档', ppt: 'PPT', mindmap: '知识结构' }[resourceView.value] || '学习材料'))
+const activeResourceLabel = computed(() => ({ document: '主讲文档', ppt: 'PPT', mindmap: '知识结构', video: '视频讲解' }[resourceView.value] || '学习材料'))
 const completedNodeCount = computed(() => learningPath.value?.nodes.filter((node) => node.status === 'completed').length || 0)
 const previousNode = computed(() => {
   if (!learningPath.value || activeNodeIndex.value <= 0) return null
@@ -870,6 +906,8 @@ async function selectPath(pathId) {
     const selected = await loadPathWorkspace(nextPathId)
     if (!selected || !Array.isArray(selected.nodes) || !selected.nodes.length) throw new Error('这条路径暂时没有可学习的章节')
     learningPath.value = selected
+    videoResource.value = null
+    videoError.value = ''
     activeNodeId.value = null
     syncPathCatalog(selected)
     const initialNode = chooseInitialNode(selected)
@@ -1113,6 +1151,33 @@ async function showPpt() {
   }
 }
 
+async function showVideo() {
+  if (!learningPath.value || isVideoLoading.value) return
+  await reportReadDuration(true)
+  resourceView.value = 'video'
+  resourceDownloadError.value = ''
+  openedAt = 0
+  if (videoResource.value?.file_url) return
+
+  isVideoLoading.value = true
+  videoError.value = ''
+  try {
+    let video = await fundamentalsApi.getPathVideo(learningPath.value.path_id)
+    if (!video?.file_url) video = await fundamentalsApi.generatePathVideo(learningPath.value.path_id)
+    if (!video?.file_url) throw new Error('视频课件尚未生成完成')
+    videoResource.value = {
+      ...video,
+      resource_id: video.html_id || video.resource_id || video.id || null,
+      resource_type: 'html',
+      topic: video.topic || `${learningPath.value.goal} 视频讲解`,
+    }
+  } catch (error) {
+    videoError.value = errorDetail(error, '视频讲解准备失败，请稍后重试。')
+  } finally {
+    isVideoLoading.value = false
+  }
+}
+
 function showDocument() {
   if (resourceView.value === 'document') return
   resourceView.value = 'document'
@@ -1238,7 +1303,7 @@ onBeforeUnmount(() => {
 .workspace-rail button > small { position: absolute; top: 4px; right: 4px; display: grid; min-width: 14px; height: 14px; place-items: center; padding: 0 3px; border-radius: 7px; background: var(--soft); color: var(--accent-deep); font-size: 8px; font-weight: 800; }
 .workspace-rail__divider { width: 28px; height: 1px; margin: 3px auto; background: var(--line); }
 .lesson-main { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto; gap: 12px; overflow: hidden; }
-.lesson-main > .lesson-document, .lesson-main > .document-loading, .lesson-main > .ppt-editor-frame, .lesson-main > .mindmap-preview, .lesson-main > .chapter-check { min-height: 0; height: 100%; overflow: auto; }
+.lesson-main > .lesson-document, .lesson-main > .document-loading, .lesson-main > .ppt-editor-frame, .lesson-main > .mindmap-preview, .lesson-main > .video-lesson-frame, .lesson-main > .chapter-check { min-height: 0; height: 100%; overflow: auto; }
 .learning-layout :deep(.learning-assistant) { position: static; min-height: 0; height: 100%; max-height: none; }
 .resource-toolbar { display: flex; min-height: 34px; align-items: center; gap: 10px; }
 .resource-tabs { display: flex; align-items: center; gap: 4px; }
