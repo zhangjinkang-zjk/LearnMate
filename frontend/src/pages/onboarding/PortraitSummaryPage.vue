@@ -88,7 +88,7 @@ const fullSummary = computed(() => [
   `每周可投入时间：${answerAt(3)}`,
   `学习偏好：${traitText('learning_pace') || answerAt(4)}`,
   '',
-  '以上内容准确吗？确认后，我会为你开始学习。'
+  '以上内容准确吗？确认后先做一次能力诊断，再为你生成学习路径。'
 ].join('\n'))
 
 const startStreaming = () => {
