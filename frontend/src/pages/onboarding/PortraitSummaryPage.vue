@@ -15,26 +15,22 @@
       <h1 id="summary-title">这是我对你的了解</h1>
       <p class="summary-intro">{{ introText }}</p>
 
-      <div v-if="analysisMissing" class="summary-notice" role="alert">
-        <span>下面是你访谈里说过的原话，可以直接确认，也可以重新分析一次。</span>
-        <button class="summary-retry" type="button" :disabled="isReanalyzing" @click="reanalyze">
-          {{ isReanalyzing ? '正在重新分析…' : '重新分析' }}
-        </button>
-      </div>
-      <p v-if="reanalyzeError" class="summary-error" role="alert">{{ reanalyzeError }}</p>
-
-      <div class="summary-output" aria-live="polite" @click="finishStreaming">
-        <span>{{ streamedText }}</span><span v-if="!isComplete" class="summary-caret" aria-hidden="true"></span>
+      <div class="summary-output" aria-live="polite">
+        <span v-if="isGeneratingPortrait">正在结合访谈与基础测评生成综合画像...</span>
+        <span v-else>{{ streamedText }}</span><span v-if="!isGeneratingPortrait && !isComplete" class="summary-caret" aria-hidden="true"></span>
       </div>
 
       <div class="summary-actions">
-        <button class="summary-edit" type="button" @click="router.push('/learnmate-chat')">重新访谈</button>
-        <button class="summary-confirm" type="button" :disabled="!isComplete" @click="confirmProfile">
-          <span>确认画像</span>
+        <button class="summary-edit" type="button" @click="router.push('/learnmate-chat')">修改回答</button>
+        <button v-if="portraitError" class="summary-edit" type="button" @click="generatePortrait">重新生成画像</button>
+        <button class="summary-confirm" type="button" :disabled="!isComplete || isPreparing || isGeneratingPortrait" @click="confirmProfile">
+          <span>{{ isPreparing ? '生成学习概览…' : '确认画像' }}</span>
           <span aria-hidden="true">↗</span>
         </button>
       </div>
-      <p class="summary-status">确认后先做一次能力诊断，再根据诊断结果生成你的学习路径。</p>
+      <p v-if="isPreparing" class="summary-status">正在根据你的方向拆分科目并准备学习路径，完成后会自动进入学习概览。</p>
+      <p v-if="portraitError" class="summary-error" role="alert">{{ portraitError }}</p>
+      <p v-if="generationError" class="summary-error" role="alert">{{ generationError }}</p>
     </section>
   </main>
 </template>
@@ -43,16 +39,16 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { learningState, persistLearningProfile } from '@/entities/learning/learningState'
+import { learningApi } from '@/shared/api/learningApi'
 import { initPortraitFromDialogue } from '@/shared/api/portraitApi'
-
-// 每次 tick 出 2 个字，约 22ms 一轮 —— 十几秒的等待压到 3 秒左右。
-const STREAM_INTERVAL_MS = 22
 
 const router = useRouter()
 const streamedText = ref('')
 const isComplete = ref(false)
-const isReanalyzing = ref(false)
-const reanalyzeError = ref('')
+const isPreparing = ref(false)
+const isGeneratingPortrait = ref(false)
+const portraitError = ref('')
+const generationError = ref('')
 let streamTimer
 
 const readDialogue = () => {
@@ -77,24 +73,21 @@ const readPortraitSummary = () => {
   }
 }
 
-// 分析结果要能重来，所以做成 ref 而不是一次性的常量。
-const portraitSummary = ref(readPortraitSummary())
+const readAssessment = () => {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem('learnmate_diagnosis_result') || '{}')
+    return saved && typeof saved === 'object' ? saved : null
+  } catch {
+    return null
+  }
+}
 
-const aiSummary = computed(() => String(portraitSummary.value.profile_summary || '').trim())
-// 后端 prompt 要求 profile_summary 为 60~140 字。缺失就说明这次分析没成功，
-// 必须显式说出来：否则页面会静默回退成原始回答，看着却像一份正经画像。
-const analysisMissing = computed(() => !aiSummary.value)
-const introText = computed(() => analysisMissing.value
-  ? '画像分析这次没有完成，以下是你在访谈中的原始回答。'
-  : '我已经把刚才的对话整理成了一份画像，请确认内容是否准确。')
-const cognition = computed(() => String(portraitSummary.value.cognition || '').trim())
-const learningGoal = computed(() => String(portraitSummary.value.learning_goal || '').trim())
-const traits = computed(() =>
-  portraitSummary.value.traits && typeof portraitSummary.value.traits === 'object' ? portraitSummary.value.traits : {}
-)
-const onboarding = computed(() =>
-  traits.value.onboarding && typeof traits.value.onboarding === 'object' ? traits.value.onboarding : {}
-)
+const portraitSummary = readPortraitSummary()
+const aiSummary = String(portraitSummary.profile_summary || '').trim()
+const cognition = String(portraitSummary.cognition || '').trim()
+const learningGoal = String(portraitSummary.learning_goal || '').trim()
+const traits = portraitSummary.traits && typeof portraitSummary.traits === 'object' ? portraitSummary.traits : {}
+const onboarding = traits.onboarding && typeof traits.onboarding === 'object' ? traits.onboarding : {}
 const traitText = key => {
   const value = traits.value[key]
   if (!value) return ''
@@ -116,7 +109,7 @@ const fullSummary = computed(() => [
   `当前卡点：${traitText('commonmis') || answerAt(3)}`,
   `练习安排：${traitText('learning_pace') || answerAt(4)}`,
   '',
-  '以上内容准确吗？确认后先做一次能力诊断，再为你生成学习路径。'
+  '以上内容准确吗？确认后，我会为你开始学习。'
 ].join('\n'))
 
 const startStreaming = () => {
@@ -138,62 +131,78 @@ const startStreaming = () => {
   tick()
 }
 
-// 确认画像在打完之前是 disabled 的，整段十几秒会让用户干等。点一下直接看全文，
-// 保留了「先读再确认」的意图，但不强制等动画。
-const finishStreaming = () => {
-  if (isComplete.value) return
-  if (streamTimer) window.clearTimeout(streamTimer)
-  streamedText.value = fullSummary.value
-  isComplete.value = true
-}
+const generatePortrait = async () => {
+  const assessment = readAssessment()
+  if (!dialogue.length || !assessment) {
+    portraitError.value = '缺少访谈或基础测评结果，请返回后重新完成。'
+    return
+  }
 
-// 分析失败时让用户能重来一次，而不是只能带着一份原始回答往下走。访谈内容还在
-// sessionStorage 里，所以重试不用重新问 5 遍。
-const reanalyze = async () => {
-  if (isReanalyzing.value) return
-  isReanalyzing.value = true
-  reanalyzeError.value = ''
+  isGeneratingPortrait.value = true
+  portraitError.value = ''
   try {
-    const data = await initPortraitFromDialogue({
+    const result = await initPortraitFromDialogue({
       dialogue,
       identity,
-      direction: direction.value,
-      goal: goal.value,
+      direction: localStorage.getItem('learnmate_direction') || '',
+      goal: localStorage.getItem('learnmate_goal') || '',
+      assessment,
     })
-    if (!data || typeof data !== 'object' || !String(data.profile_summary || '').trim()) {
-      throw new Error('这次仍然没有分析出画像，请稍后再试。')
-    }
-    portraitSummary.value = data
-    sessionStorage.setItem('learnmate_portrait_summary', JSON.stringify(data))
-    startStreaming()
+    if (!result || typeof result !== 'object') throw new Error('未返回有效画像结果')
+    sessionStorage.setItem('learnmate_portrait_summary', JSON.stringify(result))
+    window.location.reload()
   } catch (error) {
-    reanalyzeError.value = error?.response?.data?.detail || error?.message || '重新分析失败，请稍后重试。'
+    portraitError.value = error?.response?.data?.detail || error?.message || '综合画像生成失败，请重试。'
   } finally {
-    isReanalyzing.value = false
+    isGeneratingPortrait.value = false
   }
 }
 
-const confirmProfile = () => {
-  if (!isComplete.value) return
+const unwrap = response => response?.data?.data ?? response?.data ?? response
+const hasOverviewContent = overview => Boolean(
+  overview?.path?.id ||
+  (Array.isArray(overview?.subjects) && overview.subjects.some(subject => subject?.id || subject?.name)),
+)
+
+const confirmProfile = async () => {
+  if (!isComplete.value || isPreparing.value || isGeneratingPortrait.value) return
+  isPreparing.value = true
+  generationError.value = ''
 
   learningState.identity = identity
   learningState.direction = direction.value
   learningState.goal = goal.value
   persistLearningProfile()
 
-  localStorage.setItem('learnmate_onboarding_complete', '1')
-  const profile = { identity, direction: direction.value, goal: goal.value, dialogue }
-  sessionStorage.removeItem('learnmate_portrait_dialogue')
-  sessionStorage.removeItem('learnmate_portrait_summary')
-  window.dispatchEvent(new CustomEvent('learnmate:learning-profile-ready', { detail: profile }))
-  // 这一步只交接，不生成。学习路径由能力诊断答完后生成（后端
-  // _generate_paths_after_diagnosis），在这里先生成会让资源在诊断之前就开始产出。
-  // 标记留到诊断答完才清除，中途关掉标签页的用户下次进来仍会被送回诊断。
-  localStorage.setItem('learnmate_diagnosis_pending', '1')
-  router.push('/onboarding/diagnosis')
+  try {
+    const response = await learningApi.generatePathsFromDirection(direction, goal)
+    const generated = unwrap(response)
+    const paths = Array.isArray(generated?.paths) ? generated.paths : []
+    const readyPath = paths.find(path => path && path.path_id)
+    if (!readyPath) throw new Error('学习路径暂未生成成功，请稍后重试')
+
+    // 路径生成完成后再读取一次概览快照，确保进入页面时目标、科目和节点已经可用。
+    const overview = unwrap(await learningApi.getOverview())
+    if (!hasOverviewContent(overview)) throw new Error('学习概览暂未准备完成，请稍后重试')
+
+    localStorage.setItem('learnmate_onboarding_complete', '1')
+    const profile = { identity, direction, goal, dialogue }
+    sessionStorage.removeItem('learnmate_portrait_dialogue')
+    sessionStorage.removeItem('learnmate_portrait_summary')
+    sessionStorage.removeItem('learnmate_diagnosis_result')
+    window.dispatchEvent(new CustomEvent('learnmate:learning-profile-ready', { detail: profile }))
+    await router.push('/learning/overview')
+  } catch (error) {
+    generationError.value = error?.response?.data?.detail || error?.message || '学习路径生成失败，请重试。'
+  } finally {
+    isPreparing.value = false
+  }
 }
 
-onMounted(startStreaming)
+onMounted(() => {
+  if (Object.keys(portraitSummary).length) startStreaming()
+  else void generatePortrait()
+})
 
 onBeforeUnmount(() => {
   if (streamTimer) window.clearTimeout(streamTimer)

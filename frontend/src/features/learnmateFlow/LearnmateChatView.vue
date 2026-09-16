@@ -29,7 +29,7 @@
             :disabled="isSaving"
             aria-label="Message LearnMate"
           />
-          <button type="submit" :disabled="!messageDraft.trim() || isLoading || isSaving" aria-label="Send message">
+          <button type="submit" :disabled="!messageDraft.trim() || isLoading" aria-label="Send message">
             <span aria-hidden="true">↗</span>
           </button>
         </form>
@@ -42,7 +42,7 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { getNextPortraitInterviewQuestion, initPortraitFromDialogue } from '../../shared/api/portraitApi'
+import { getNextPortraitInterviewQuestion } from '../../shared/api/portraitApi'
 
 const router = useRouter()
 const PORTRAIT_MAX_STEPS = 5
@@ -51,7 +51,6 @@ const messageDraft = ref('')
 const portraitQuestions = ref([])
 const portraitAnswers = ref([])
 const isLoading = ref(false)
-const isSaving = ref(false)
 const messages = ref([])
 const conversationList = ref(null)
 
@@ -139,28 +138,9 @@ const askNextQuestion = async () => {
   isLoading.value = false
 }
 
-const savePortrait = async () => {
-  if (isSaving.value) return
-  isSaving.value = true
-  try {
-    const result = await initPortraitFromDialogue({
-      dialogue: buildDialogue(),
-      identity: localStorage.getItem('learnmate_identity') || '',
-      direction: localStorage.getItem('learnmate_direction') || '',
-      goal: localStorage.getItem('learnmate_goal') || '',
-    })
-    return getResponseData(result)
-  } catch (error) {
-    console.warn('[LearnMate] portrait save failed:', error)
-    return null
-  } finally {
-    isSaving.value = false
-  }
-}
-
 const sendMessage = async () => {
   const value = messageDraft.value.trim()
-  if (!value || isLoading.value || isSaving.value) return
+  if (!value || isLoading.value) return
   messages.value.push({ role: 'user', text: value })
   messageDraft.value = ''
 
@@ -170,10 +150,10 @@ const sendMessage = async () => {
     if (step.value < PORTRAIT_MAX_STEPS) {
       await askNextQuestion()
     } else {
-      const portraitSummary = await savePortrait()
       sessionStorage.setItem('learnmate_portrait_dialogue', JSON.stringify(buildDialogue()))
-      sessionStorage.setItem('learnmate_portrait_summary', JSON.stringify(portraitSummary || {}))
-      router.push('/learnmate-summary')
+      sessionStorage.removeItem('learnmate_portrait_summary')
+      sessionStorage.removeItem('learnmate_diagnosis_result')
+      router.push('/onboarding/diagnosis')
     }
     return
   }
