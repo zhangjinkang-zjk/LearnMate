@@ -62,7 +62,7 @@ async def _on_profile_changed(user_id: int, major: str, grade: str):
         cached_count = 0
         for course, result in zip(courses, results):
             if isinstance(result, Exception):
-                logger.exception("自动生成路径失败 user=%s course=%s", user_id, course)
+                logger.error("自动生成路径失败 user=%s course=%s", user_id, course, exc_info=result)
                 continue
             if "error" in result:
                 continue

@@ -34,7 +34,7 @@ def _safe_json_loads(value: str | None, fallback):
     try:
         return json.loads(value)
     except (json.JSONDecodeError, TypeError):
-        logger.warning("Invalid path JSON payload skipped in classroom service", exc_info=True)
+        logger.warning("课堂服务已跳过非法的路径 JSON 数据", exc_info=True)
         return fallback
 
 
@@ -699,7 +699,7 @@ async def _build_portrait_context(user_id: int) -> str:
         try:
             radar_data = await PortraitRadarService.get(user_id)
         except Exception:
-            logger.debug("Read portrait radar failed in classroom service", exc_info=True)
+            logger.debug("课堂服务读取画像雷达失败", exc_info=True)
         parts.extend(format_portrait(picture, show_missing=False, radar_data=radar_data))
 
     return "\n".join(parts) if parts else "暂无画像数据"
@@ -750,7 +750,7 @@ async def _load_node_quiz_snapshot(
         session = await ExamService.get_session(session_id, progress.user_id)
     except Exception:
         logger.exception(
-            "Load classroom quiz snapshot failed user=%s node=%s session=%s",
+            "加载课堂测验快照失败 user=%s node=%s session=%s",
             progress.user_id,
             progress.node_id,
             session_id,

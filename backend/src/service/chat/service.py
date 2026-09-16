@@ -109,7 +109,7 @@ async def _build_portrait_context(user_id: int) -> str:
                 if radar and radar.get("dimensions"):
                     lines.append(PortraitRadarService.format_for_prompt(radar))
             except Exception:
-                logger.warning("Suppressed exception at backend/src/service/chat/service.py:111", exc_info=True)
+                logger.warning("已忽略异常 backend/src/service/chat/service.py:111", exc_info=True)
             # 学习指导
             try:
                 from backend.src.service.portrait.service import build_learning_guidance
@@ -117,7 +117,7 @@ async def _build_portrait_context(user_id: int) -> str:
                 if guidance:
                     lines.append(guidance)
             except Exception:
-                logger.warning("Suppressed exception at backend/src/service/chat/service.py:119", exc_info=True)
+                logger.warning("已忽略异常 backend/src/service/chat/service.py:119", exc_info=True)
 
         if not lines:
             ctx = ""
@@ -192,7 +192,7 @@ def schedule_post_chat_enrichment(
     if not persist_memory and event_type == "chat":
         event_type = "classroom_chat"
     logger.info(
-        "[ChatEnrichment] scheduled user=%s group=%s portrait_min_records=%s persist_memory=%s",
+        "[ChatEnrichment] 已调度 user=%s group=%s portrait_min_records=%s persist_memory=%s",
         user_id,
         chat_group_id,
         portrait_minimum_records,

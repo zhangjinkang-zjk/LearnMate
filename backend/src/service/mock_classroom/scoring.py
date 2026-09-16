@@ -31,7 +31,7 @@ class MockClassroomScoring:
                     user_id=user_id,
                 )
             except Exception:
-                logger.warning("[MockClassroom] LLM scoring fallback session=%s", session.session_key, exc_info=True)
+                logger.warning("[MockClassroom] LLM 评分降级兜底 session=%s", session.session_key, exc_info=True)
 
         return MockClassroomScoring._heuristic_score(
             session=session,

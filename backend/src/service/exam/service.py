@@ -41,7 +41,7 @@ def _normalize_db_answer(raw: str, multi: bool = False) -> str:
             return "A" if parsed else "B"
         text = str(parsed)
     except (json.JSONDecodeError, TypeError):
-        logger.debug("Suppressed exception at backend/src/service/exam/service.py:41", exc_info=True)
+        logger.debug("已忽略异常 backend/src/service/exam/service.py:41", exc_info=True)
     # 字符串 true/false → A/B
     upper = text.strip().upper()
     if upper in ("TRUE", "FALSE"):
@@ -65,7 +65,7 @@ def _parse_multi_ans(ans: str) -> set:
         try:
             return set(str(x).strip().upper() for x in json.loads(text))
         except (json.JSONDecodeError, TypeError):
-            logger.debug("Suppressed exception at backend/src/service/exam/service.py:61", exc_info=True)
+            logger.debug("已忽略异常 backend/src/service/exam/service.py:61", exc_info=True)
     return set(re.findall(r"[A-F]", text.upper()))
 
 
@@ -324,7 +324,7 @@ class ExamService:
             return str(uuid.uuid4())[:12], []
         questions = _prepare_questions_for_storage(questions)
         session_id = str(uuid.uuid4())[:12]
-        logger.info("_save_questions session_id=%r node_id=%r count=%d", session_id, node_id, len(questions))
+        logger.info("保存题目 _save_questions session_id=%r node_id=%r count=%d", session_id, node_id, len(questions))
         saved = []
         for q in questions:
             qt = (q.get("question_type", "single_choice") or "").lower()
@@ -466,7 +466,7 @@ class ExamService:
                         passed = payload.get("review_passed", True)
                         yield f"data: {json.dumps({'type': 'progress', 'msg': f'审核{"通过" if passed else "未通过，重新生成"}...'}, ensure_ascii=False)}\n\n"
                 except json.JSONDecodeError:
-                    logger.warning("Suppressed exception at backend/src/service/exam/service.py:241", exc_info=True)
+                    logger.warning("已忽略异常 backend/src/service/exam/service.py:241", exc_info=True)
 
         # 查已保存的 exercise 资源，解析题目并保存
         saved_resources = await GeneratedResource.filter(
@@ -568,7 +568,7 @@ class ExamService:
         correct_answer = _display_answer(qt, question.answer)
 
         logger.info(
-            "submit_answer qid=%s type=%s raw_db_answer=%r normalized_answer=%r user_answer=%r session_id=%r node_id=%r",
+            "提交答案 submit_answer qid=%s type=%s raw_db_answer=%r normalized_answer=%r user_answer=%r session_id=%r node_id=%r",
             question_id, question.question_type, question.answer, correct_answer, user_answer, session_id, node_id,
         )
 

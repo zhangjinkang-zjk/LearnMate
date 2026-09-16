@@ -74,10 +74,10 @@ def _normalize_servers(config: dict[str, Any]) -> dict[str, Any]:
 
         clean = _expand_env(clean)
         if clean["transport"] in {"streamable_http", "sse"} and not clean.get("url"):
-            logger.warning("Skip MCP server %s: missing url", name)
+            logger.warning("跳过 MCP 服务 %s：缺少 url", name)
             continue
         if clean["transport"] == "stdio" and not clean.get("command"):
-            logger.warning("Skip MCP server %s: missing command", name)
+            logger.warning("跳过 MCP 服务 %s：缺少 command", name)
             continue
 
         normalized[str(name)] = clean
@@ -97,14 +97,14 @@ async def load_external_mcp_tools() -> list[Any]:
 
     path = _config_path()
     if not path.exists():
-        logger.info("MCP config not found, skip external MCP tools: %s", path)
+        logger.info("未找到 MCP 配置，跳过外部 MCP 工具：%s", path)
         return []
 
     try:
         config = json.loads(path.read_text(encoding="utf-8"))
         servers = _normalize_servers(config)
     except Exception:
-        logger.exception("Failed to read MCP config: %s", path)
+        logger.exception("读取 MCP 配置失败：%s", path)
         return []
 
     if not servers:
@@ -113,7 +113,7 @@ async def load_external_mcp_tools() -> list[Any]:
     try:
         from langchain_mcp_adapters.client import MultiServerMCPClient
     except Exception:
-        logger.warning("langchain-mcp-adapters is not installed; skip external MCP tools")
+        logger.warning("未安装 langchain-mcp-adapters，跳过外部 MCP 工具")
         return []
 
     all_tools: list[Any] = []
@@ -125,9 +125,9 @@ async def load_external_mcp_tools() -> list[Any]:
             for tool in tools:
                 _prefix_tool_name(tool)
             all_tools.extend(tools)
-            logger.info("Loaded %d MCP tools from %s", len(tools), name)
+            logger.info("已加载 %d 个 MCP 工具，来源 %s", len(tools), name)
         except Exception:
-            logger.exception("Failed to load MCP server %s from %s", name, path)
+            logger.exception("加载 MCP 服务 %s 失败，来源 %s", name, path)
 
-    logger.info("Loaded %d MCP tools total from %s", len(all_tools), path)
+    logger.info("共加载 %d 个 MCP 工具，来源 %s", len(all_tools), path)
     return all_tools

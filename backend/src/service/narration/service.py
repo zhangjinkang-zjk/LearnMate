@@ -158,7 +158,7 @@ async def _generate_tts(text: str, voice: str, output_path: str, user_id: int | 
                 try:
                     os.remove(f)
                 except OSError:
-                    logger.debug("Suppressed exception at backend/src/service/narration/service.py:151", exc_info=True)
+                    logger.debug("已忽略异常 backend/src/service/narration/service.py:151", exc_info=True)
             return None
         return (i, part_path, timestamps)
 
@@ -173,7 +173,7 @@ async def _generate_tts(text: str, voice: str, output_path: str, user_id: int | 
                     try:
                         os.remove(f)
                     except OSError:
-                        logger.debug("Suppressed exception at backend/src/service/narration/service.py:166", exc_info=True)
+                        logger.debug("已忽略异常 backend/src/service/narration/service.py:166", exc_info=True)
             return None
         part_results.append(r)
     part_results.sort(key=lambda x: x[0])
@@ -192,7 +192,7 @@ async def _generate_tts(text: str, voice: str, output_path: str, user_id: int | 
                 try:
                     os.remove(f)
                 except OSError:
-                    logger.debug("Suppressed exception at backend/src/service/narration/service.py:185", exc_info=True)
+                    logger.debug("已忽略异常 backend/src/service/narration/service.py:185", exc_info=True)
 
     return all_timestamps
 
@@ -230,14 +230,14 @@ async def _generate_tts_one(text: str, voice: str, output_path: str, json_path: 
     try:
         await asyncio.to_thread(_dump_json, json_path, word_timestamps)
     except IOError:
-        logger.warning("Suppressed exception at backend/src/service/narration/service.py:223", exc_info=True)
+        logger.warning("已忽略异常 backend/src/service/narration/service.py:223", exc_info=True)
 
     async with _tts_lock:
         global _tts_done_count
         _tts_done_count += 1
         done = _tts_done_count
 
-    logger.info("[TTS] #%d user=%s len=%d cost=%.1fs", done, user_id or "-", len(text), cost)
+    logger.info("[TTS] 第 %d 条 user=%s 字数=%d 耗时=%.1fs", done, user_id or "-", len(text), cost)
     return word_timestamps
 
 
@@ -333,7 +333,7 @@ async def _generate_sections_audio(sections: list[dict], voice: str, base_dir: P
                     "word_timestamps": word_timestamps,
                 }
             except (json.JSONDecodeError, IOError):
-                logger.warning("Suppressed exception at backend/src/service/narration/service.py:321", exc_info=True)
+                logger.warning("已忽略异常 backend/src/service/narration/service.py:321", exc_info=True)
 
         word_timestamps = await _generate_tts(text, voice, output_path, user_id=user_id)
         if word_timestamps is None:
@@ -361,7 +361,7 @@ async def _generate_sections_audio(sections: list[dict], voice: str, base_dir: P
             results.append(r)
         elif isinstance(r, Exception):
             failures += 1
-            logger.exception("[Narration] 任务异常: %s", r)
+            logger.error("[Narration] 任务异常: %s", r, exc_info=r)
         else:
             failures += 1
 

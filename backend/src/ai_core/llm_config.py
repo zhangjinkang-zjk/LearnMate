@@ -24,7 +24,7 @@ api_key = (
 def _build_chat_model(**kwargs) -> ChatOpenAI | None:
     key = kwargs.get("api_key")
     if not key:
-        logger.warning("LLM API key is not configured; AI calls will fail until api_key is set.")
+        logger.warning("LLM API key 未配置；在设置 api_key 之前，AI 调用都会失败。")
         return None
     return ChatOpenAI(**kwargs)
 
@@ -132,7 +132,7 @@ class _PriorityLLM:
                         response_metadata=_cached.get("response_metadata", {}),
                     )
             except Exception:
-                logger.debug("Suppressed exception at backend/src/ai_core/llm_config.py:116", exc_info=True)
+                logger.debug("已忽略异常 backend/src/ai_core/llm_config.py:116", exc_info=True)
 
         user_sem = None
         if user_id:
@@ -162,7 +162,7 @@ class _PriorityLLM:
                         "response_metadata": {k: str(v) for k, v in _meta.items() if isinstance(v, (str, int, float))},
                     }, self._cache_ttl)
                 except Exception:
-                    logger.debug("Suppressed exception at backend/src/ai_core/llm_config.py:144", exc_info=True)
+                    logger.debug("已忽略异常 backend/src/ai_core/llm_config.py:144", exc_info=True)
             return resp
 
         global _async_high_active

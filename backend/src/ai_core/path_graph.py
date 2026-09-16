@@ -322,16 +322,16 @@ async def executor_node(state: PathState) -> dict:
                     response = await llm.ainvoke(prompt_text, priority=llm_priority, user_id=user_id_int, pool="path")
                     nodes = parse_llm_json(response.content)
                     if isinstance(nodes, list) and nodes:
-                        logger.info("[PathExecutor] group %s generated %s nodes on attempt %s", group_idx + 1, len(nodes), attempt)
+                        logger.info("[PathExecutor] 第 %s 组生成了 %s 个节点（第 %s 次尝试）", group_idx + 1, len(nodes), attempt)
                         return nodes
-                    logger.warning("[PathExecutor] group %s returned invalid payload on attempt %s: %s", group_idx + 1, attempt, type(nodes))
+                    logger.warning("[PathExecutor] 第 %s 组第 %s 次尝试返回了非法数据：%s", group_idx + 1, attempt, type(nodes))
                 except Exception:
-                    logger.exception("[PathExecutor] group %s failed on attempt %s", group_idx + 1, attempt)
+                    logger.exception("[PathExecutor] 第 %s 组第 %s 次尝试失败", group_idx + 1, attempt)
                 if attempt < _GROUP_RETRY_ATTEMPTS:
                     await asyncio.sleep(0.8 * attempt)
 
         fallback_nodes = _fallback_group_nodes(group, group_start)
-        logger.warning("[PathExecutor] group %s used local fallback nodes count=%s", group_idx + 1, len(fallback_nodes))
+        logger.warning("[PathExecutor] 第 %s 组使用了本地兜底节点 count=%s", group_idx + 1, len(fallback_nodes))
         return fallback_nodes
 
     # 并行执行所有分组

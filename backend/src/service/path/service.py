@@ -163,7 +163,7 @@ def _compute_node_count(subject: str, picture) -> int:
         try:
             traits = json.loads(picture.traits)
         except (json.JSONDecodeError, TypeError):
-            logger.warning("Suppressed exception at backend/src/service/path/service.py:54", exc_info=True)
+            logger.warning("已忽略异常 backend/src/service/path/service.py:54", exc_info=True)
     knowbase_data = traits.get("knowbase", {})
     if isinstance(knowbase_data, dict):
         kb_val = knowbase_data.get("value", "3")
@@ -231,14 +231,14 @@ class PathService:
         try:
             learning_guidance = await build_learning_guidance(user_id) or ""
         except Exception:
-            logger.exception("learning guidance failed user_id=%s", user_id)
+            logger.exception("学习指引生成失败 user_id=%s", user_id)
 
         try:
             kb_result = await kb_search(subject, top_k=5, user_id=user_id)
             if kb_result and "暂无" not in kb_result:
                 kb_context = kb_result
         except Exception:
-            logger.exception("knowledge search failed subject=%s user_id=%s", subject, user_id)
+            logger.exception("知识检索失败 subject=%s user_id=%s", subject, user_id)
 
         mastery_records = await KnowledgeMastery.filter(user_id=user_id).all()
         if mastery_records:
@@ -424,7 +424,7 @@ class PathService:
                                 nodes = parse_llm_json(response.content)
                                 if isinstance(nodes, list) and nodes:
                                     logger.info(
-                                        "stream path group generated path_id=%s group=%s nodes=%s attempt=%s",
+                                        "流式路径分组生成成功 path_id=%s group=%s nodes=%s attempt=%s",
                                         path.id,
                                         group_idx + 1,
                                         len(nodes),
@@ -432,7 +432,7 @@ class PathService:
                                     )
                                     return nodes
                                 logger.warning(
-                                    "stream path group invalid payload path_id=%s group=%s attempt=%s type=%s",
+                                    "流式路径分组返回非法数据 path_id=%s group=%s attempt=%s type=%s",
                                     path.id,
                                     group_idx + 1,
                                     attempt,
@@ -440,7 +440,7 @@ class PathService:
                                 )
                             except Exception:
                                 logger.exception(
-                                    "stream path group failed path_id=%s group=%s attempt=%s",
+                                    "流式路径分组生成失败 path_id=%s group=%s attempt=%s",
                                     path.id,
                                     group_idx + 1,
                                     attempt,
@@ -463,7 +463,7 @@ class PathService:
                             "description": str(item.get("learning_goal") or f"掌握{topic}的核心概念、典型应用和常见误区").strip(),
                         })
                     logger.warning(
-                        "stream path group used fallback path_id=%s group=%s nodes=%s",
+                        "流式路径分组使用兜底数据 path_id=%s group=%s nodes=%s",
                         path.id,
                         group_idx + 1,
                         len(fallback_nodes),
@@ -516,12 +516,12 @@ class PathService:
                 },
             })
         except Exception as exc:
-            logger.exception("streaming path generation failed subject=%s user_id=%s", subject, user_id)
+            logger.exception("流式路径生成失败 subject=%s user_id=%s", subject, user_id)
             if not emitted_nodes:
                 try:
                     await path.delete()
                 except Exception:
-                    logger.exception("failed to remove empty streaming path path_id=%s", path.id)
+                    logger.exception("删除空的流式路径失败 path_id=%s", path.id)
             yield event({"type": "error", "detail": str(exc) or "Path generation failed"})
 
     @staticmethod
@@ -1075,7 +1075,7 @@ class PathService:
                                     for r in data.get("resources", []):
                                         _remember_generated_id(r.get("resource_id"))
                             except (json.JSONDecodeError, KeyError):
-                                logger.warning("Suppressed exception at backend/src/service/path/service.py:802", exc_info=True)
+                                logger.warning("已忽略异常 backend/src/service/path/service.py:802", exc_info=True)
 
                 all_ids = [r.id for r in existing_records] + generated_ids
                 await update_progress_resource_ids(progress, all_ids)
@@ -1562,7 +1562,7 @@ class PathService:
             await PortraitRadarService.compute(user_id)
             await PortraitRadarService.sync_to_portrait(user_id)
         except Exception:
-            logger.exception("portrait radar update failed user_id=%s node_id=%s", user_id, node_id)
+            logger.exception("画像雷达更新失败 user_id=%s node_id=%s", user_id, node_id)
 
         return {
             "node_id": node_id,
@@ -1771,7 +1771,7 @@ class PathService:
                 try:
                     content = json.loads(existing_html.content or "{}")
                 except (json.JSONDecodeError, TypeError):
-                    logger.warning("Suppressed exception at backend/src/service/path/service.py:1386", exc_info=True)
+                    logger.warning("已忽略异常 backend/src/service/path/service.py:1386", exc_info=True)
                 return {
                     "path_id": path_id,
                     "html_id": existing_html.id,
@@ -1850,7 +1850,7 @@ class PathService:
                 c = json.loads(existing.content)
                 pres_id = c.get("presentation_id", 0)
             except (json.JSONDecodeError, TypeError):
-                logger.warning("Suppressed exception at backend/src/service/path/service.py:1465", exc_info=True)
+                logger.warning("已忽略异常 backend/src/service/path/service.py:1465", exc_info=True)
         return {
             "path_id": path_id,
             "html_id": existing.id,
@@ -1946,7 +1946,7 @@ class PathService:
                             if c.get("presentation_id"):
                                 item["presentation_id"] = c["presentation_id"]
                         except (json.JSONDecodeError, TypeError):
-                            logger.warning("Suppressed exception at backend/src/service/path/service.py:1545", exc_info=True)
+                            logger.warning("已忽略异常 backend/src/service/path/service.py:1545", exc_info=True)
                     node_resources.append(item)
 
             # 计算该节点资源总查看次数
@@ -2283,7 +2283,7 @@ async def _generate_first_node_warmup_background(path_id: int, node_id: int, use
             PathService.generate_node_classroom,
         )
     except Exception:
-        logger.exception("first node warmup failed path_id=%s node_id=%s", path_id, node_id)
+        logger.exception("首节点预热失败 path_id=%s node_id=%s", path_id, node_id)
 
 
 def _schedule_path_video(path_id: int, user_id: int) -> None:
