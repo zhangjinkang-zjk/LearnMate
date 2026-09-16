@@ -1138,7 +1138,7 @@ async function openChapterCheck() {
   resourceView.value = 'document'
   openedAt = 0
 
-  // 阅读完成后进入独立的基础测试页，题目测试和费曼反讲共用同一节点上下文。
+  // 阅读完成后进入独立的学习复盘页，题目测试和费曼反讲共用同一节点上下文。
   const pathId = learningPath.value?.path_id
   const nodeId = activeNode.value?.id
   if (pathId && nodeId) {

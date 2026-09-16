@@ -263,7 +263,8 @@ onBeforeUnmount(() => requestController?.abort())
 .check-state p, .result-state > p:last-of-type { max-width: 430px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .check-state--error { color: #a66442; }
 .check-state .button { margin-top: 8px; }
-.question-panel { width: min(760px, 100%); min-height: 0; margin: 0 auto; padding: 30px clamp(20px, 5vw, 54px) 34px; overflow-y: auto; }
+.question-panel { width: min(760px, 100%); min-height: 0; margin: 0 auto; padding: 30px clamp(20px, 5vw, 54px) 34px; overflow-y: auto; scrollbar-width: none; }
+.question-panel::-webkit-scrollbar { display: none; }
 .question-progress { height: 5px; margin-bottom: 30px; }
 .question-type { color: var(--accent-deep); font-size: 11px; font-weight: 800; }
 .question-panel h2 { margin: 10px 0 28px; font-size: clamp(20px, 2.5vw, 27px); line-height: 1.5; }

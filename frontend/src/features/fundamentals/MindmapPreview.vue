@@ -1,11 +1,23 @@
 <template>
-  <section class="mindmap-preview surface" aria-label="章节知识结构">
+  <section ref="previewEl" class="mindmap-preview surface" aria-label="章节知识结构">
     <header class="mindmap-preview__header">
       <div>
         <p class="eyebrow">结构化复习</p>
         <h2>{{ title || '本章知识结构' }}</h2>
       </div>
-      <span class="mindmap-preview__hint">拖动画布查看分支</span>
+      <div class="mindmap-preview__actions">
+        <span class="mindmap-preview__hint">拖动画布查看分支</span>
+        <button
+          class="mindmap-preview__fullscreen"
+          type="button"
+          :title="isFullscreen ? '退出全屏预览' : '全屏预览'"
+          :aria-label="isFullscreen ? '退出全屏预览' : '全屏预览'"
+          @click="toggleFullscreen"
+        >
+          <Minimize2 v-if="isFullscreen" :size="17" />
+          <Maximize2 v-else :size="17" />
+        </button>
+      </div>
     </header>
     <div ref="mapEl" class="mindmap-canvas" :class="{ 'is-hidden': errorText }"></div>
     <div v-if="errorText" class="mindmap-fallback">
@@ -17,6 +29,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Maximize2, Minimize2 } from 'lucide-vue-next'
 import MindElixir from 'mind-elixir'
 import 'mind-elixir/style.css'
 
@@ -26,7 +39,9 @@ const props = defineProps({
 })
 
 const mapEl = ref(null)
+const previewEl = ref(null)
 const errorText = ref('')
+const isFullscreen = ref(false)
 let mind = null
 let nodeIndex = 0
 
@@ -74,6 +89,10 @@ function toMindElixirData(value) {
   return { nodeData: normalizeNode(root), linkData: {}, direction: MindElixir.SIDE }
 }
 
+function fitMapToViewport() {
+  requestAnimationFrame(() => { mind?.scaleFit?.(); mind?.toCenter?.() })
+}
+
 async function renderMap() {
   await nextTick()
   if (!mapEl.value) return
@@ -92,15 +111,34 @@ async function renderMap() {
       overflowHidden: false,
     })
     mind.init(toMindElixirData(props.content))
-    requestAnimationFrame(() => { mind?.scaleFit?.(); mind?.toCenter?.() })
+    fitMapToViewport()
   } catch (error) {
     errorText.value = error?.message || '知识结构渲染失败'
   }
 }
 
 watch(() => [props.content, props.title], renderMap, { deep: true })
-onMounted(renderMap)
-onBeforeUnmount(() => { if (mind) { mind.destroy(); mind = null } })
+function syncFullscreenState() {
+  isFullscreen.value = document.fullscreenElement === previewEl.value
+  fitMapToViewport()
+}
+
+async function toggleFullscreen() {
+  if (document.fullscreenElement) {
+    await document.exitFullscreen()
+    return
+  }
+  await previewEl.value?.requestFullscreen()
+}
+
+onMounted(() => {
+  document.addEventListener('fullscreenchange', syncFullscreenState)
+  void renderMap()
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('fullscreenchange', syncFullscreenState)
+  if (mind) { mind.destroy(); mind = null }
+})
 </script>
 
 <style scoped>
@@ -108,7 +146,9 @@ onBeforeUnmount(() => { if (mind) { mind.destroy(); mind = null } })
 .mindmap-preview__header { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px 18px; border-bottom: 1px solid var(--line); }
 .mindmap-preview__header .eyebrow { margin-bottom: 4px; }
 .mindmap-preview__header h2 { margin: 0; color: var(--ink); font-size: 17px; }
+.mindmap-preview__actions { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; }
 .mindmap-preview__hint { color: var(--muted); font-size: 10px; }
+.mindmap-preview__fullscreen { display: grid; width: 32px; height: 32px; place-items: center; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); color: var(--ink); }.mindmap-preview__fullscreen:hover { background: var(--soft); color: var(--accent-deep); }.mindmap-preview__fullscreen:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
 .mindmap-canvas { width: 100%; height: clamp(420px, calc(100vh - 320px), 620px); min-height: 420px; background: #f7faf5; }
 .mindmap-canvas.is-hidden { display: none; }
 .mindmap-preview :deep(.map-container) { background: #f7faf5; }
@@ -117,8 +157,10 @@ onBeforeUnmount(() => { if (mind) { mind.destroy(); mind = null } })
 .mindmap-fallback { min-height: 430px; padding: 22px; color: var(--muted); }
 .mindmap-fallback strong { color: var(--ink); font-size: 14px; }
 .mindmap-fallback pre { max-height: 560px; margin: 14px 0 0; overflow: auto; white-space: pre-wrap; word-break: break-word; font: inherit; line-height: 1.7; }
+.mindmap-preview:fullscreen { width: 100vw; height: 100vh; border: 0; border-radius: 0; }.mindmap-preview:fullscreen .mindmap-canvas { height: calc(100vh - 64px); min-height: 0; }
 @media (max-width: 680px) {
   .mindmap-preview__header { align-items: flex-start; flex-direction: column; }
+  .mindmap-preview__actions { width: 100%; justify-content: space-between; }
   .mindmap-canvas { min-height: 390px; height: 500px; }
 }
 </style>

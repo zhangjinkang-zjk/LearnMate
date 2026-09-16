@@ -2,7 +2,7 @@
   <div class="foundation-test-page">
     <PageTitle
       eyebrow="FOUNDATION TEST"
-      title="基础测试"
+      title="学习复盘"
       description="用题目测试和费曼反讲确认本章掌握情况，结果会同步到学习概览。"
     >
       <template #actions>
@@ -16,7 +16,7 @@
     </section>
     <section v-else-if="errorMessage" class="surface surface-pad foundation-state foundation-state--error">
       <CircleAlert :size="22" />
-      <div><strong>基础测试暂时不可用</strong><p>{{ errorMessage }}</p></div>
+      <div><strong>学习复盘暂时不可用</strong><p>{{ errorMessage }}</p></div>
       <button class="button button--quiet" type="button" @click="loadPage">重试</button>
     </section>
     <section v-else-if="!learningPath" class="surface surface-pad foundation-state">
@@ -55,7 +55,7 @@
         <span class="test-chapter-status">{{ canStartTest ? '可以开始测试' : '等待完成阅读' }}</span>
       </section>
 
-      <section v-if="activeNode" class="test-insights" aria-label="基础测试结果">
+      <section v-if="activeNode" class="test-insights" aria-label="学习复盘结果">
         <article class="insight-card insight-card--score">
           <span class="insight-label">最近答题</span>
           <strong>{{ latestScoreLabel }}</strong>
@@ -103,7 +103,7 @@
       </section>
 
       <template v-if="activeNode">
-        <section class="test-entries" aria-label="基础测试入口">
+        <section class="test-entries" aria-label="学习复盘入口">
           <button class="entry-card" type="button" :disabled="!canStartTest" @click="openQuiz">
             <span class="entry-icon"><SquareCheck :size="21" /></span>
             <span class="entry-copy"><strong>题目测试</strong><small>提交答案，记录正确率和错误知识点</small></span>
@@ -243,7 +243,7 @@ async function loadPage() {
   errorMessage.value = ''
   nodeError.value = ''
 
-  // 当前节点是基础测试的必要数据，路径目录只是切换科目的辅助数据。
+  // 当前节点是学习复盘的必要数据，路径目录只是切换科目的辅助数据。
   // 不让目录接口的慢响应阻塞当前节点和题目组件的加载。
   try {
     const current = await fundamentalsApi.getCurrentPath(route.query.pathId)
@@ -285,7 +285,7 @@ async function selectPath(pathId) {
       await loadNode()
       activeTab.value = ''
       await router.replace({ query: { pathId: selected.path_id } })
-    } else nodeError.value = '这条学习路径尚未加入，暂时不能进行基础测试。'
+    } else nodeError.value = '这条学习路径尚未加入，暂时不能进行学习复盘。'
   } catch (error) {
     nodeError.value = error.response?.data?.detail || error.message || '切换学习路径失败，请重试。'
   } finally {
