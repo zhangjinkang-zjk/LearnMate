@@ -191,12 +191,20 @@ const enterLearningSpace = async () => {
     localStorage.getItem("learnmate_diagnosis_pending") === "1" &&
     sessionStorage.getItem("learnmate_diagnosis_gate_shown") !== "1"
   ) {
-    sessionStorage.setItem("learnmate_diagnosis_gate_shown", "1");
-    await router.push("/onboarding/diagnosis");
+    try {
+      sessionStorage.setItem("learnmate_diagnosis_gate_shown", "1");
+      await router.push("/onboarding/diagnosis");
+    } finally {
+      isEntering.value = false;
+    }
     return;
   }
   try {
     const currentPathResponse = await learningApi.getCurrentPath();
+    if (currentPathResponse?.data?.code === 404) {
+      await router.push(`/select-identity?fresh=${Date.now()}`);
+      return;
+    }
     const currentPath = getResponseData(currentPathResponse);
     if (currentPath?.path_id) {
       await router.push("/learning/overview");
