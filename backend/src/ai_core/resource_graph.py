@@ -1694,11 +1694,12 @@ async def executor_node(state: ResourceState) -> dict:
     ppt_section_count = estimate_ppt_section_count(topic, depth)
     doc_section_count = DOC_SECTION_COUNT_BY_DEPTH.get(depth, DOC_DEFAULT_SECTIONS)
 
-    # PPT / 文档 / 图片 → 异步；其余 → 线程池
+    # PPT / 文档 / 图片 / 视频 → 异步；其余 → 线程池
     has_ppt = "ppt" in resource_types
     has_doc = "document" in resource_types or "case" in resource_types or "reading" in resource_types
     has_image = "image" in resource_types
-    thread_types = [rt for rt in resource_types if rt not in ("ppt", "document", "case", "reading", "image")]
+    has_video = "video" in resource_types
+    thread_types = [rt for rt in resource_types if rt not in ("ppt", "document", "case", "reading", "image", "video")]
 
     # 非 PPT/文档 类型线程池并行
     prompts = {
@@ -1844,9 +1845,37 @@ async def executor_node(state: ResourceState) -> dict:
             _push_agent_event(writer, "executor:image", "图片生成智能体", "executor", "failed", "图片生成失败", resource_type="image")
             return "image:image", {"prompt": image_prompt, "url": ""}
 
+    async def _run_video():
+        if not has_video:
+            return None
+        _push_agent_event(writer, "executor:video", "视频生成智能体", "executor", "running", "正在生成视频课件", resource_type="video")
+        try:
+            from backend.src.service.video.service import generate as generate_presentation
+
+            presentation = await generate_presentation(
+                topic,
+                user_id_int,
+                video_mode=False,
+                background=False,
+                save_history=False,
+            )
+            file_url = str(presentation.get("file_url") or "").strip()
+            presentation_id = presentation.get("id")
+            if not file_url or not presentation_id:
+                raise ValueError("视频服务未返回可播放地址")
+            content = json.dumps({"presentation_id": presentation_id}, ensure_ascii=False)
+            _emit_resource_complete("video", content, file_url)
+            _push_agent_event(writer, "executor:video", "视频生成智能体", "executor", "done", "视频课件生成完成", resource_type="video")
+            return {"content": content, "file_url": file_url}
+        except Exception:
+            logger.exception("[Executor] 视频生成失败 topic=%s", topic)
+            _push_agent_event(writer, "executor:video", "视频生成智能体", "executor", "failed", "视频课件生成失败", resource_type="video")
+            return None
+
     ppt_coro = _run_ppt()
     doc_coro = _run_doc()
     image_coro = _run_image()
+    video_coro = _run_video()
 
     def _survive(branch: str, value):
         """并行分支不允许互相拖累：某一路炸了就丢掉那一路，其余照常交付。"""
@@ -1870,18 +1899,19 @@ async def executor_node(state: ResourceState) -> dict:
                 *[loop.run_in_executor(pool, gen_one_sync, rt) for rt in thread_types],
                 return_exceptions=True,
             )
-            ppt_content, doc_content, image_result, other_results = await asyncio.gather(
-                ppt_coro, doc_coro, image_coro, other_futures, return_exceptions=True
+            ppt_content, doc_content, image_result, video_result, other_results = await asyncio.gather(
+                ppt_coro, doc_coro, image_coro, video_coro, other_futures, return_exceptions=True
             )
     else:
         other_results = []
-        ppt_content, doc_content, image_result = await asyncio.gather(
-            ppt_coro, doc_coro, image_coro, return_exceptions=True
+        ppt_content, doc_content, image_result, video_result = await asyncio.gather(
+            ppt_coro, doc_coro, image_coro, video_coro, return_exceptions=True
         )
 
     ppt_content = _survive("ppt", ppt_content)
     doc_content = _survive("document", doc_content)
     image_result = _survive("image", image_result)
+    video_result = _survive("video", video_result)
 
     survived_results = []
     for item in other_results or []:
@@ -1915,6 +1945,9 @@ async def executor_node(state: ResourceState) -> dict:
         generated[actual_rt] = content.get("prompt", "")
         if content.get("url"):
             file_urls[actual_rt] = content["url"]
+    if video_result:
+        generated["video"] = video_result["content"]
+        file_urls["video"] = video_result["file_url"]
     for rt, content in other_results:
         if not content or is_failed_generation_content(content):
             logger.warning("[Executor] 跳过失败资源 rt=%s topic=%s", rt, topic)

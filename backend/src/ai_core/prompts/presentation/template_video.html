@@ -362,6 +362,77 @@
       .video-slide__wave { display: none; }
     }
   </style>
+  <style>
+    /* Video v5: a quiet, presentation-first learning surface. */
+    html, body { min-height: 100%; background: #edf1ea; }
+    body { background: #edf1ea; color: #17382f; }
+    .slides-wrapper { gap: 32px; padding: 28px; }
+    .slide { width: min(1280px, calc(100vw - 56px)); min-height: 600px; padding: 64px 68px 54px; }
+    .video-slide {
+      border: 1px solid #cfdccf;
+      border-radius: 6px;
+      background: #fbfdf8;
+      box-shadow: 0 16px 42px rgba(31, 56, 46, 0.14);
+      color: #17382f;
+    }
+    .video-slide::before, .video-slide::after { display: none; }
+    .video-slide h2 {
+      max-width: 980px;
+      margin: 0 0 26px;
+      color: #17382f;
+      font-size: clamp(34px, 3.8vw, 54px);
+      font-weight: 800;
+      line-height: 1.18;
+      text-shadow: none;
+    }
+    .video-slide h2::after { width: 72px; height: 5px; margin-top: 18px; border-radius: 1px; background: #c9e63f; }
+    .video-slide__meta { top: 24px; left: 28px; right: 28px; color: #597067; font-size: 12px; letter-spacing: .04em; }
+    .video-slide__meta span, .video-slide__meta b { min-height: 24px; padding: 0; border: 0; border-radius: 0; background: transparent; backdrop-filter: none; }
+    .video-slide__meta b { color: #2d654f; font-weight: 800; }
+    .video-slide__progress { left: 28px; right: 28px; bottom: 22px; height: 4px; border-radius: 0; background: #e2eae0; }
+    .video-slide__progress i { border-radius: 0; background: #2d654f; box-shadow: none; }
+    .video-slide__wave { display: none; }
+    [data-narration-block].block-current {
+      transform: none;
+      border-color: #9fbd39 !important;
+      background: #f1f7d9 !important;
+      box-shadow: inset 4px 0 0 #c9e63f !important;
+    }
+    .video-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .video-card-grid article, .video-process article, .video-compare section, .video-compare li, .video-points li {
+      border: 1px solid #d7e2d6;
+      border-radius: 5px;
+      background: #f4f7f1;
+      box-shadow: none;
+      color: #24483d;
+      backdrop-filter: none;
+    }
+    .video-card-grid article { min-height: 112px; padding: 17px; grid-template-columns: 34px minmax(0, 1fr); gap: 12px; }
+    .video-card-grid b, .video-process b { width: 34px; height: 34px; border-radius: 50%; background: #c9e63f; color: #17382f; font-size: 14px; box-shadow: none; }
+    .video-card-grid span, .video-process span, .video-points li, .video-compare li { font-size: clamp(16px, 1.55vw, 21px); line-height: 1.5; }
+    .video-process { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .video-process article { min-height: 128px; padding: 18px; grid-template-rows: 36px minmax(0, 1fr); gap: 12px; }
+    .video-compare { gap: 16px; }
+    .video-compare section { min-height: 278px; padding: 20px; }
+    .video-compare h3 { width: 38px; height: 38px; margin-bottom: 14px; border-radius: 4px; background: #c9e63f; color: #17382f; font-size: 17px; }
+    .video-points { gap: 9px; }
+    .video-points li, .video-compare li { padding: 12px 14px; }
+    .video-split { gap: 18px; }
+    .video-visual { min-height: 300px; padding: 28px; border: 1px solid #d7e2d6; border-radius: 5px; background: #edf4e8; box-shadow: none; }
+    .video-visual p { position: relative; inset: auto; color: #2d654f; font-size: clamp(20px, 2vw, 27px); font-weight: 700; line-height: 1.42; text-align: left; }
+    .visual-ring, .visual-line, .visual-dot { display: none; }
+    .video-formula { min-height: 148px; margin-bottom: 18px; padding: 26px 32px; border: 1px solid #cbdcca; border-radius: 5px; background: #eaf3df; color: #17382f; font-size: clamp(28px, 3vw, 42px); }
+    .video-slide--intro .intro-content { max-width: 1000px; gap: 10px; }
+    .video-slide--intro p { padding: 14px 17px; border: 1px solid #d7e2d6; border-left: 4px solid #c9e63f; border-radius: 0 5px 5px 0; background: #f4f7f1; color: #24483d; font-size: clamp(17px, 1.7vw, 23px); }
+    #mindmap-container { min-height: 390px; padding: 20px; border: 1px solid #d7e2d6; border-radius: 5px; background: #f4f7f1; }
+    @media (max-width: 900px) {
+      .slides-wrapper { padding: 16px; }
+      .slide { width: calc(100vw - 32px); min-height: 560px; padding: 58px 26px 48px; }
+      .video-card-grid, .video-process, .video-compare, .video-split { grid-template-columns: 1fr; }
+      .video-slide__meta { left: 22px; right: 22px; }
+      .video-slide__progress { left: 22px; right: 22px; }
+    }
+  </style>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" crossorigin="anonymous"

@@ -5,26 +5,17 @@
         <p class="eyebrow">结构化复习</p>
         <h2>{{ title || '本章知识结构' }}</h2>
       </div>
-      <div class="mindmap-preview__actions">
-        <span class="mindmap-preview__hint">拖动画布查看分支</span>
-        <div class="mindmap-preview__controls" aria-label="思维导图视图控制">
-          <button type="button" title="缩小" aria-label="缩小" :disabled="!isMapReady" @click="changeZoom(-0.12)"><ZoomOut :size="16" /></button>
-          <button type="button" title="适配画布" aria-label="适配画布" :disabled="!isMapReady" @click="fitMapToViewport"><LocateFixed :size="16" /></button>
-          <button type="button" title="放大" aria-label="放大" :disabled="!isMapReady" @click="changeZoom(0.12)"><ZoomIn :size="16" /></button>
-        </div>
-        <button
-          class="mindmap-preview__preview"
-          type="button"
-          :title="isFullscreen ? '退出全屏预览' : '全屏预览'"
-          :aria-label="isFullscreen ? '退出全屏预览' : '全屏预览'"
-          @click="toggleFullscreen"
-        >
-          <Minimize2 v-if="isFullscreen" :size="17" />
-          <Maximize2 v-else :size="17" />
-          <span>{{ isFullscreen ? '退出预览' : '预览' }}</span>
-        </button>
-      </div>
     </header>
+    <div class="mindmap-preview__toolbar" aria-label="知识结构视图控制">
+      <button type="button" title="缩小" aria-label="缩小" :disabled="!isMapReady" @click="changeZoom(-0.12)"><ZoomOut :size="18" /></button>
+      <button type="button" title="适配画布" aria-label="适配画布" :disabled="!isMapReady" @click="fitMapToViewport"><LocateFixed :size="18" /></button>
+      <button type="button" title="放大" aria-label="放大" :disabled="!isMapReady" @click="changeZoom(0.12)"><ZoomIn :size="18" /></button>
+      <span class="mindmap-preview__toolbar-divider" aria-hidden="true"></span>
+      <button type="button" :title="isFullscreen ? '退出全屏预览' : '全屏预览'" :aria-label="isFullscreen ? '退出全屏预览' : '全屏预览'" @click="toggleFullscreen">
+        <Minimize2 v-if="isFullscreen" :size="18" />
+        <Maximize2 v-else :size="18" />
+      </button>
+    </div>
     <div ref="mapEl" class="mindmap-canvas" :class="{ 'is-hidden': errorText }"></div>
     <div v-if="errorText" class="mindmap-fallback">
       <strong>知识结构暂时按文本展示</strong>
@@ -161,13 +152,11 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.mindmap-preview { display: grid; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); }
+.mindmap-preview { position: relative; display: grid; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); }
 .mindmap-preview__header { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px 18px; border-bottom: 1px solid var(--line); }
 .mindmap-preview__header .eyebrow { margin-bottom: 4px; }
 .mindmap-preview__header h2 { margin: 0; color: var(--ink); font-size: 17px; }
-.mindmap-preview__actions { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; }
-.mindmap-preview__hint { color: var(--muted); font-size: 10px; }
-.mindmap-preview__controls { display: flex; align-items: center; gap: 4px; }.mindmap-preview__controls button, .mindmap-preview__preview { display: inline-flex; height: 32px; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); color: var(--ink); }.mindmap-preview__controls button { width: 32px; }.mindmap-preview__preview { gap: 5px; padding: 0 9px; font-size: 11px; font-weight: 800; }.mindmap-preview__controls button:hover:not(:disabled), .mindmap-preview__preview:hover { background: var(--soft); color: var(--accent-deep); }.mindmap-preview__controls button:disabled { cursor: not-allowed; opacity: .45; }.mindmap-preview__controls button:focus-visible, .mindmap-preview__preview:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
+.mindmap-preview__toolbar { position: absolute; z-index: 5; top: 126px; right: 18px; display: flex; align-items: center; gap: 4px; padding: 5px; border: 1px solid rgba(63, 91, 49, .24); border-radius: 6px; background: rgba(255, 255, 255, .94); box-shadow: 0 8px 20px rgba(30, 55, 38, .14); }.mindmap-preview__toolbar button { display: grid; width: 34px; height: 34px; place-items: center; border: 0; border-radius: 4px; background: transparent; color: var(--ink); }.mindmap-preview__toolbar button:hover:not(:disabled) { background: var(--soft); color: var(--accent-deep); }.mindmap-preview__toolbar button:disabled { cursor: not-allowed; opacity: .42; }.mindmap-preview__toolbar button:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }.mindmap-preview__toolbar-divider { width: 1px; height: 22px; margin: 0 2px; background: var(--line); }
 .mindmap-canvas { width: 100%; height: clamp(420px, calc(100vh - 320px), 620px); min-height: 420px; background: #f7faf5; }
 .mindmap-canvas.is-hidden { display: none; }
 .mindmap-preview :deep(.map-container) { background: #f7faf5; }
@@ -179,8 +168,7 @@ onBeforeUnmount(() => {
 .mindmap-preview:fullscreen { width: 100vw; height: 100vh; border: 0; border-radius: 0; }.mindmap-preview:fullscreen .mindmap-canvas { height: calc(100vh - 64px); min-height: 0; }
 @media (max-width: 680px) {
   .mindmap-preview__header { align-items: flex-start; flex-direction: column; }
-  .mindmap-preview__actions { width: 100%; justify-content: space-between; }
-  .mindmap-preview__hint { display: none; }
+  .mindmap-preview__toolbar { top: 112px; right: 12px; }
   .mindmap-canvas { min-height: 390px; height: 500px; }
 }
 </style>
