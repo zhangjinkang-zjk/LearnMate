@@ -30,7 +30,7 @@ def _build_chat_model(**kwargs) -> ChatOpenAI | None:
 
 
 _raw_llm = _build_chat_model(
-    model=os.getenv("AI_MODEL", "deepseek-v4-flash"),
+    model=os.getenv("AI_MODEL", "deepseek-flash"),
     api_key=api_key,
     base_url=os.getenv("AI_BASE_URL", "https://api.deepseek.com"),
     temperature=0.3,

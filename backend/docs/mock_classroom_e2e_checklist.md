@@ -44,7 +44,7 @@ docker compose up -d mysql redis
 database=mysql://root:123456@127.0.0.1:3306/zhiban
 api_key=你的 LLM key
 AI_BASE_URL=https://api.deepseek.com
-AI_MODEL=deepseek-v4-flash
+AI_MODEL=deepseek-flash
 JWT_KEY=zhiban-jwt-secret
 ALGORITHM=HS256
 REDIS_URL=redis://127.0.0.1:6379/0
