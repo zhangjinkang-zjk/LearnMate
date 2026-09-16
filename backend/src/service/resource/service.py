@@ -107,7 +107,7 @@ def _resource_preview_content(resource_type: str, content):
     try:
         return parse_mindmap_text(content)
     except Exception:
-        logger.exception("SSE mindmap preview content parse failed")
+        logger.exception("SSE 思维导图预览内容解析失败")
         return content
 
 
@@ -616,7 +616,7 @@ async def _run_generation_task(db_id: int, task_id: str, answers: dict | None = 
                             }))
                     continue
                 if _custom_count <= 3 or chunk.get("type") in ("stream_slide", "stream_section_replace", "stream_start"):
-                    logger.info("[TaskStream] custom event #%d mode=%s type=%s keys=%s",
+                    logger.info("[TaskStream] 自定义事件 #%d mode=%s type=%s keys=%s",
                                 _custom_count, mode, chunk.get("type", "?"), list(chunk.keys())[:5])
                 await _notify_task_sse(task_id, chunk)
                 continue

@@ -52,7 +52,7 @@ class ResourceLibraryService:
         try:
             await ResourceLike.create(user=user, resource=resource)
         except IntegrityError:
-            logger.debug("Resource like already exists user_id=%s resource_id=%s", user_id, resource_id)
+            logger.debug("资源点赞记录已存在 user_id=%s resource_id=%s", user_id, resource_id)
             await resource.refresh_from_db()
             return {"liked": True, "like_count": resource.like_count}
         await GeneratedResource.filter(id=resource_id).update(like_count=F("like_count") + 1)
@@ -82,7 +82,7 @@ class ResourceLibraryService:
         try:
             await ResourceCollection.create(user=user, resource=resource)
         except IntegrityError:
-            logger.debug("Resource favorite already exists user_id=%s resource_id=%s", user_id, resource_id)
+            logger.debug("资源收藏记录已存在 user_id=%s resource_id=%s", user_id, resource_id)
             await resource.refresh_from_db()
             return {"favorited": True, "favorite_count": resource.favorite_count}
         await GeneratedResource.filter(id=resource_id).update(favorite_count=F("favorite_count") + 1)

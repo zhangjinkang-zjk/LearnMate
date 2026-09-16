@@ -309,7 +309,7 @@ def _normalise_agent_tasks(payload: Any, fallback_tasks: list[dict]) -> tuple[li
     recommended = next((item["kind"] for item in fallback_tasks if item.get("is_recommended")), "case")
     if payload.get("recommended_kind") != recommended:
         logger.info(
-            "advanced task recommendation constrained requested=%s applied=%s",
+            "进阶任务推荐已收敛 requested=%s applied=%s",
             payload.get("recommended_kind"),
             recommended,
         )
@@ -348,7 +348,7 @@ async def _generate_agent_task_set(user_id: int, profile: dict, path: dict, mast
             return {"tasks": tasks, "summary": summary, "source": "agent", "error": None}
         raise ValueError("进阶任务智能体返回的任务结构无效")
     except Exception as exc:
-        logger.warning("advanced task agent fallback user_id=%s milestone=%s error=%s", user_id, milestone, type(exc).__name__)
+        logger.warning("进阶任务智能体降级兜底 user_id=%s milestone=%s error=%s", user_id, milestone, type(exc).__name__)
         return {
             "tasks": fallback_tasks,
             "summary": "智能体暂不可用，已根据当前学习记录生成临时实践入口。",
@@ -562,7 +562,7 @@ async def _get_or_create_snapshot(
             )
         except Exception as exc:
             # A second worker may win the unique milestone row between the read and create.
-            logger.warning("advanced snapshot create race user_id=%s path_id=%s milestone=%s error=%s", user_id, path_id, milestone, type(exc).__name__)
+            logger.warning("进阶任务快照创建冲突 user_id=%s path_id=%s milestone=%s error=%s", user_id, path_id, milestone, type(exc).__name__)
             existing = _read_snapshot(await AdvancedTaskSnapshot.filter(
                 user_id=user_id,
                 path_id=path_id,
@@ -652,7 +652,7 @@ class AdvancedLearningService:
         except Exception:
             # Keep the page usable during a rolling deploy before the new table is created.
             logger.exception(
-                "advanced task snapshot unavailable user_id=%s path_id=%s milestone=%s",
+                "进阶任务快照不可用 user_id=%s path_id=%s milestone=%s",
                 user_id,
                 current_path.get("path_id"),
                 milestone,
@@ -671,7 +671,7 @@ class AdvancedLearningService:
         except Exception:
             # 会话状态是增强信息；即使旧部署还没创建会话表，也不能阻断任务入口。
             logger.exception(
-                "advanced practice status unavailable user_id=%s path_id=%s",
+                "进阶实践状态不可用 user_id=%s path_id=%s",
                 user_id,
                 current_path.get("path_id"),
             )

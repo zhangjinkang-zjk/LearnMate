@@ -221,7 +221,8 @@ async def test_resource_stream_emits_terminal_safe_error(monkeypatch, failure, e
     async def get_lock(*args):
         return FakeLock()
 
-    async def get_resources(*args):
+    async def get_resources(*args, **kwargs):
+        # 生产调用带 topic= / teaching_context=，假实现必须一起吞掉。
         return [], ["document"]
 
     async def get_context(*args):

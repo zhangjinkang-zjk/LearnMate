@@ -98,7 +98,7 @@ async def persist_memory_after_chat(user_id: int, chat_group_id: int, agent_id: 
             # 写入后清读缓存，下一轮对话立即看到新记忆
             invalidate_memory_context(user_id, chat_group_id)
         except Exception:
-            logger.exception("memory persist failed user=%s group=%s", user_id, chat_group_id)
+            logger.exception("记忆持久化失败 user=%s group=%s", user_id, chat_group_id)
 
 
 async def _persist_inner(user_id: int, chat_group_id: int, agent_id: int | None):
@@ -136,7 +136,7 @@ async def _persist_inner(user_id: int, chat_group_id: int, agent_id: int | None)
         resp = await llm.ainvoke(prompt, priority="low", user_id=user_id, pool="default")
         data = parse_llm_json(resp.content) or {}
     except Exception:
-        logger.exception("memory extract LLM failed user=%s group=%s", user_id, chat_group_id)
+        logger.exception("记忆抽取 LLM 调用失败 user=%s group=%s", user_id, chat_group_id)
         data = {}
 
     if data and isinstance(data, dict):
@@ -279,7 +279,7 @@ async def _merge_episode(user_id: int, chat_group_id: int, agent_id: int | None,
             vec = await encode(ep.summary[:500])
             ep.embedding = json.dumps(vec.tolist(), ensure_ascii=False)
         except Exception:
-            logger.exception("episode embedding failed user=%s", user_id)
+            logger.exception("片段 embedding 生成失败 user=%s", user_id)
     await ep.save()
 
 
@@ -305,7 +305,7 @@ async def _index_messages(user_id: int, chat_group_id: int, agent_id: int | None
         try:
             vec = await encode(content)
         except Exception:
-            logger.exception("message embedding failed user=%s", user_id)
+            logger.exception("消息 embedding 生成失败 user=%s", user_id)
             continue
         await MemoryMessage.create(
             user_id=user_id, chat_group_id=chat_group_id,
@@ -358,6 +358,6 @@ async def build_history_preview(user_id: int, chat_group_id: int, query: str = "
                 )
                 text = (text + extra)[:max_chars]
         except Exception:
-            logger.exception("history preview semantic recall failed user=%s", user_id)
+            logger.exception("历史预览语义召回失败 user=%s", user_id)
 
     return text

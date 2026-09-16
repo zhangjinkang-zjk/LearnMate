@@ -116,7 +116,7 @@ def _schedule_portrait_intro_prewarm(topic: str, user, user_id: int, voice: str 
         try:
             done.result()
         except asyncio.CancelledError:
-            logger.debug("Suppressed exception at backend/src/service/video/service.py:118", exc_info=True)
+            logger.debug("已忽略异常 backend/src/service/video/service.py:118", exc_info=True)
         except Exception:
             logger.debug("[视频] 画像引入预热失败 topic=%s", topic, exc_info=True)
 
@@ -134,7 +134,7 @@ async def _get_prewarmed_portrait_intro(topic: str, user_id: int, voice: str, wa
         try:
             await asyncio.wait_for(asyncio.shield(task), timeout=wait_ms / 1000)
         except asyncio.TimeoutError:
-            logger.debug("Suppressed exception at backend/src/service/video/service.py:136", exc_info=True)
+            logger.debug("已忽略异常 backend/src/service/video/service.py:136", exc_info=True)
         except Exception:
             logger.debug("[视频] 等待画像引入预热失败 topic=%s", topic, exc_info=True)
     return _get_cached_portrait_intro(cache_key)
@@ -341,7 +341,7 @@ class ExternalVideoService:
                 resp.raise_for_status()
                 payload = resp.json()
         except Exception:
-            logger.info("[ExternalVideo] search failed topic=%s", query, exc_info=True)
+            logger.info("[ExternalVideo] 视频搜索失败 topic=%s", query, exc_info=True)
             return []
 
         items = ((payload or {}).get("data") or {}).get("result") or []
@@ -410,7 +410,7 @@ class ExternalVideoService:
                     res=json.dumps({"type": "external_videos", "resources": saved}, ensure_ascii=False),
                 )
             except Exception:
-                logger.debug("[ExternalVideo] save chat history failed", exc_info=True)
+                logger.debug("[ExternalVideo] 保存聊天历史失败", exc_info=True)
         return saved
 
 
@@ -509,7 +509,7 @@ async def generate_questions(topic: str, user_id: int, chat_group_id: int = 0, v
 
     # 写入聊天历史 — 新对话自动分配 chat_group_id
     chat_group_id = chat_group_id if chat_group_id and chat_group_id > 0 else await allocate_chat_group_id(user_id)
-    logger.info("generate_questions() user_id=%d chat_group_id=%d topic=%s", user_id, chat_group_id, topic[:60])
+    logger.info("生成题目 generate_questions() user_id=%d chat_group_id=%d topic=%s", user_id, chat_group_id, topic[:60])
     try:
         await ChatHistory.create(
             user=user,
@@ -1337,7 +1337,7 @@ async def _add_audio_to_presentation(record_id: int, topic: str, user_id: int, v
 
     _flush_lock = _get_video_audio_flush_lock(record_id)
     logger.info(
-        "[Video-TTS] limits record=%d user=%s per_user=%d global=%d chapter=%d slide=%d",
+        "[Video-TTS] 配额限制 record=%d user=%s per_user=%d global=%d chapter=%d slide=%d",
         record_id, user_id, TTS_PER_USER_CONCURRENCY, TTS_GLOBAL_CONCURRENCY, AUDIO_CHAPTER_CONCURRENCY, AUDIO_SLIDE_CONCURRENCY,
     )
 
@@ -1377,7 +1377,7 @@ async def _add_audio_to_presentation(record_id: int, topic: str, user_id: int, v
                 logger.info("[视频] TTS 缓存命中 resource=%d slide=%d text_len=%d", resource_id, slide_idx, len(text))
                 return {"audio_url": audio_url, "duration_ms": dur, "word_timestamps": word_timestamps}
             except (json.JSONDecodeError, IOError):
-                logger.warning("Suppressed exception at backend/src/service/video/service.py:1379", exc_info=True)
+                logger.warning("已忽略异常 backend/src/service/video/service.py:1379", exc_info=True)
 
         t0 = _time.perf_counter()
         word_timestamps = await _generate_tts(text, voice, output_path, user_id=user_id)
@@ -1607,7 +1607,7 @@ def asyncio_create_task(coro):
         task = asyncio.ensure_future(coro, loop=loop)
         return task
     except RuntimeError:
-        logger.warning("Suppressed exception at backend/src/service/video/service.py:1609", exc_info=True)
+        logger.warning("已忽略异常 backend/src/service/video/service.py:1609", exc_info=True)
 
 
 # ═══════════════════════════════════════════════

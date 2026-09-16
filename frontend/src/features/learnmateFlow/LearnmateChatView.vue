@@ -16,7 +16,7 @@
         <div v-for="(message, index) in messages" :key="`${message.role}-${index}`" class="chat-message" :class="`chat-message--${message.role}`">
           {{ message.text }}
         </div>
-        <div v-if="isLoading" class="chat-message chat-message--assistant chat-message--typing">...</div>
+        <div v-if="isLoading || isSaving" class="chat-message chat-message--assistant chat-message--typing">...</div>
       </div>
 
       <form class="conversation-input" @submit.prevent="sendMessage">
@@ -24,19 +24,21 @@
           v-model="messageDraft"
           type="text"
           autocomplete="off"
-          :placeholder="step < PORTRAIT_MAX_STEPS ? 'Reply to LearnMate...' : 'Type start to enter your path...'"
+          :placeholder="inputPlaceholder"
+          :disabled="isSaving"
           aria-label="Message LearnMate"
         />
         <button type="submit" :disabled="!messageDraft.trim() || isLoading || isSaving" aria-label="Send message">
           <span aria-hidden="true">↗</span>
         </button>
       </form>
+      <p v-if="isSaving" class="conversation-saving" role="status">正在整理你的画像，请稍候…</p>
     </section>
   </main>
 </template>
 
 <script setup>
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { getNextPortraitInterviewQuestion, initPortraitFromDialogue } from '../../shared/api/portraitApi'
 
@@ -50,6 +52,14 @@ const isLoading = ref(false)
 const isSaving = ref(false)
 const messages = ref([])
 const conversationList = ref(null)
+
+// 第 5 题答完后 step 就满 5 了，但此时还在存画像。原来这里会显示
+// 「Type start to enter your path...」诱导输入，而 sendMessage 在 isSaving 时直接返回，
+// 看起来就像卡死。等待期间改成说明当前状态。
+const inputPlaceholder = computed(() => {
+  if (isSaving.value) return '正在整理你的画像，请稍候…'
+  return step.value < PORTRAIT_MAX_STEPS ? 'Reply to LearnMate...' : '正在进入下一步…'
+})
 
 const scrollToLatest = async () => {
   await nextTick()
@@ -372,6 +382,22 @@ onMounted(() => {
   cursor: not-allowed;
 }
 
+.conversation-input input:disabled {
+  cursor: wait;
+}
+
+.conversation-saving {
+  position: absolute;
+  bottom: calc(clamp(24px, 5vh, 56px) + 62px);
+  left: 50%;
+  margin: 0;
+  transform: translateX(-50%);
+  color: rgba(243, 240, 231, 0.66);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
 .learn-dialog {
   width: min(520px, 100%);
   overflow: hidden;
@@ -602,6 +628,10 @@ onMounted(() => {
     bottom: 20px;
     width: calc(100% - 36px);
     padding-left: 15px;
+  }
+
+  .conversation-saving {
+    bottom: 84px;
   }
 
   .learn-dialog {

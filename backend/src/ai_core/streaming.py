@@ -53,12 +53,12 @@ def push_text_stream(
     except Exception as exc:
         if is_stream_context_error(exc):
             logger.debug(
-                "[Text-Stream] skipped outside runnable context file_type=%s section=%s",
+                "[Text-Stream] 不在可运行的上下文中，已跳过 file_type=%s section=%s",
                 file_type,
                 section_idx,
             )
             return
-        logger.exception("[Text-Stream] push failed file_type=%s section=%s", file_type, section_idx)
+        logger.exception("[Text-Stream] 推送失败 file_type=%s section=%s", file_type, section_idx)
 
 
 def push_agent_event(
@@ -84,9 +84,9 @@ def push_agent_event(
         })
     except Exception as exc:
         if is_stream_context_error(exc):
-            logger.debug("[AgentFlow] skipped outside runnable context agent_id=%s", agent_id)
+            logger.debug("[AgentFlow] 不在可运行的上下文中，已跳过 agent_id=%s", agent_id)
             return
-        logger.exception("[AgentFlow] push failed agent_id=%s", agent_id)
+        logger.exception("[AgentFlow] 推送失败 agent_id=%s", agent_id)
 
 
 def is_stream_context_error(exc: Exception) -> bool:

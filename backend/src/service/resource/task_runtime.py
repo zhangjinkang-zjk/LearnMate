@@ -40,7 +40,7 @@ async def cache_task_state(task_id: str, state: dict):
         await r.setex(f"task:{task_id}:state", ttl, json.dumps(state, ensure_ascii=False))
     except Exception:
         logger.debug(
-            "Task state cache failed task_id=%s status=%s; continuing without cache",
+            "任务状态写入缓存失败 task_id=%s status=%s；继续执行（不使用缓存）",
             task_id,
             state.get("status"),
         )
@@ -56,5 +56,5 @@ async def read_cached_task_state(task_id: str, user_id: int) -> dict | None:
         if state.get("user_id") == user_id and state.get("status") in ("success", "failed"):
             return state
     except Exception:
-        logger.debug("Task cache read failed task_id=%s; falling back to database", task_id)
+        logger.debug("任务缓存读取失败 task_id=%s；回退到数据库", task_id)
     return None

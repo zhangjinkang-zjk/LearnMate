@@ -196,7 +196,7 @@ class MockClassroomService:
         try:
             session = await MockClassroomService._get_session(user_id, session_key)
         except MockClassroomNotFound:
-            logger.warning("[MockClassroom] report skipped, session not found: %s", session_key)
+            logger.warning("[MockClassroom] 未找到会话，跳过报告生成：%s", session_key)
             return
 
         existing_report = await MockClassroomReport.filter(session_id=session.id).order_by("-id").first()
@@ -255,7 +255,7 @@ class MockClassroomService:
             session.frame_count = 0
             await session.save(update_fields=["frame_count", "updated_at"])
         except Exception:
-            logger.warning("[MockClassroom] report generation failed session=%s", session_key, exc_info=True)
+            logger.warning("[MockClassroom] 报告生成失败 session=%s", session_key, exc_info=True)
             session.report_status = "failed"
             await session.save(update_fields=["report_status", "updated_at"])
 
@@ -270,7 +270,7 @@ class MockClassroomService:
 
             result = (await kb_search(query, top_k=5, user_id=user_id)) or ""
         except Exception:
-            logger.warning("[MockClassroom] knowledge reference search failed topic=%s", query, exc_info=True)
+            logger.warning("[MockClassroom] 知识引用检索失败 topic=%s", query, exc_info=True)
             return None
 
         normalized = result.strip()

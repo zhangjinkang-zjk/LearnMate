@@ -93,7 +93,7 @@ async def _encode_async(text: str):
             if cached is not None and isinstance(cached, list):
                 return np.array(cached, dtype=np.float32)
         except Exception:
-            logger.debug("Suppressed exception at backend/src/utils/knowledge_base.py:85", exc_info=True)
+            logger.debug("已忽略异常 backend/src/utils/knowledge_base.py:85", exc_info=True)
 
     model = await _get_embed_model_async()
     vector = await asyncio.to_thread(model.encode, text, normalize_embeddings=True)
@@ -104,7 +104,7 @@ async def _encode_async(text: str):
             from backend.src.utils.redis_client import cache_set
             await cache_set(cache_key, vector.tolist(), cache_ttl)
         except Exception:
-            logger.debug("Suppressed exception at backend/src/utils/knowledge_base.py:96", exc_info=True)
+            logger.debug("已忽略异常 backend/src/utils/knowledge_base.py:96", exc_info=True)
 
     return vector
 

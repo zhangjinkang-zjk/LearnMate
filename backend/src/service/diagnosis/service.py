@@ -1,5 +1,6 @@
 """首次使用能力诊断：逐题生成、判分并同步知识点掌握度。"""
 
+import asyncio
 import json
 import logging
 import re
@@ -19,6 +20,15 @@ logger = logging.getLogger(__name__)
 
 _MIN_QUESTIONS = 3
 _MAX_QUESTIONS = 5
+
+# asyncio 只保留任务的弱引用，不留强引用的话后台任务可能在跑完前被 GC 掉。
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro) -> None:
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 def _goal_code(goal: str) -> str:
@@ -279,7 +289,8 @@ async def answer(user_id: int, session_id: str, question_id: int, answer_text: s
         user = await User.filter(id=user_id).first()
         picture = await user.picture if user else None
         onboarding = parse_traits(picture.traits if picture else None).get("onboarding") or {}
-        asyncio.create_task(_generate_paths_after_diagnosis(
+        # 放后台跑，诊断结果立刻返回，用户在结果页看「正在分析」而不是干等最后一题。
+        _spawn_background(_generate_paths_after_diagnosis(
             user_id,
             onboarding.get("direction", ""),
             onboarding.get("goal", ""),
@@ -308,7 +319,7 @@ def _result_message(percentage: float | None) -> str:
 
 
 async def _generate_paths_after_diagnosis(user_id: int, direction: str, goal: str) -> None:
-    """诊断完成后立即拆解方向并创建科目路径，失败不阻塞诊断结果返回。"""
+    """答完诊断后拆解方向并创建科目路径。失败只记日志，不连累诊断结果返回。"""
     try:
         from backend.src.service.curriculum.service import sync_direction_subjects
         from backend.src.service.path.service import PathService

@@ -14,25 +14,27 @@ load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 logger = logging.getLogger(__name__)
 
-# 通用生成使用独立的 AI_API_KEY，未配置时回退到项目原有的 api_key。
-# MiMo 密钥只供视觉模型使用，避免不同供应商之间串用密钥。
+# 通用生成使用独立的 AI_API_KEY；通用模型与视觉模型现在同为 MiMo，
+# 所以中间回退到 MiMo 的 VISION_API_KEY，最后才用项目原有的 api_key（DeepSeek），
+# 避免只配了 MiMo 密钥的机器把 DeepSeek 密钥发到 MiMo 端点。
 api_key = (
     os.getenv("AI_API_KEY")
+    or os.getenv("VISION_API_KEY")
     or os.getenv("api_key")
 )
 
 def _build_chat_model(**kwargs) -> ChatOpenAI | None:
     key = kwargs.get("api_key")
     if not key:
-        logger.warning("LLM API key is not configured; AI calls will fail until api_key is set.")
+        logger.warning("LLM API key 未配置；在设置 api_key 之前，AI 调用都会失败。")
         return None
     return ChatOpenAI(**kwargs)
 
 
 _raw_llm = _build_chat_model(
-    model=os.getenv("AI_MODEL", "deepseek-v4-flash"),
+    model=os.getenv("AI_MODEL", "mimo-v2.5"),
     api_key=api_key,
-    base_url=os.getenv("AI_BASE_URL", "https://api.deepseek.com"),
+    base_url=os.getenv("AI_BASE_URL", "https://api.xiaomimimo.com/v1"),
     temperature=0.3,
     streaming=True,
     request_timeout=120,  # 单次请求超时 120 秒，避免断连后无限等待
@@ -132,7 +134,7 @@ class _PriorityLLM:
                         response_metadata=_cached.get("response_metadata", {}),
                     )
             except Exception:
-                logger.debug("Suppressed exception at backend/src/ai_core/llm_config.py:116", exc_info=True)
+                logger.debug("已忽略异常 backend/src/ai_core/llm_config.py:116", exc_info=True)
 
         user_sem = None
         if user_id:
@@ -162,7 +164,7 @@ class _PriorityLLM:
                         "response_metadata": {k: str(v) for k, v in _meta.items() if isinstance(v, (str, int, float))},
                     }, self._cache_ttl)
                 except Exception:
-                    logger.debug("Suppressed exception at backend/src/ai_core/llm_config.py:144", exc_info=True)
+                    logger.debug("已忽略异常 backend/src/ai_core/llm_config.py:144", exc_info=True)
             return resp
 
         global _async_high_active
