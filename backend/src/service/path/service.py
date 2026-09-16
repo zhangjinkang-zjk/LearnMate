@@ -11,7 +11,6 @@ import asyncio
 
 from backend.src.ai_core.llm_config import llm
 from backend.src.ai_core.path_graph import parse_or_repair_leader_result, path_graph
-from backend.src.utils.constants import VIDEOS_DIR
 
 
 from backend.src.models.path_model import LearningPath, PathNode, UserPathProgress
@@ -46,6 +45,7 @@ from backend.src.service.path.helpers import (
 )
 from backend.src.service.path.generation_locks import get_node_generation_lock
 from backend.src.service.path.node_resource_jobs import ensure_job, stream_job
+from backend.src.service.path.path_video_jobs import ensure_path_video_job, get_path_video_job
 from backend.src.service.path.teaching_context import (
     PATH_DEFAULT_RESOURCE_TYPES,
     attach_teaching_specs,
@@ -1099,6 +1099,9 @@ class PathService:
                 bound_ids = list(all_ids)
 
             if not missing_types:
+                # 全部资源都已存在 → 直接复用，LLM / TTS / 审核都不会跑。必须明说一句：
+                # 否则前端只看到流程凭空跳到完成，会以为中间的审核、保存阶段出了故障。
+                job.publish(_status_event("本章资源已存在，本次直接复用，未重新生成"))
                 await _bind_current()
                 job.publish_terminal(_done_event(existing_ids, path_id=path_id, node_id=node_id))
                 return
@@ -1856,34 +1859,33 @@ class PathService:
         # 已有有效的 HTML 视频 → 直接复用
         existing_html = await GeneratedResource.filter(
             user_id=user_id, topic=video_topic, resource_type="html"
-        ).first()
-        if existing_html:
-            file_url = existing_html.file_url or ""
-            _html_path = VIDEOS_DIR / (file_url.split("/")[-1] if file_url else "")
-            if _html_path.exists() and "template-version:visual-v6" in _html_path.read_text(encoding="utf-8", errors="ignore")[:300]:
-                content = {}
-                try:
-                    content = json.loads(existing_html.content or "{}")
-                except (json.JSONDecodeError, TypeError):
-                    logger.warning("已忽略异常 backend/src/service/path/service.py:1386", exc_info=True)
-                return {
-                    "path_id": path_id,
-                    "html_id": existing_html.id,
-                    "file_url": file_url,
-                    "presentation_id": content.get("presentation_id", 0),
-                    "topic": video_topic,
-                    "reused": True,
-                }
+        ).order_by("-id").first()
+        if existing_html and _presentation_html_is_usable(existing_html.file_url):
+            content = {}
+            try:
+                content = json.loads(existing_html.content or "{}")
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("已忽略异常 backend/src/service/path/service.py:1386", exc_info=True)
+            return {
+                "path_id": path_id,
+                "html_id": existing_html.id,
+                "file_url": existing_html.file_url or "",
+                "presentation_id": content.get("presentation_id", 0),
+                "topic": video_topic,
+                "reused": True,
+            }
 
         logger.info(f"生成路径视频 path_id={path_id} subject={path.subject} nodes={len(nodes)}")
 
-        # 删除旧资源，强制重新生成
-        for rt in ("ppt", "html"):
-            old = await GeneratedResource.filter(
-                user_id=user_id, topic=video_topic, resource_type=rt
-            ).first()
-            if old:
-                await old.delete()
+        # 这里原来会先删掉同一 topic 下的 ppt 与 html 记录，带来两个后果：
+        # 1) 删掉 html 让上面的复用判断永远失效——记录刚被删掉，走到 _create_video_html
+        #    时 existing_html 必然是 None，那里的缓存校验成了死代码；
+        # 2) 删掉 ppt 会清空 ResourceService.generate_and_save 自带的按 topic 缓存，
+        #    把"命中缓存秒回"变成每次从头跑一遍 PPT 的完整 LLM 生成。
+        # 改成先取到新记录，确认真的换了才清理旧的（见下方 previous_ppt 的处理）。
+        previous_ppt = await GeneratedResource.filter(
+            user_id=user_id, topic=video_topic, resource_type="ppt"
+        ).order_by("-id").first()
 
         saved = await ResourceService.generate_and_save(
             topic=video_topic,
@@ -1907,13 +1909,16 @@ class PathService:
         if not ppt_id:
             raise RuntimeError("路径 PPT 生成失败")
 
+        if previous_ppt and previous_ppt.id != ppt_id:
+            await previous_ppt.delete()
+
         ppt_record = await GeneratedResource.filter(id=ppt_id).first()
         if not ppt_record:
             raise RuntimeError("PPT 记录未找到")
 
         html_result = await _create_video_html(video_topic, user_id, ppt_record)
         if not html_result:
-            raise RuntimeError("路径视频视频生成失败")
+            raise RuntimeError("路径视频生成失败")
 
         return {
             "path_id": path_id,
@@ -1925,32 +1930,96 @@ class PathService:
         }
 
     @staticmethod
-    async def get_path_video(path_id: int, user_id: int) -> dict | None:
-        """获取路径已生成的视频视频（如有）"""
+    async def get_path_video(path_id: int, user_id: int) -> dict:
+        """获取路径视频的当前状态，始终返回 dict（前端靠它轮询）。
+
+        status 取值：
+          ready      产物可用，file_url 可直接渲染
+          missing    有记录但磁盘文件不在了，需要重新生成
+          stale      文件存在但不是当前模板版本，需要重新生成
+          generating 后台作业正在跑
+          failed     上次生成失败，error 是原因
+          idle       从未生成过
+        """
         path = await LearningPath.filter(id=path_id).prefetch_related("nodes").first()
         if not path:
-            return None
+            return {
+                "path_id": path_id, "status": "idle", "error": "", "file_url": None,
+                "html_id": None, "presentation_id": 0, "topic": "",
+            }
+
         nodes = sorted(path.nodes, key=lambda n: n.order_index)
         node_outline = " → ".join(n.topic for n in nodes) if nodes else ""
-        video_topic = (f"{path.subject} 学习路径（{node_outline}）" if node_outline else f"{path.subject}（完整路径总结）")[:255]
+        video_topic = (
+            f"{path.subject} 学习路径（{node_outline}）" if node_outline else f"{path.subject}（完整路径总结）"
+        )[:255]
+
         existing = await GeneratedResource.filter(
             user_id=user_id, topic=video_topic, resource_type="html"
-        ).first()
+        ).order_by("-id").first()
         if not existing:
-            return None
+            # 没有记录时，作业注册表是唯一能区分"从没生成过"和"正在生成/上次失败"的信息源。
+            job = get_path_video_job(user_id, path_id)
+            return {
+                "path_id": path_id,
+                "status": job.state if job else "idle",
+                "error": job.error if job else "",
+                "file_url": None,
+                "html_id": None,
+                "presentation_id": 0,
+                "topic": video_topic,
+            }
+
+        file_url = existing.file_url or ""
+        disk_path = _presentation_html_path(file_url)
+        if not disk_path or not disk_path.exists():
+            status = "missing"
+        elif not _presentation_html_is_usable(file_url):
+            status = "stale"
+        else:
+            status = "ready"
+
         pres_id = 0
         if existing.content:
             try:
-                c = json.loads(existing.content)
-                pres_id = c.get("presentation_id", 0)
-            except (json.JSONDecodeError, TypeError):
+                pres_id = json.loads(existing.content).get("presentation_id", 0)
+            except (json.JSONDecodeError, TypeError, AttributeError):
                 logger.warning("已忽略异常 backend/src/service/path/service.py:1465", exc_info=True)
         return {
             "path_id": path_id,
+            "status": status,
+            # 只有确认可用才给出 file_url：坏地址交给 iframe 只会渲染成空白页。
+            "file_url": file_url if status == "ready" else None,
             "html_id": existing.id,
-            "file_url": existing.file_url,
             "presentation_id": pres_id,
             "topic": video_topic,
+            "error": "",
+        }
+
+    @staticmethod
+    async def start_path_video(path_id: int, user_id: int) -> dict:
+        """启动（或接入）路径视频生成，立即返回当前状态，不等待生成完成。
+
+        生成要跑几分钟，挂在 HTTP 请求上只会撞上前端超时；所以这里把生产者甩到
+        path_video_jobs 的注册表里，由调用方轮询 get_path_video 取结果。
+        """
+        ready = await PathService.get_path_video(path_id, user_id)
+        if ready.get("status") == "ready":
+            return {**ready, "reused": True}
+        if ready.get("status") == "generating":
+            return {**ready, "reused": False}
+
+        async def _producer() -> dict:
+            return await PathService.generate_path_video(path_id, user_id)
+
+        job, is_new = await ensure_path_video_job(user_id, path_id, _producer)
+        if job.state == "failed":
+            return {**ready, "status": job.state, "error": job.error, "reused": False}
+        return {
+            **ready,
+            "status": job.state,
+            "reused": False,
+            "message": "正在生成视频，请稍候" if is_new else "已有生成任务在跑，正在接入",
         }
 
     # ── 轻量学习路径接口（供前端动态路径动画） ──
@@ -2310,50 +2379,141 @@ async def _create_video_html_and_update_progress(topic: str, user_id: int, ppt_r
         logger.exception("后台学习视频生成失败 topic=%s ppt_id=%s", topic, ppt_record.id)
 
 
+def _presentation_html_path(file_url: str | None):
+    """file_url → 磁盘上的 HTML 路径（已剥掉 ?v= 查询串）。
+
+    必须剥掉查询串再拼路径：generate() 返回的 file_url 形如
+    /static/presentations/xxx.html?v=visual-v6，直接 file_url.split("/")[-1] 会把
+    "?v=..." 当成文件名的一部分，拼出的路径永远不存在，缓存也就永远不命中。
+    复用 video.service 里已有的实现，避免同一段逻辑在多处各写一遍。
+    """
+    from backend.src.service.video.service import _presentation_file_path
+
+    return _presentation_file_path(file_url)
+
+
+def _presentation_html_is_usable(file_url: str | None) -> bool:
+    """file_url 指向的 HTML 是否存在、且是当前模板版本。"""
+    from backend.src.service.video.service import PRESENTATION_TEMPLATE_VERSION
+
+    path = _presentation_html_path(file_url)
+    if not path or not path.exists():
+        return False
+    try:
+        head = path.read_text(encoding="utf-8", errors="ignore")[:300]
+    except OSError:
+        logger.warning("读取视频模板版本失败 file_url=%s", file_url, exc_info=True)
+        return False
+    return f"template-version:{PRESENTATION_TEMPLATE_VERSION}" in head
+
+
+def _remove_presentation_file(old_url: str | None, keep: str | None) -> None:
+    """清理不再被引用的旧 HTML 文件。
+
+    只能在 DB 记录已经指向新文件之后调用，否则会删掉当前正在用的产物。
+    """
+    old_path = _presentation_html_path(old_url)
+    if not old_path or old_path == _presentation_html_path(keep):
+        return
+    try:
+        if old_path.exists():
+            old_path.unlink()
+            logger.info("已清理旧视频 HTML path=%s", old_path)
+    except OSError:
+        # 清理失败不影响业务：记录已经指向新文件了。
+        logger.warning("旧视频 HTML 清理失败 path=%s", old_path, exc_info=True)
+
+
 async def _create_video_html(topic: str, user_id: int, ppt_record) -> dict | None:
-    """通过已有的 video_service 创建学习视频（含骨架→后台补音频→状态轮询）。
-    返回 {"html_id": int, "presentation_id": int, "file_url": str} 或 None。"""
-    from backend.src.service.video.service import generate as generate_presentation
+    """通过已有的 video_service 创建学习视频（含骨架→后台补音频）。
+    返回 {"html_id": int, "presentation_id": int, "file_url": str} 或 None。
+
+    顺序刻意保持"先生成、后替换"：生成失败时旧记录与旧文件都原样保留，用户仍看得到
+    上一版；不会留下一段"记录已删、新记录还没建"的空档。
+    """
+    from backend.src.service.video.service import (
+        generate as generate_presentation,
+        rerender_presentation_html,
+    )
     from backend.src.models.resource_model import GeneratedResource
 
-    # 已有 HTML GeneratedResource 且是交互模板 → 复用；否则删旧重建
     existing_html = await GeneratedResource.filter(
         user_id=user_id, topic=topic, resource_type="html"
-    ).first()
+    ).order_by("-id").first()
+
+    pres_id = 0
     if existing_html:
         try:
-            content = json.loads(existing_html.content or "{}")
-        except (json.JSONDecodeError, TypeError):
-            content = {}
-        pres_id = content.get("presentation_id", 0)
-        file_url = existing_html.file_url or ""
-        _html_path = VIDEOS_DIR / (file_url.split("/")[-1] if file_url else "")
-        if _html_path.exists() and "template-version:visual-v6" in _html_path.read_text(encoding="utf-8", errors="ignore")[:300]:
-            return {"html_id": existing_html.id, "presentation_id": pres_id, "file_url": file_url}
-        logger.info("旧 HTML 非交互模板，重建 presentation html_id=%s", existing_html.id)
-        if _html_path.exists():
-            _html_path.unlink()
-        await existing_html.delete()
+            pres_id = json.loads(existing_html.content or "{}").get("presentation_id", 0)
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            pres_id = 0
 
+    # 已有可用产物 → 直接复用，不删任何东西、也不重新生成
+    if existing_html and _presentation_html_is_usable(existing_html.file_url):
+        return {
+            "html_id": existing_html.id,
+            "presentation_id": pres_id,
+            "file_url": existing_html.file_url or "",
+        }
+
+    # 走到这里说明没有可用产物；旧记录与旧文件此刻都还在，等新产物确认可用后再替换。
+    old_file_url = existing_html.file_url if existing_html else None
+    logger.info(
+        "视频产物不可用或不存在，开始生成 topic=%s html_id=%s",
+        topic,
+        existing_html.id if existing_html else None,
+    )
+
+    # 这个 user 既供完整生成用，也供下面新建 GeneratedResource 时用（见 create(user=user)），
+    # 所以放在分支之外无条件取，免得依赖"重渲染成功 ⇒ existing_html 必存在"这种隐蔽不变量。
     user = await User.filter(id=user_id).first()
     if not user:
         return None
 
-    pres = await generate_presentation(topic, user_id, video_mode=False, save_history=False)
+    # 产物不可用多半只是因为模板换代（HTML 还在、音频也还在），这时只重渲染外壳即可，
+    # 秒级完成；只有数据不全才回落到完整生成（重跑 PPT 的 LLM 和每个 slide 的 TTS）。
+    pres = None
+    if pres_id:
+        pres = await rerender_presentation_html(pres_id, topic)
+
+    if not pres:
+        pres = await generate_presentation(topic, user_id, video_mode=False, save_history=False)
+
     if not pres or "error" in pres:
-        logger.error("视频生成失败 topic=%s error=%s", topic, pres.get("error") if pres else "unknown")
+        logger.error("视频生成失败 topic=%s error=%s", topic, (pres or {}).get("error", "unknown"))
         return None
 
-    html = await GeneratedResource.create(
-        user=user, topic=topic, resource_type="html",
-        content=json.dumps({
-            "presentation_id": pres["id"],
-            "slides": _ppt_to_slides(ppt_record.content or ""),
-            "narration": [],
-        }, ensure_ascii=False),
-        file_url=pres["file_url"],
-    )
-    logger.info("学习视频已创建 html_id=%s presentation_id=%s", html.id, pres["id"])
+    payload = json.dumps({
+        "presentation_id": pres["id"],
+        "slides": _ppt_to_slides(ppt_record.content or ""),
+        "narration": [],
+    }, ensure_ascii=False)
+
+    try:
+        if existing_html:
+            # 复用同一行：同一 topic 堆多行 html 会让 .first() 的归属变得不确定，
+            # 而 html_id 会被追加进 progress.resource_ids，稳定一些更好。
+            existing_html.content = payload
+            existing_html.file_url = pres["file_url"]
+            await existing_html.save()
+            html = existing_html
+        else:
+            html = await GeneratedResource.create(
+                user=user, topic=topic, resource_type="html",
+                content=payload, file_url=pres["file_url"],
+            )
+    except Exception:
+        logger.exception(
+            "视频记录写入失败 topic=%s，保留旧记录 html_id=%s",
+            topic,
+            existing_html.id if existing_html else None,
+        )
+        return None
+
+    # 记录已经指向新文件，旧文件此时才能安全清理（文件名含随机 uuid，新旧不会重合）。
+    _remove_presentation_file(old_file_url, keep=pres["file_url"])
+
+    logger.info("学习视频已就绪 html_id=%s presentation_id=%s", html.id, pres["id"])
     return {"html_id": html.id, "presentation_id": pres["id"], "file_url": pres["file_url"]}
 
 
@@ -2378,17 +2538,21 @@ async def _generate_first_node_warmup_background(path_id: int, node_id: int, use
 
 
 def _schedule_path_video(path_id: int, user_id: int) -> None:
+    """自动预热入口：与手动 POST 共用同一作业注册表。
+
+    原来这里是裸 asyncio.create_task 且丢弃返回值——asyncio 只保弱引用，任务可能
+    在跑完前被 GC；走注册表既拿住强引用，也和手动触发互斥，不重复生成。
+    """
     if not _env_bool("PATH_AUTO_GENERATE_VIDEO", False):
         return
-    asyncio.create_task(_generate_path_video_background(path_id, user_id))
+    asyncio.create_task(_start_path_video_job(path_id, user_id))
 
 
-async def _generate_path_video_background(path_id: int, user_id: int):
-    """后台异步生成路径视频，失败不影响主流程"""
-    try:
-        await PathService.generate_path_video(path_id, user_id)
-    except Exception:
-        logger.exception("后台路径视频生成失败 path_id=%s", path_id)
+async def _start_path_video_job(path_id: int, user_id: int) -> None:
+    async def _producer() -> dict:
+        return await PathService.generate_path_video(path_id, user_id)
+
+    await ensure_path_video_job(user_id, path_id, _producer)
 
 
 def _safe_topic_filename(topic: str) -> str:

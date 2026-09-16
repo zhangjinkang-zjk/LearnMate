@@ -8,7 +8,7 @@
             <h2 id="generation-title">{{ dialogTitle }}</h2>
             <p>{{ dialogDescription }}</p>
           </div>
-          <button class="generation-close" type="button" :disabled="stage !== 'compose'" aria-label="关闭生成资料" title="关闭" @click="close">
+          <button class="generation-close" type="button" :disabled="!canDismiss" :aria-label="isGenerating ? '关闭（生成将在后台继续）' : '关闭生成资料'" :title="isGenerating ? '关闭（生成将在后台继续）' : '关闭'" @click="close">
             <X :size="18" />
           </button>
         </header>
@@ -94,12 +94,13 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowRight, CheckCircle2, Download, FileImage, FileText, ListChecks, LoaderCircle, Network, Presentation, Sparkles, Video, X } from 'lucide-vue-next'
 import { resourceApi } from '@/shared/api/resourceApi'
+import { applyWorkflowEvent, applyWorkflowProgress, finishWorkflow, resetWorkflow, setWorkflowOpen } from '@/entities/agent/agentWorkflowState'
 
 const props = defineProps({ modelValue: { type: Boolean, default: false } })
-const emit = defineEmits(['update:modelValue', 'saved', 'discarded'])
+const emit = defineEmits(['update:modelValue', 'saved', 'discarded', 'backgroundSettled'])
 
 const resourceKinds = [
   { key: 'ppt', label: 'PPT 演示文稿', description: '按主题生成演示内容', icon: Presentation, placeholder: '例如：为“语义检索与关键词检索的区别”制作一份 10 页课堂汇报 PPT，面向零基础大学生。' },
@@ -129,14 +130,18 @@ const agentStages = ref([])
 let taskId = ''
 let pollTimer = 0
 let taskEventController = null
+let workflowStarted = false
 
 const selectedKind = computed(() => resourceKinds.find((kind) => kind.key === selectedType.value) || resourceKinds[0])
 const isGenerating = computed(() => stage.value === 'generating')
+// X / Esc / 点背景三处出口统一读这个。result 阶段是明确的确认门槛（有"保存 / 不保存"
+// 两个按钮，不是死路），保持不可关；其余阶段一律可关。
+const canDismiss = computed(() => stage.value !== 'result')
 const dialogTitle = computed(() => stage.value === 'compose' ? '生成资料' : stage.value === 'generating' ? '正在生成资料' : '确认保存资料')
 const dialogDescription = computed(() => stage.value === 'compose'
   ? '选择资料类型并描述你的需求，LearnMate 会结合当前学习情况生成内容。'
   : stage.value === 'generating'
-    ? '生成完成后，你可以预览并决定是否保存到资料库。'
+    ? '生成完成后，你可以预览并决定是否保存到资料库。关闭后会在后台继续生成，随时可以回来查看。'
     : '本次内容已经生成，请确认是否保留。')
 
 function labelFor(type) {
@@ -196,6 +201,11 @@ function updateAgentStage(id, status, message, agentName = '') {
 
 function applyGenerationEvent(event) {
   if (!event) return
+  // 同一条 SSE 流同时喂给全局"智能体流程"抽屉（侧边栏），这样弹窗关掉之后
+  // 进度还有地方看。写法与 FundamentalsPage / XiaozhiAssistant 保持一致。
+  if (event.type === 'agent_event') applyWorkflowEvent(event)
+  else applyWorkflowProgress(event)
+
   const type = String(event.type || '').toLowerCase()
   const message = String(event.message || event.progress_msg || event.msg || '')
   const progress = Number(event.progress)
@@ -225,13 +235,27 @@ function startTaskEventStream() {
 }
 
 function close() {
-  if (isGenerating.value) return
-  resetDialog()
+  // 生成中只隐藏弹窗：任务由后端承载、状态在 DB，前端这个组件实例并没有被销毁，
+  // 轮询和事件流都照跑，所以重新打开会直接接回当前阶段（下面的 watch 在生成中
+  // 本来就不复位）。其余阶段关闭即复位。
+  if (isGenerating.value) {
+    // 进度移交到侧边栏的"智能体流程"抽屉。不这么做的话，弹窗一关全应用就没有
+    // 任何地方能看到这条任务还在跑了（没有任务中心，通知也要等跑完才写）。
+    setWorkflowOpen(true)
+  } else {
+    resetDialog()
+  }
   emit('update:modelValue', false)
 }
 
 function handleBackdropClick() {
-  if (stage.value === 'compose') close()
+  if (canDismiss.value) close()
+}
+
+function handleKeydown(event) {
+  // 组件是常驻的（父页只切内层 v-if），所以要自己守门
+  if (event.key !== 'Escape' || !props.modelValue || !canDismiss.value) return
+  close()
 }
 
 async function startGeneration() {
@@ -242,6 +266,10 @@ async function startGeneration() {
   taskMessage.value = '正在创建生成任务…'
   resetAgentStages()
   updateAgentStage('leader', 'running', '正在分析资料需求')
+  // 让侧边栏"智能体流程"入口亮起，并接管全局抽屉的展示内容（默认不自动展开，
+  // 用户关掉弹窗时才展开，见 close()）。
+  resetWorkflow({ title: description.value, resourceTypes: [selectedType.value] })
+  workflowStarted = true
   try {
     const task = await resourceApi.createGenerationTask({
       topic: description.value,
@@ -255,6 +283,9 @@ async function startGeneration() {
   } catch (error) {
     stage.value = 'compose'
     errorMessage.value = error?.response?.data?.detail || error?.message || '生成任务创建失败，请稍后重试'
+    // 上面已经 resetWorkflow 把抽屉点亮了，这里任务却没起来，得收尾，
+    // 否则侧边栏会一直挂着一个永远停在"等待"的流程
+    if (workflowStarted) finishWorkflow(true)
   }
 }
 
@@ -273,6 +304,12 @@ async function pollTask() {
         try { return await resourceApi.get(item.resource_id) } catch { return item }
       }))
       stage.value = 'result'
+      // SSE 的 done 事件通常已经收尾过了，这里是轮询侧的兜底（流断掉时仍能收尾），
+      // finishWorkflow 内部对重复调用有幂等保护。
+      if (workflowStarted) finishWorkflow(false)
+      // 弹窗关着的时候没有界面可展示，通知父级刷新资料库并提示。这只是"通知"，
+      // 不改归属：用户之后重新打开仍停在 result 阶段，还能选"不保存"把它们删掉。
+      if (!props.modelValue) emit('backgroundSettled', { ok: true, resources: generatedResources.value })
       return
     }
     if (task?.status === 'failed') throw new Error(task?.error || '资料生成失败，请稍后重试')
@@ -283,6 +320,9 @@ async function pollTask() {
     updateAgentStage('complete', 'failed', error?.message || '资料生成失败')
     stage.value = 'compose'
     errorMessage.value = error?.response?.data?.detail || error?.message || '生成过程出现问题，请稍后重试'
+    if (workflowStarted) finishWorkflow(true)
+    // 同上：关着的时候失败也必须说一声，否则用户以为还在跑
+    if (!props.modelValue) emit('backgroundSettled', { ok: false, message: errorMessage.value })
   }
 }
 
@@ -326,7 +366,10 @@ watch(() => props.modelValue, (isOpen) => {
   if (!isOpen && !isGenerating.value) resetDialog()
 })
 
+onMounted(() => document.addEventListener('keydown', handleKeydown))
+
 onBeforeUnmount(() => {
+  document.removeEventListener('keydown', handleKeydown)
   clearPoll()
   clearTaskEventStream()
 })

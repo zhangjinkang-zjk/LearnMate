@@ -1,18 +1,21 @@
 <template>
   <Teleport to="body">
     <Transition name="agent-workflow-slide">
-      <aside v-if="state.open && state.available" class="agent-workflow" role="dialog" aria-label="智能体工作流">
+      <aside v-if="state.open" class="agent-workflow" role="dialog" aria-label="智能体工作流">
         <header class="agent-workflow__header">
           <div>
             <p class="eyebrow">AGENT WORKFLOW</p>
             <h2>智能体工作流</h2>
-            <p>{{ state.title || '当前学习资源' }}</p>
+            <p>{{ state.title || '暂无进行中的任务' }}</p>
           </div>
           <button class="agent-workflow__close" type="button" aria-label="关闭智能体工作流" title="关闭" @click="close">
             <X :size="17" />
           </button>
         </header>
 
+        <!-- available 表示"本会话已经有流程可展示"。侧边栏入口现在常驻，所以用户可能
+             在什么都没跑过时就打开这里 —— 那种情况下给一句说明，而不是五行假的"等待中"。 -->
+        <template v-if="state.available">
         <section v-if="state.displayMode !== 'single'" class="agent-workflow__stages" aria-label="工作阶段">
           <div v-for="(stage, index) in stages" :key="stage.id" class="workflow-stage-wrap">
             <article class="workflow-stage" :class="[`is-${stage.status}`, { 'is-active': isActive(stage.status) }]">
@@ -70,6 +73,15 @@
             </p>
           </div>
           <p v-else class="workflow-log__empty">等待智能体开始工作…</p>
+        </section>
+        </template>
+
+        <section v-else class="workflow-empty">
+          <Circle :size="18" />
+          <div>
+            <strong>还没有智能体任务</strong>
+            <p>当你生成学习资料、准备章节资源，或点开视频讲解时，这里会实时显示智能体的工作流程。</p>
+          </div>
         </section>
       </aside>
     </Transition>
@@ -222,6 +234,10 @@ const close = () => setWorkflowOpen(false)
 .workflow-branch__children span.is-failed { border-color: #e1bba9; background: #fff9f4; color: #a65d43; }
 .workflow-log { padding-top: 2px; border-top: 1px solid var(--line); }
 .workflow-log__list p, .workflow-log__empty { display: grid; grid-template-columns: 7px auto minmax(0, 1fr); align-items: baseline; gap: 6px; margin: 7px 0 0; padding: 8px 9px; border-radius: 4px; background: var(--soft); color: var(--muted); font-size: 10px; line-height: 1.45; }
+.workflow-empty { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 10px; padding: 14px; border: 1px dashed var(--line); border-radius: 5px; background: var(--soft); color: var(--muted); }
+.workflow-empty > div { display: grid; gap: 4px; }
+.workflow-empty strong { color: var(--ink); font-size: 12px; }
+.workflow-empty p { margin: 0; font-size: 11px; line-height: 1.6; }
 .workflow-log__list p > span { width: 6px; height: 6px; border-radius: 50%; background: #bbc5bc; }
 .workflow-log__list p > span.is-running, .workflow-log__list p > span.is-reviewing, .workflow-log__list p > span.is-retrying, .workflow-log__list p > span.is-saving { background: var(--accent); }
 .workflow-log__list p > span.is-done { background: #70aa63; }

@@ -32,6 +32,9 @@ export const workflowState = reactive({
   resourceTypes: [],
   nodes: {},
   events: [],
+  // 本会话里真正上报过 agent_event 的 phase。用来区分"跑过并完成"和"压根没跑"——
+  // 后端只推当前阶段的链路要靠它来补全前面的阶段，但没上报过的阶段不能补。
+  reportedPhases: [],
   currentMessage: '',
   progress: 0,
   startedAt: 0,
@@ -79,6 +82,11 @@ function markPreviousPhasesDone(phase) {
   const phaseIndex = workflowPhases.findIndex((item) => item.id === phase)
   if (phaseIndex <= 0) return
   workflowPhases.slice(0, phaseIndex).forEach((item) => {
+    // 只推进"确实上报过"的阶段。它的本意是补全那些后端只报当前阶段的链路
+    // （前面的阶段只报过 running、没报 done，所以要收尾）——但从未上报过的
+    // 阶段不能补：那条链路可能压根没跑它。比如章节资源链路 skip_review=True，
+    // 审核从来不执行，补成"已完成"就是假话。
+    if (!workflowState.reportedPhases.includes(item.id)) return
     const node = ensurePhaseNode(item.id)
     if (['pending', 'running', 'reviewing', 'retrying', 'saving'].includes(node.status)) {
       node.status = 'done'
@@ -113,6 +121,7 @@ function updateNode(event) {
   }
 
   markPreviousPhasesDone(phase)
+  if (!workflowState.reportedPhases.includes(phase)) workflowState.reportedPhases.push(phase)
   workflowState.nodes[agentId] = next
 
   if (phase === 'executor' && resourceType) {
@@ -166,6 +175,7 @@ export function resetWorkflow({ title = '', pathId = null, nodeId = null, resour
   workflowState.nodes = {}
   workflowPhases.forEach((phase) => { workflowState.nodes[phase.id] = makeNode(phase.id, phase.agentName, phase.id) })
   workflowState.events = []
+  workflowState.reportedPhases = []
   workflowState.currentMessage = '等待资源生成服务开始'
   workflowState.progress = 0
   workflowState.startedAt = Date.now()
@@ -205,6 +215,20 @@ export function applyWorkflowProgress(event) {
   if (!message && !resourceType && type !== 'stream_start') return
   workflowState.currentMessage = message || (type === 'stream_start' ? '正在启动资源生成' : '正在处理')
   workflowState.progress = Math.max(0, Math.min(100, Number(event.progress || event.percent || workflowState.progress || 0)))
+  // status 消息同时进"实时动态"。收尾时 finishWorkflow 会把 currentMessage 覆盖成
+  // "资源准备完成"，只放在 currentMessage 里的话，等用户打开抽屉时后端那句说明
+  // （例如"资源已存在，本次直接复用，未重新生成"）已经被冲掉了。
+  if (message) {
+    workflowState.events = [...workflowState.events, {
+      type: 'status',
+      agent_id: 'status',
+      agent_name: '流程状态',
+      phase: 'status',
+      status: 'running',
+      message,
+      updatedAt: Date.now(),
+    }].slice(-80)
+  }
   workflowState.updatedAt = Date.now()
 }
 
@@ -225,14 +249,25 @@ export function applyWorkflowResource(resourceType, message = '资源已就绪')
 
 export function finishWorkflow(failed = false) {
   const finalStatus = failed ? 'failed' : 'done'
-  if (workflowState.activeAgentId === 'complete' && workflowState.nodes.complete?.status === finalStatus) return
+  if (workflowState.activeAgentId === 'complete' && workflowState.nodes.complete?.status === finalStatus) {
+    // 资源任务收尾时会先发一条 phase='complete' 的 agent_event、紧跟一条 type='done'
+    // （backend/src/service/resource/service.py:745/754）。前者已经把 complete 节点置成
+    // 终态，所以真正的 done 进来时守卫就命中了。节点不必再扫一遍，但进度和结束时间
+    // 还停在上一次 status 事件的值（通常 70%，"AI 审核中"那一档），必须补上，
+    // 否则抽屉会永远显示 70%。这里保持幂等，重复调用不会改结果。
+    if (!failed) workflowState.progress = 100
+    if (!workflowState.finishedAt) workflowState.finishedAt = Date.now()
+    return
+  }
   Object.values(workflowState.nodes).forEach((node) => {
     if (failed) {
       if (node.status === 'pending') node.message = '未执行'
       if (node.status !== 'failed') node.status = node.status === 'pending' ? 'skipped' : 'failed'
     } else if (node.status === 'pending') {
+      // 走到这里说明这个阶段从头到尾没上报过任何事件。措辞要区分于"跑过但失败/跳过"：
+      // "本次未涉及"是陈述事实，不像"未执行或资源已复用"那样读起来像出了故障。
       node.status = 'skipped'
-      node.message = '未执行或资源已复用'
+      node.message = '本次未涉及'
     } else if (node.status !== 'failed') {
       node.status = finalStatus
     }

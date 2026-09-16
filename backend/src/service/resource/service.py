@@ -299,6 +299,9 @@ class ResourceService:
                 yield _make_file_event(topic, resource_type, item.get("content", ""), item["resource_id"], f"/resource/{item['resource_id']}/download")
             missing_types = [item for item in requested_types if item not in cached_by_type]
             if not missing_types:
+                # 全部命中缓存 → 直接返回，后面的 graph（leader/executor/reviewer）和保存
+                # 都不会跑。明说一句，否则调用方只能看到流程凭空跳到完成。
+                yield f"data: {json.dumps({'type': 'status', 'msg': '资源已存在，本次直接复用，未重新生成'}, ensure_ascii=False)}\n\n"
                 done_resources = [
                     {
                         "resource_id": item["resource_id"],
