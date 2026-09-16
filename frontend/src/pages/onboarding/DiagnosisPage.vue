@@ -101,10 +101,8 @@ async function submitAnswer() {
   if (!answer || !currentQuestion.value || isLoading.value) return
   messages.value.push({ role: 'user', text: answer })
   isLoading.value = true
-  // 最后一题答完，后端会在返回前把学习路径建好，这段等待比中间几题长得多，
-  // 必须说清楚在等什么，否则会像卡住。
   loadingMessage.value = answeredCount.value + 1 >= totalQuestions
-    ? '正在整理诊断结果，并据此生成你的学习路径…'
+    ? '正在整理你的诊断结果…'
     : '正在结合你的回答调整下一道题'
   errorMessage.value = ''
   try {

@@ -21,6 +21,15 @@ logger = logging.getLogger(__name__)
 _MIN_QUESTIONS = 3
 _MAX_QUESTIONS = 5
 
+# asyncio 只保留任务的弱引用，不留强引用的话后台任务可能在跑完前被 GC 掉。
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro) -> None:
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+
 
 def _goal_code(goal: str) -> str:
     text = str(goal or "")
@@ -280,14 +289,12 @@ async def answer(user_id: int, session_id: str, question_id: int, answer_text: s
         user = await User.filter(id=user_id).first()
         picture = await user.picture if user else None
         onboarding = parse_traits(picture.traits if picture else None).get("onboarding") or {}
-        # 诊断是路径生成的唯一触发点，必须等它跑完再返回：诊断结果页的出口直接进学习概览，
-        # 若改成后台任务，用户点到「进入学习概览」时路径可能还没建好，会看到空页面。
-        # 这里等下去是有意义的，前端由 _stream_diagnosis 的 keepalive 持续保活。
-        await _generate_paths_after_diagnosis(
+        # 放后台跑，诊断结果立刻返回，用户在结果页看「正在分析」而不是干等最后一题。
+        _spawn_background(_generate_paths_after_diagnosis(
             user_id,
             onboarding.get("direction", ""),
             onboarding.get("goal", ""),
-        )
+        ))
         return {"finished": True, "feedback": result, "result": {"session_id": session_id, "percentage": percentage, "correct_count": summary.get("correct_count", 0), "total_questions": len(records), "message": _result_message(percentage)}}
 
     user = await User.filter(id=user_id).first()

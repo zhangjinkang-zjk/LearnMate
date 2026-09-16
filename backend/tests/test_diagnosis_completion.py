@@ -110,10 +110,11 @@ async def test_answering_the_last_question_finishes_without_nameerror(monkeypatc
     )
 
     result = await diagnosis_service.answer(9, "sess-1", 1, "我的回答", None, max_steps=3)
+    await asyncio.sleep(0)   # 路径生成是后台任务，让出一次循环让它真的跑起来
 
     assert result["finished"] is True
     assert result["result"]["percentage"] == 66.7
-    # 路径生成必须在返回前跑完，否则用户点到「进入学习概览」时路径还没建好。
+    # 收尾必须把路径生成排进去，否则诊断结果页会一直停在「正在分析」。
     assert scheduled == [(9, "数据分析", "就业")]
 
 
