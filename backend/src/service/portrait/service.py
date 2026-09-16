@@ -28,6 +28,9 @@ _last_extraction: dict[int, float] = {}
 
 _EXTRACTION_INTERVAL = _env_int("PORTRAIT_EXTRACTION_INTERVAL_SECONDS", 20, minimum=5)
 
+# 画像分析（访谈成稿、画像总结）的模型调用上限。超了就降级，不把用户卡在 500 上。
+_PORTRAIT_LLM_TIMEOUT = _env_int("PORTRAIT_LLM_TIMEOUT_SECONDS", 40, minimum=5)
+
 TRAIT_KEYS = [
     "knowbase",
     "commonmis",
@@ -456,13 +459,23 @@ class PortraitChatHistory_Service:
 {{"profile_summary": "...", "learning_goal": "...", "cognition": "..."}}"""
 
         try:
-            response = await llm.ainvoke(prompt)
+            response = await asyncio.wait_for(
+                llm.ainvoke(prompt),
+                timeout=_PORTRAIT_LLM_TIMEOUT,
+            )
             raw = response.content.strip()
             from backend.src.utils.json_parser import parse_llm_json
             result = parse_llm_json(raw)
         except Exception:
-            logger.exception("LLM 画像摘要生成失败 user_id=%s", user_id)
-            raise RuntimeError("画像摘要生成失败，请稍后重试")
+            # 摘要只是锦上添花：模型挂了就保留已有摘要，不要把 /regenerate 变成 500。
+            logger.warning("LLM 画像摘要生成失败，保留已有摘要 user_id=%s", user_id, exc_info=True)
+            return {
+                "cognition": picture.cognition,
+                "learning_goal": picture.learning_goal,
+                "personality_tags": picture.personality_tags,
+                "traits": parse_traits(picture.traits),
+                "profile_summary": picture.profile_summary,
+            }
 
         summary = result.get("profile_summary", "")
         learning_goal = result.get("learning_goal", "")
@@ -572,16 +585,25 @@ class PortraitChatHistory_Service:
         template = load_prompt("portrait/init_from_dialogue")
         prompt = fill_prompt(template, dialogue_text=dialogue_text)
 
+        # 模型挂了不能把整个"访谈收尾"变成 500：这一步真正不能丢的是 identity/direction/goal，
+        # 它们是请求里带过来的，不经过模型；模型只负责推断认知风格、标签和摘要。
+        # 前端 PortraitSummaryPage 本来就准备好了"画像分析没有完成，以下是你在访谈中的原始回答"
+        # 的展示分支，抛异常等于把那条分支废掉，用户只能卡在总结页反复点重试。
+        result: dict = {}
         try:
-            response = await llm.ainvoke(prompt)
-            result = parse_llm_json(response.content.strip())
+            response = await asyncio.wait_for(
+                llm.ainvoke(prompt),
+                timeout=_PORTRAIT_LLM_TIMEOUT,
+            )
+            parsed = parse_llm_json(response.content.strip())
+            if isinstance(parsed, dict):
+                result = parsed
+            else:
+                logger.warning("对话画像提取返回非对象 user_id=%s type=%s", user_id, type(parsed).__name__)
+        except asyncio.TimeoutError:
+            logger.warning("对话画像提取超时，降级为只保存访谈上下文 user_id=%s timeout=%ss", user_id, _PORTRAIT_LLM_TIMEOUT)
         except Exception:
-            logger.exception("对话画像提取 LLM 调用失败 user_id=%s", user_id)
-            raise RuntimeError("画像分析失败，请稍后重试")
-
-        if not result or not isinstance(result, dict):
-            logger.warning("对话画像提取无有效返回 user_id=%s", user_id)
-            raise RuntimeError("画像分析无结果")
+            logger.warning("对话画像提取失败，降级为只保存访谈上下文 user_id=%s", user_id, exc_info=True)
 
         learning_direction = str(result.get("learning_direction", "") or "").strip()
         learning_goal_text = str(result.get("learning_goal_text", "") or "").strip()

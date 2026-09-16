@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import uuid
 from typing import Any
@@ -20,6 +21,13 @@ logger = logging.getLogger(__name__)
 
 _MIN_QUESTIONS = 3
 _MAX_QUESTIONS = 5
+
+# 出题/判分各有兜底，但兜底只有在调用**返回**之后才有机会跑。模型挂住不给响应时
+# 必须靠超时把它推进兜底分支，否则诊断流会一直发 keepalive、用户永远等不到下一题。
+try:
+    _DIAGNOSIS_LLM_TIMEOUT = max(5, int(os.getenv("DIAGNOSIS_LLM_TIMEOUT_SECONDS", "40")))
+except (TypeError, ValueError):
+    _DIAGNOSIS_LLM_TIMEOUT = 40
 
 # asyncio 只保留任务的弱引用，不留强引用的话后台任务可能在跑完前被 GC 掉。
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
@@ -136,7 +144,10 @@ async def _generate_question(user_id: int, identity: str, direction: str, goal: 
             max_steps=str(max_steps),
             history="\n".join(history_lines) or "暂无，这是第一题。",
         )
-        response = await llm.ainvoke(prompt, priority="high", user_id=int(user_id), pool="diagnosis")
+        response = await asyncio.wait_for(
+            llm.ainvoke(prompt, priority="high", user_id=int(user_id), pool="diagnosis"),
+            timeout=_DIAGNOSIS_LLM_TIMEOUT,
+        )
         result = parse_llm_json(response.content.strip())
         if isinstance(result, dict):
             content = str(result.get("content") or "").strip()
@@ -214,7 +225,10 @@ async def _evaluate_answer(user_id: int, question: ExamQuestion, answer_text: st
             evaluation_points="；".join(points)[:300] or "关注回答是否给出概念、依据或验证方式",
             answer=answer,
         )
-        response = await llm.ainvoke(prompt, priority="high", user_id=int(user_id), pool="diagnosis")
+        response = await asyncio.wait_for(
+            llm.ainvoke(prompt, priority="high", user_id=int(user_id), pool="diagnosis"),
+            timeout=_DIAGNOSIS_LLM_TIMEOUT,
+        )
         result = parse_llm_json(response.content.strip())
         if isinstance(result, dict) and isinstance(result.get("is_correct"), bool):
             return {
@@ -271,20 +285,45 @@ async def start(user_id: int, identity: str, direction: str, goal: str, max_step
     return {"session_id": session_id, "current_index": 0, "total_questions": max_steps, "question": _safe_question(question)}
 
 
+def _replay_feedback(record: ExamRecord) -> dict:
+    """重复提交时的反馈：用已落库的判定还原，不再让模型判一次。"""
+    is_correct = bool(record.is_correct)
+    note = "这道题的判定已经记录过了，我们接着往下。"
+    return {
+        "is_correct": is_correct,
+        "score": 100.0 if is_correct else 0.0,
+        "correct_answer": None,
+        "analysis": note,
+        "feedback": note,
+    }
+
+
 async def answer(user_id: int, session_id: str, question_id: int, answer_text: str, time_spent: int | None = None, max_steps: int = 3) -> dict:
     await init_db()
+    max_steps = max(_MIN_QUESTIONS, min(int(max_steps or _MIN_QUESTIONS), _MAX_QUESTIONS))
     record = await ExamRecord.filter(user_id=user_id, session_id=session_id, question_id=question_id).first()
     if not record:
         raise ValueError("诊断题目不存在或不属于当前会话")
-    if record.is_correct is not None:
-        raise ValueError("该题已经提交过")
 
-    result = await _submit_open_answer(user_id, record, str(answer_text or ""), time_spent, session_id)
+    if record.is_correct is not None:
+        # 答案上一轮已经落库，但下一题没生成出来（客户端断连触发了取消、模型超时、进程重启…）。
+        # 这里必须能接着往下走：抛"该题已经提交过"会把用户永久钉在这一题上，重试永远失败，
+        # 只能整轮重开、进度清零 —— 也就是用户看到的"诊断异常中断"。
+        # 注意不能重跑 _submit_open_answer：ExamService.submit_answer 会再记一次掌握度、
+        # 学习事件和雷达，重复提交等于把同一次作答统计两次。
+        logger.info(
+            "诊断题重复提交，接续已有判定 user_id=%s session_id=%s question_id=%s",
+            user_id, session_id, question_id,
+        )
+        feedback = _replay_feedback(record)
+        summary = await ExamService.get_session(session_id, user_id) or {}
+    else:
+        feedback = await _submit_open_answer(user_id, record, str(answer_text or ""), time_spent, session_id)
+        summary = feedback.get("session_summary") or {}
+
     records = await ExamRecord.filter(user_id=user_id, session_id=session_id).order_by("id").prefetch_related("question").all()
     answered = [item for item in records if item.is_correct is not None]
-    max_steps = max(_MIN_QUESTIONS, min(int(max_steps or _MIN_QUESTIONS), _MAX_QUESTIONS))
     if len(answered) >= max_steps:
-        summary = result.get("session_summary") or {}
         percentage = summary.get("percentage")
         user = await User.filter(id=user_id).first()
         picture = await user.picture if user else None
@@ -295,7 +334,7 @@ async def answer(user_id: int, session_id: str, question_id: int, answer_text: s
             onboarding.get("direction", ""),
             onboarding.get("goal", ""),
         ))
-        return {"finished": True, "feedback": result, "result": {"session_id": session_id, "percentage": percentage, "correct_count": summary.get("correct_count", 0), "total_questions": len(records), "message": _result_message(percentage)}}
+        return {"finished": True, "feedback": feedback, "result": {"session_id": session_id, "percentage": percentage, "correct_count": summary.get("correct_count", 0), "total_questions": len(records), "message": _result_message(percentage)}}
 
     user = await User.filter(id=user_id).first()
     picture = await user.picture if user else None
@@ -306,7 +345,7 @@ async def answer(user_id: int, session_id: str, question_id: int, answer_text: s
         history.append({"index": index + 1, "content": item.question.content, "answer_text": item.user_answer or "", "is_correct": bool(item.is_correct)})
     payload = await _generate_question(user_id, onboarding.get("identity", ""), onboarding.get("direction", ""), onboarding.get("goal", ""), history, len(answered), max_steps)
     question = await _create_question(user_id, session_id, payload)
-    return {"finished": False, "feedback": result, "current_index": len(answered), "total_questions": max_steps, "question": _safe_question(question)}
+    return {"finished": False, "feedback": feedback, "current_index": len(answered), "total_questions": max_steps, "question": _safe_question(question)}
 
 
 def _result_message(percentage: float | None) -> str:
