@@ -45,6 +45,7 @@ from backend.src.service.path.helpers import (
     reconcile_completed_prerequisites,
 )
 from backend.src.service.path.generation_locks import get_node_generation_lock
+from backend.src.service.path.node_resource_jobs import ensure_job, stream_job
 from backend.src.service.path.teaching_context import (
     PATH_DEFAULT_RESOURCE_TYPES,
     attach_teaching_specs,
@@ -987,17 +988,60 @@ class PathService:
             return None
 
     @staticmethod
-    async def generate_node_resources_stream(
+    async def _bind_node_resources(progress, all_ids: list[int]) -> None:
+        """增量把生成好的资源 id 绑到节点上。
+
+        每产出一个资源就写一次，而不是等整批结束 —— 这样任何中断（进程重启、被杀）
+        留下的都是**自洽**的绑定，不会再出现"资源已落库但没绑上、下次被判定缺失而重新生成"。
+        """
+        await update_progress_resource_ids(progress, all_ids)
+        # update_progress_resource_ids 只写库、不回写内存对象；不同步的话它下一轮仍会
+        # 读到 node_status == "unlocked"，把 started_at 反复刷新。
+        progress.resource_ids = json.dumps(all_ids, ensure_ascii=False)
+        if getattr(progress, "node_status", None) == "unlocked":
+            progress.node_status = "in_progress"
+
+    @staticmethod
+    async def _run_node_resource_job(
+        job,
+        user_id: int,
         path_id: int,
         node_id: int,
+        resource_types: list[str] | None,
+        llm_priority: str,
+    ) -> None:
+        """作业生产者 —— 原来的生成主体，改成把事件 publish 出去而不是 yield。
+
+        本协程的强引用在 `node_resource_jobs._JOBS` 里，不被任何 HTTP 请求持有，
+        所以客户端断开不会取消它。
+        """
+        try:
+            await PathService._generate_node_resources_into(
+                job, user_id, path_id, node_id, resource_types, llm_priority
+            )
+        except asyncio.CancelledError:
+            # 只有进程关停会走到这里。留一个终端事件，但绝不吞掉取消。
+            job.publish_terminal(_error_event("服务已重启，本次生成已中止", path_id, node_id))
+            raise
+        except Exception:
+            logger.exception("节点资源作业异常 path_id=%s node_id=%s user_id=%s", path_id, node_id, user_id)
+            job.publish_terminal(_error_event(_RESOURCE_GENERATION_ERROR_MESSAGE, path_id, node_id))
+        finally:
+            # 保证每个作业恰好有一个终端事件，订阅者才不会悬着等。
+            job.publish_terminal(_error_event(_RESOURCE_GENERATION_ERROR_MESSAGE, path_id, node_id))
+
+    @staticmethod
+    async def _generate_node_resources_into(
+        job,
         user_id: int,
-        resource_types: list[str] | None = None,
-        llm_priority: str = "high",
-    ):
-        """流式为节点生成学习资源（SSE）—— 生成好一个推送一个"""
+        path_id: int,
+        node_id: int,
+        resource_types: list[str] | None,
+        llm_priority: str,
+    ) -> None:
         node = await PathNode.filter(id=node_id, path_id=path_id).first()
         if not node:
-            yield _sse_error("节点不存在", path_id=path_id, node_id=node_id)
+            job.publish_terminal(_error_event("节点不存在", path_id, node_id))
             return
 
         progress = await UserPathProgress.filter(user_id=user_id, path_id=path_id, node_id=node_id).first()
@@ -1005,12 +1049,12 @@ class PathService:
             # 用户可能未走 enroll 流程，但既然在生成该节点资料，补建进度记录避免生成被卡死
             progress = await PathService._ensure_node_progress(user_id, path_id, node_id)
             if progress is None:
-                yield _sse_error("未加入该路径，且无法创建进度记录", path_id=path_id, node_id=node_id)
+                job.publish_terminal(_error_event("未加入该路径，且无法创建进度记录", path_id, node_id))
                 return
 
         lock = await get_node_generation_lock(user_id, path_id, node_id, "resources")
         if lock.locked():
-            yield f"data: {json.dumps({'type': 'status', 'msg': '该节点资料正在生成，正在等待已有任务完成...'}, ensure_ascii=False)}\n\n"
+            job.publish(_status_event("该章节资料已在生成中，正在接入…"))
 
         async with lock:
             topic = node.topic
@@ -1024,30 +1068,45 @@ class PathService:
                 teaching_context=teaching_context,
             )
 
+            existing_ids = [r.id for r in existing_records]
             for r in existing_records:
-                yield _resource_sse(r, path_id=path_id, node_id=node_id)
+                job.publish(_resource_event_from_record(r, path_id=path_id, node_id=node_id))
+
+            bound_ids: list[int] | None = None
+
+            async def _bind_current() -> None:
+                """把当前已知的 id 集合绑上去；没有新东西就不重复写库。"""
+                nonlocal bound_ids
+                all_ids = existing_ids + generated_ids
+                if all_ids == bound_ids:
+                    return
+                await PathService._bind_node_resources(progress, all_ids)
+                bound_ids = list(all_ids)
 
             if not missing_types:
-                all_ids = [r.id for r in existing_records]
-                await update_progress_resource_ids(progress, all_ids)
-                yield _sse_done(all_ids, path_id=path_id, node_id=node_id)
+                await _bind_current()
+                job.publish_terminal(_done_event(existing_ids, path_id=path_id, node_id=node_id))
                 return
 
             gen_types = [t for t in missing_types if t != "exercise"]
 
             if gen_types:
-                yield f"data: {json.dumps({'type': 'status', 'msg': f'开始生成 {len(gen_types)} 种资源...'}, ensure_ascii=False)}\n\n"
+                job.publish(_status_event(f"开始生成 {len(gen_types)} 种资源..."))
 
-            generated_ids = []
+            generated_ids: list[int] = []
+
+            def _remember_generated_id(value) -> bool:
+                """记下一个新生成的资源 id；返回是否确实新增。"""
+                try:
+                    rid = int(value)
+                except (TypeError, ValueError):
+                    return False
+                if rid <= 0 or rid in generated_ids:
+                    return False
+                generated_ids.append(rid)
+                return True
+
             try:
-                def _remember_generated_id(value):
-                    try:
-                        rid = int(value)
-                    except (TypeError, ValueError):
-                        return
-                    if rid > 0 and rid not in generated_ids:
-                        generated_ids.append(rid)
-
                 if gen_types:
                     from backend.src.service.resource.service import ResourceService
                     async for event_str in ResourceService.generate_stream(
@@ -1064,22 +1123,25 @@ class PathService:
                             try:
                                 data = json.loads(event_str[5:].strip())
                                 if data.get("type") == "file":
-                                    _remember_generated_id(data.get("resource_id"))
-                                    yield _resource_payload_sse(data, path_id=path_id, node_id=node_id)
+                                    if _remember_generated_id(data.get("resource_id")):
+                                        await _bind_current()
+                                    job.publish(_resource_event_from_payload(data, path_id=path_id, node_id=node_id))
                                 elif data.get("type") == "agent_event":
                                     # Preserve zhiban-compatible agent lifecycle events for the UI.
-                                    yield event_str
+                                    job.publish(data)
                                 elif data.get("type") in {"stream_progress", "progress", "status"}:
-                                    yield _path_status_sse(data.get("progress_msg") or data.get("message") or data.get("msg") or "学习路径资源生成中...")
+                                    job.publish(_status_event(data.get("progress_msg") or data.get("message") or data.get("msg") or "学习路径资源生成中..."))
                                 elif data.get("done"):
+                                    remembered = False
                                     for r in data.get("resources", []):
-                                        _remember_generated_id(r.get("resource_id"))
+                                        remembered = _remember_generated_id(r.get("resource_id")) or remembered
+                                    if remembered:
+                                        await _bind_current()
                             except (json.JSONDecodeError, KeyError):
                                 logger.warning("已忽略异常 backend/src/service/path/service.py:802", exc_info=True)
 
-                all_ids = [r.id for r in existing_records] + generated_ids
-                await update_progress_resource_ids(progress, all_ids)
-                yield _sse_done(all_ids, path_id=path_id, node_id=node_id)
+                await _bind_current()
+                job.publish_terminal(_done_event(existing_ids + generated_ids, path_id=path_id, node_id=node_id))
             except Exception as exc:
                 logger.exception(
                     "学习路径资源流生成失败 path_id=%s node_id=%s user_id=%s",
@@ -1088,9 +1150,8 @@ class PathService:
                     user_id,
                 )
                 # 生成中断时保留已经成功产出的资源，但不暴露供应商或内部异常。
-                all_ids = [r.id for r in existing_records] + generated_ids
                 try:
-                    await update_progress_resource_ids(progress, all_ids)
+                    await _bind_current()
                 except Exception:
                     logger.exception(
                         "学习路径资源流失败后写回进度失败 path_id=%s node_id=%s user_id=%s",
@@ -1098,12 +1159,32 @@ class PathService:
                         node_id,
                         user_id,
                     )
-                yield _sse_error(
-                    _safe_resource_generation_error_detail(exc),
-                    path_id=path_id,
-                    node_id=node_id,
+                job.publish_terminal(
+                    _error_event(_safe_resource_generation_error_detail(exc), path_id=path_id, node_id=node_id)
                 )
-                return
+
+    @staticmethod
+    async def generate_node_resources_stream(
+        path_id: int,
+        node_id: int,
+        user_id: int,
+        resource_types: list[str] | None = None,
+        llm_priority: str = "high",
+    ):
+        """流式消费该节点的资源生成作业（SSE）。
+
+        本函数只是订阅者：生成跑在独立的后台作业里（见 node_resource_jobs），
+        所以客户端断开只会退订，不会中断生成；再次请求会挂到同一个作业上而不是重跑一遍。
+        """
+        key = (int(user_id), int(path_id), int(node_id))
+        job = await ensure_job(
+            key,
+            lambda target: PathService._run_node_resource_job(
+                target, user_id, path_id, node_id, resource_types, llm_priority
+            ),
+        )
+        async for chunk in stream_job(job):
+            yield chunk
 
     @staticmethod
     async def generate_node_resources(path_id: int, node_id: int, user_id: int, resource_types: list[str] | None = None) -> dict:
@@ -2103,13 +2184,12 @@ class PathService:
 #  SSE 流式辅助函数
 # ═══════════════════════════════════════
 
-def _path_status_sse(message: str) -> str:
-    data = {"type": "status", "source": "learning_path", "msg": message}
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+def _status_event(message: str) -> dict:
+    return {"type": "status", "source": "learning_path", "msg": message}
 
 
-def _sse_error(detail: str, path_id: int = 0, node_id: int = 0) -> str:
-    data = {
+def _error_event(detail: str, path_id: int = 0, node_id: int = 0) -> dict:
+    return {
         "type": "error",
         "source": "learning_path",
         "path_id": path_id,
@@ -2117,10 +2197,9 @@ def _sse_error(detail: str, path_id: int = 0, node_id: int = 0) -> str:
         "detail": detail,
         "done": True,
     }
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _resource_payload_sse(payload: dict, path_id: int = 0, node_id: int = 0) -> str:
+def _resource_event_from_payload(payload: dict, path_id: int = 0, node_id: int = 0) -> dict:
     resource_type = payload.get("resource_type") or payload.get("file_type") or "document"
     resource_id = payload.get("resource_id") or payload.get("file_id")
     data = {
@@ -2136,10 +2215,10 @@ def _resource_payload_sse(payload: dict, path_id: int = 0, node_id: int = 0) -> 
     for key in ("file_url", "url", "preview_url", "presentation_id", "content"):
         if payload.get(key):
             data[key] = payload[key]
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+    return data
 
 
-def _resource_sse(record, presentation_id: int = 0, path_id: int = 0, node_id: int = 0) -> str:
+def _resource_event_from_record(record, presentation_id: int = 0, path_id: int = 0, node_id: int = 0) -> dict:
     """单个资源的 SSE 事件"""
     data = {
         "type": "resource",
@@ -2159,13 +2238,12 @@ def _resource_sse(record, presentation_id: int = 0, path_id: int = 0, node_id: i
         data["preview_url"] = record.file_url
     if presentation_id:
         data["presentation_id"] = presentation_id
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+    return data
 
 
-def _sse_done(all_ids: list[int], path_id: int = 0, node_id: int = 0) -> str:
+def _done_event(all_ids: list[int], path_id: int = 0, node_id: int = 0) -> dict:
     """生成完成的 SSE 事件"""
-    data = {"type": "done", "source": "learning_path", "path_id": path_id, "node_id": node_id, "resource_ids": all_ids}
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+    return {"type": "done", "source": "learning_path", "path_id": path_id, "node_id": node_id, "resource_ids": all_ids}
 
 
 def _ppt_to_slides(content: str) -> list[dict]:
