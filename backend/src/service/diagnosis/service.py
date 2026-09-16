@@ -1,5 +1,6 @@
 """首次使用能力诊断：逐题生成、判分并同步知识点掌握度。"""
 
+import asyncio
 import json
 import logging
 import re
