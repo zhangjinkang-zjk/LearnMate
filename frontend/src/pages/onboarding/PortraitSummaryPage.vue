@@ -13,16 +13,30 @@
     <section class="summary-shell" aria-labelledby="summary-title">
       <p class="summary-kicker">LEARNMATE 画像</p>
       <h1 id="summary-title">这是我对你的了解</h1>
-      <p class="summary-intro">我已经把刚才的对话整理成了一份画像，请确认内容是否准确。</p>
+      <p class="summary-intro">{{ introText }}</p>
 
-      <div class="summary-output" aria-live="polite">
+      <div v-if="analysisMissing" class="summary-notice" role="alert">
+        <span>下面是你访谈里说过的原话，可以直接确认，也可以重新分析一次。</span>
+        <button class="summary-retry" type="button" :disabled="isReanalyzing" @click="reanalyze">
+          {{ isReanalyzing ? '正在重新分析…' : '重新分析' }}
+        </button>
+      </div>
+      <p v-if="reanalyzeError" class="summary-error" role="alert">{{ reanalyzeError }}</p>
+
+      <div class="summary-output" aria-live="polite" @click="finishStreaming">
         <span>{{ streamedText }}</span><span v-if="!isComplete" class="summary-caret" aria-hidden="true"></span>
       </div>
 
       <div class="summary-actions">
+<<<<<<< Updated upstream
         <button class="summary-edit" type="button" @click="router.push('/learnmate-chat')">修改回答</button>
         <button class="summary-confirm" type="button" :disabled="!isComplete || isPreparing" @click="confirmProfile">
           <span>{{ isPreparing ? '生成学习概览…' : '确认画像' }}</span>
+=======
+        <button class="summary-edit" type="button" @click="router.push('/learnmate-chat')">重新访谈</button>
+        <button class="summary-confirm" type="button" :disabled="!isComplete" @click="confirmProfile">
+          <span>确认画像</span>
+>>>>>>> Stashed changes
           <span aria-hidden="true">↗</span>
         </button>
       </div>
@@ -36,13 +50,25 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { learningState, persistLearningProfile } from '@/entities/learning/learningState'
+<<<<<<< Updated upstream
 import { learningApi } from '@/shared/api/learningApi'
+=======
+import { initPortraitFromDialogue } from '@/shared/api/portraitApi'
+
+// 每次 tick 出 2 个字，约 22ms 一轮 —— 十几秒的等待压到 3 秒左右。
+const STREAM_INTERVAL_MS = 22
+>>>>>>> Stashed changes
 
 const router = useRouter()
 const streamedText = ref('')
 const isComplete = ref(false)
+<<<<<<< Updated upstream
 const isPreparing = ref(false)
 const generationError = ref('')
+=======
+const isReanalyzing = ref(false)
+const reanalyzeError = ref('')
+>>>>>>> Stashed changes
 let streamTimer
 
 const readDialogue = () => {
@@ -67,51 +93,69 @@ const readPortraitSummary = () => {
   }
 }
 
-const portraitSummary = readPortraitSummary()
-const aiSummary = String(portraitSummary.profile_summary || '').trim()
-const cognition = String(portraitSummary.cognition || '').trim()
-const learningGoal = String(portraitSummary.learning_goal || '').trim()
-const traits = portraitSummary.traits && typeof portraitSummary.traits === 'object' ? portraitSummary.traits : {}
-const onboarding = traits.onboarding && typeof traits.onboarding === 'object' ? traits.onboarding : {}
+// 分析结果要能重来，所以做成 ref 而不是一次性的常量。
+const portraitSummary = ref(readPortraitSummary())
+const unwrap = response => response?.data?.data ?? response?.data ?? response
+
+const aiSummary = computed(() => String(portraitSummary.value.profile_summary || '').trim())
+// 后端 prompt 要求 profile_summary 为 60~140 字。缺失就说明这次分析没成功，
+// 必须显式说出来：否则页面会静默回退成原始回答，看着却像一份正经画像。
+const analysisMissing = computed(() => !aiSummary.value)
+const introText = computed(() => analysisMissing.value
+  ? '画像分析这次没有完成，以下是你在访谈中的原始回答。'
+  : '我已经把刚才的对话整理成了一份画像，请确认内容是否准确。')
+const cognition = computed(() => String(portraitSummary.value.cognition || '').trim())
+const learningGoal = computed(() => String(portraitSummary.value.learning_goal || '').trim())
+const traits = computed(() =>
+  portraitSummary.value.traits && typeof portraitSummary.value.traits === 'object' ? portraitSummary.value.traits : {}
+)
+const onboarding = computed(() =>
+  traits.value.onboarding && typeof traits.value.onboarding === 'object' ? traits.value.onboarding : {}
+)
 const traitText = key => {
-  const value = traits[key]
+  const value = traits.value[key]
   if (!value) return ''
   if (typeof value === 'string') return value
   return String(value.value || value.text || '').trim()
 }
-const direction = String(onboarding.direction || cognition || answerAt(0)).trim()
-const goal = String(onboarding.goal || learningGoal || answerAt(1)).trim()
+const direction = computed(() => String(onboarding.value.direction || cognition.value || answerAt(0)).trim())
+const goal = computed(() => String(onboarding.value.goal || learningGoal.value || answerAt(1)).trim())
 
 const fullSummary = computed(() => [
-  aiSummary || '根据刚才的对话，我整理出了这份画像：',
+  aiSummary.value || '画像分析没有完成，以下是你在访谈中的原始回答：',
   '',
   `身份：${identity}`,
-  `学习方向：${direction}`,
-  `学习目标：${goal}`,
+  `学习方向：${direction.value}`,
+  `学习目标：${goal.value}`,
   `当前基础：${traitText('knowbase') || answerAt(2)}`,
-  `每周可投入时间：${answerAt(3)}`,
-  `学习偏好：${traitText('learning_pace') || answerAt(4)}`,
+  // 第 4、5 问按后端访谈 prompt 依次是「技能缺口」和「练习条件」。原来标成
+  // 「每周可投入时间」「学习偏好」，一旦走兜底就会把答案挂到完全对不上的标签下。
+  `当前卡点：${traitText('commomis') || answerAt(3)}`,
+  `练习安排：${traitText('learning_pace') || answerAt(4)}`,
   '',
   '以上内容准确吗？确认后，我会为你开始学习。'
 ].join('\n'))
 
 const startStreaming = () => {
+  // 重新分析会再调一次，先撤掉上一轮的计时器，否则两路打字机会互相打架。
+  if (streamTimer) window.clearTimeout(streamTimer)
   let cursor = 0
   streamedText.value = ''
   isComplete.value = false
   const tick = () => {
-    const nextCursor = Math.min(cursor + 1, fullSummary.value.length)
+    const nextCursor = Math.min(cursor + 2, fullSummary.value.length)
     streamedText.value = fullSummary.value.slice(0, nextCursor)
     cursor = nextCursor
     if (cursor >= fullSummary.value.length) {
       isComplete.value = true
       return
     }
-    streamTimer = window.setTimeout(tick, 40)
+    streamTimer = window.setTimeout(tick, STREAM_INTERVAL_MS)
   }
   tick()
 }
 
+<<<<<<< Updated upstream
 const unwrap = response => response?.data?.data ?? response?.data ?? response
 const hasOverviewContent = overview => Boolean(
   overview?.path?.id ||
@@ -122,12 +166,52 @@ const confirmProfile = async () => {
   if (!isComplete.value || isPreparing.value) return
   isPreparing.value = true
   generationError.value = ''
+=======
+// 确认画像在打完之前是 disabled 的，整段约十几秒会让用户干等。点一下直接看全文，
+// 保留了「先读再确认」的意图，但不强制等动画。
+const finishStreaming = () => {
+  if (isComplete.value) return
+  if (streamTimer) window.clearTimeout(streamTimer)
+  streamedText.value = fullSummary.value
+  isComplete.value = true
+}
+
+// 分析失败时让用户能重来一次，而不是只能带着一份原始回答往下走。访谈内容还在
+// sessionStorage 里，所以重试不用重新问 5 遍。
+const reanalyze = async () => {
+  if (isReanalyzing.value) return
+  isReanalyzing.value = true
+  reanalyzeError.value = ''
+  try {
+    const data = unwrap(await initPortraitFromDialogue({
+      dialogue,
+      identity,
+      direction: direction.value,
+      goal: goal.value,
+    }))
+    if (!data || typeof data !== 'object' || !String(data.profile_summary || '').trim()) {
+      throw new Error('这次仍然没有分析出画像，请稍后再试。')
+    }
+    portraitSummary.value = data
+    sessionStorage.setItem('learnmate_portrait_summary', JSON.stringify(data))
+    startStreaming()
+  } catch (error) {
+    reanalyzeError.value = error?.response?.data?.detail || error?.message || '重新分析失败，请稍后重试。'
+  } finally {
+    isReanalyzing.value = false
+  }
+}
+
+const confirmProfile = () => {
+  if (!isComplete.value) return
+>>>>>>> Stashed changes
 
   learningState.identity = identity
-  learningState.direction = direction
-  learningState.goal = goal
+  learningState.direction = direction.value
+  learningState.goal = goal.value
   persistLearningProfile()
 
+<<<<<<< Updated upstream
   try {
     const response = await learningApi.generatePathsFromDirection(direction, goal)
     const generated = unwrap(response)
@@ -150,6 +234,18 @@ const confirmProfile = async () => {
   } finally {
     isPreparing.value = false
   }
+=======
+  localStorage.setItem('learnmate_onboarding_complete', '1')
+  const profile = { identity, direction: direction.value, goal: goal.value, dialogue }
+  sessionStorage.removeItem('learnmate_portrait_dialogue')
+  sessionStorage.removeItem('learnmate_portrait_summary')
+  window.dispatchEvent(new CustomEvent('learnmate:learning-profile-ready', { detail: profile }))
+  // 这一步只交接，不生成。学习路径由能力诊断答完后生成（后端
+  // _generate_paths_after_diagnosis），在这里先生成会让资源在诊断之前就开始产出。
+  // 标记留到诊断答完才清除，中途关掉标签页的用户下次进来仍会被送回诊断。
+  localStorage.setItem('learnmate_diagnosis_pending', '1')
+  router.push('/onboarding/diagnosis')
+>>>>>>> Stashed changes
 }
 
 onMounted(startStreaming)
@@ -273,6 +369,7 @@ onBeforeUnmount(() => {
   white-space: pre-line;
   box-shadow: 0 22px 48px rgba(2, 15, 10, 0.28), inset 0 1px 0 rgba(243, 240, 231, 0.08);
   backdrop-filter: blur(8px);
+  cursor: pointer;
 }
 
 .summary-caret {
@@ -302,6 +399,44 @@ onBeforeUnmount(() => {
 
 .summary-status { color: rgba(243, 240, 231, 0.72); }
 .summary-error { color: #ffb5a8; }
+
+.summary-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0 0;
+  padding: 14px 18px;
+  border: 1px solid rgba(255, 181, 168, 0.42);
+  border-radius: 14px;
+  background: rgba(255, 181, 168, 0.1);
+  color: #ffd9d0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.summary-retry {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 16px;
+  border: 1px solid rgba(255, 181, 168, 0.5);
+  border-radius: 999px;
+  background: transparent;
+  color: #ffd9d0;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+.summary-retry:hover:not(:disabled) {
+  background: rgba(255, 181, 168, 0.18);
+}
+
+.summary-retry:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
 
 .summary-edit,
 .summary-confirm {
