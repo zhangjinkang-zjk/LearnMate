@@ -1,9 +1,9 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 
-const rawBackendTarget = process.env.VITE_API_BASE_URL?.trim() || ''
+const rawBackendTarget = loadEnv(process.env.NODE_ENV || 'development', process.cwd(), '').VITE_API_BASE_URL?.trim() || ''
 const backendTarget = /^https?:\/\//i.test(rawBackendTarget)
   ? rawBackendTarget.replace(/\/+$/, '')
   : 'http://127.0.0.1:2221'
