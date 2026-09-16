@@ -21,13 +21,12 @@
 
       <div class="summary-actions">
         <button class="summary-edit" type="button" @click="router.push('/learnmate-chat')">修改回答</button>
-        <button class="summary-confirm" type="button" :disabled="!isComplete || isPreparing" @click="confirmProfile">
-          <span>{{ isPreparing ? '生成学习概览…' : '确认画像' }}</span>
+        <button class="summary-confirm" type="button" :disabled="!isComplete" @click="confirmProfile">
+          <span>确认画像</span>
           <span aria-hidden="true">↗</span>
         </button>
       </div>
-      <p v-if="isPreparing" class="summary-status">正在根据你的方向拆分科目并准备学习路径，完成后进入能力诊断。</p>
-      <p v-if="generationError" class="summary-error" role="alert">{{ generationError }}</p>
+      <p class="summary-status">确认后先做一次能力诊断，再根据诊断结果生成你的学习路径。</p>
     </section>
   </main>
 </template>
@@ -36,13 +35,10 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { learningState, persistLearningProfile } from '@/entities/learning/learningState'
-import { learningApi } from '@/shared/api/learningApi'
 
 const router = useRouter()
 const streamedText = ref('')
 const isComplete = ref(false)
-const isPreparing = ref(false)
-const generationError = ref('')
 let streamTimer
 
 const readDialogue = () => {
@@ -112,48 +108,24 @@ const startStreaming = () => {
   tick()
 }
 
-const unwrap = response => response?.data?.data ?? response?.data ?? response
-const hasOverviewContent = overview => Boolean(
-  overview?.path?.id ||
-  (Array.isArray(overview?.subjects) && overview.subjects.some(subject => subject?.id || subject?.name)),
-)
-
-const confirmProfile = async () => {
-  if (!isComplete.value || isPreparing.value) return
-  isPreparing.value = true
-  generationError.value = ''
+const confirmProfile = () => {
+  if (!isComplete.value) return
 
   learningState.identity = identity
   learningState.direction = direction
   learningState.goal = goal
   persistLearningProfile()
 
-  try {
-    const response = await learningApi.generatePathsFromDirection(direction, goal)
-    const generated = unwrap(response)
-    const paths = Array.isArray(generated?.paths) ? generated.paths : []
-    const readyPath = paths.find(path => path && path.path_id)
-    if (!readyPath) throw new Error('学习路径暂未生成成功，请稍后重试')
-
-    // 路径生成完成后再读取一次概览快照，确保进入页面时目标、科目和节点已经可用。
-    const overview = unwrap(await learningApi.getOverview())
-    if (!hasOverviewContent(overview)) throw new Error('学习概览暂未准备完成，请稍后重试')
-
-    localStorage.setItem('learnmate_onboarding_complete', '1')
-    const profile = { identity, direction, goal, dialogue }
-    sessionStorage.removeItem('learnmate_portrait_dialogue')
-    sessionStorage.removeItem('learnmate_portrait_summary')
-    window.dispatchEvent(new CustomEvent('learnmate:learning-profile-ready', { detail: profile }))
-    // 画像确认后先做能力诊断，再进学习概览。诊断结果页的「进入学习概览」是这一步的出口，
-    // 所以两条路都通；此前这里直接跳概览，导致 /onboarding/diagnosis 没有任何入口。
-    // 标记留到诊断答完才清除，中途关掉标签页的用户下次进来仍会被送回诊断。
-    localStorage.setItem('learnmate_diagnosis_pending', '1')
-    await router.push('/onboarding/diagnosis')
-  } catch (error) {
-    generationError.value = error?.response?.data?.detail || error?.message || '学习路径生成失败，请重试。'
-  } finally {
-    isPreparing.value = false
-  }
+  localStorage.setItem('learnmate_onboarding_complete', '1')
+  const profile = { identity, direction, goal, dialogue }
+  sessionStorage.removeItem('learnmate_portrait_dialogue')
+  sessionStorage.removeItem('learnmate_portrait_summary')
+  window.dispatchEvent(new CustomEvent('learnmate:learning-profile-ready', { detail: profile }))
+  // 这一步只交接，不生成。学习路径由能力诊断答完后生成（后端
+  // _generate_paths_after_diagnosis），在这里先生成会让资源在诊断之前就开始产出。
+  // 标记留到诊断答完才清除，中途关掉标签页的用户下次进来仍会被送回诊断。
+  localStorage.setItem('learnmate_diagnosis_pending', '1')
+  router.push('/onboarding/diagnosis')
 }
 
 onMounted(startStreaming)

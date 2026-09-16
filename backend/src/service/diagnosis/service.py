@@ -280,11 +280,14 @@ async def answer(user_id: int, session_id: str, question_id: int, answer_text: s
         user = await User.filter(id=user_id).first()
         picture = await user.picture if user else None
         onboarding = parse_traits(picture.traits if picture else None).get("onboarding") or {}
-        asyncio.create_task(_generate_paths_after_diagnosis(
+        # 诊断是路径生成的唯一触发点，必须等它跑完再返回：诊断结果页的出口直接进学习概览，
+        # 若改成后台任务，用户点到「进入学习概览」时路径可能还没建好，会看到空页面。
+        # 这里等下去是有意义的，前端由 _stream_diagnosis 的 keepalive 持续保活。
+        await _generate_paths_after_diagnosis(
             user_id,
             onboarding.get("direction", ""),
             onboarding.get("goal", ""),
-        ))
+        )
         return {"finished": True, "feedback": result, "result": {"session_id": session_id, "percentage": percentage, "correct_count": summary.get("correct_count", 0), "total_questions": len(records), "message": _result_message(percentage)}}
 
     user = await User.filter(id=user_id).first()
@@ -309,7 +312,7 @@ def _result_message(percentage: float | None) -> str:
 
 
 async def _generate_paths_after_diagnosis(user_id: int, direction: str, goal: str) -> None:
-    """诊断完成后立即拆解方向并创建科目路径，失败不阻塞诊断结果返回。"""
+    """答完诊断后拆解方向并创建科目路径。失败只记日志，不连累诊断结果返回。"""
     try:
         from backend.src.service.curriculum.service import sync_direction_subjects
         from backend.src.service.path.service import PathService

@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """Regression tests for finishing the onboarding ability diagnosis.
 
-``e1d895f4`` added ``asyncio.create_task(...)`` to the last-answer branch of
-``answer()`` without adding ``import asyncio``.  Every call that answered the
-final question therefore raised ``NameError``, so the diagnosis could never be
-completed: the stream reported "诊断服务暂时不可用" instead of ``finished``.
+``e1d895f4`` added an ``asyncio`` call to the last-answer branch of ``answer()``
+without adding ``import asyncio``.  Every call that answered the final question
+therefore raised ``NameError``, so the diagnosis could never be completed: the
+stream reported "诊断服务暂时不可用" instead of ``finished``.
 """
 
 import asyncio
@@ -110,12 +110,39 @@ async def test_answering_the_last_question_finishes_without_nameerror(monkeypatc
     )
 
     result = await diagnosis_service.answer(9, "sess-1", 1, "我的回答", None, max_steps=3)
-    await asyncio.sleep(0)   # 让 create_task 排出的任务真正跑一次
 
     assert result["finished"] is True
     assert result["result"]["percentage"] == 66.7
-    # 任务真的被排进去了 —— 这正是当初抛 NameError 的那一行。
+    # 路径生成必须在返回前跑完，否则用户点到「进入学习概览」时路径还没建好。
     assert scheduled == [(9, "数据分析", "就业")]
+
+
+@pytest.mark.asyncio
+async def test_path_generation_runs_through_asyncio_gather(monkeypatch):
+    """The real generator awaits ``asyncio.gather`` — the call that needs the import.
+
+    The finish-branch test above patches this function out, so on its own it would
+    still pass if ``import asyncio`` went missing again.  This one drives the real
+    body so the import stays load-bearing.
+    """
+    generated = []
+
+    async def fake_sync(user_id, direction, goal, limit):
+        return ["科目A", "科目B"]
+
+    async def fake_generate_path(subject, user_id, difficulty, node_count):
+        generated.append(subject)
+        return {"subject": subject}
+
+    import backend.src.service.curriculum.service as curriculum
+    import backend.src.service.path.service as path_service
+
+    monkeypatch.setattr(curriculum, "sync_direction_subjects", fake_sync)
+    monkeypatch.setattr(path_service.PathService, "generate_path", staticmethod(fake_generate_path))
+
+    await diagnosis_service._generate_paths_after_diagnosis(9, "数据分析", "就业")
+
+    assert generated == ["科目A", "科目B"]
 
 
 @pytest.mark.asyncio
