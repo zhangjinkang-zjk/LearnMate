@@ -104,7 +104,7 @@
 
       <template v-if="activeNode">
         <section class="test-entries" aria-label="基础测试入口">
-          <button class="entry-card" :class="{ 'is-active': activeTab === 'quiz' }" type="button" :disabled="!canStartTest" @click="activeTab = 'quiz'">
+          <button class="entry-card" type="button" :disabled="!canStartTest" @click="openQuiz">
             <span class="entry-icon"><SquareCheck :size="21" /></span>
             <span class="entry-copy"><strong>题目测试</strong><small>提交答案，记录正确率和错误知识点</small></span>
             <ArrowRight :size="18" />
@@ -115,31 +115,8 @@
             <ArrowRight :size="18" />
           </button>
         </section>
-        <div class="test-tabs" role="tablist" aria-label="基础测试方式">
-          <button type="button" role="tab" :aria-selected="activeTab === 'quiz'" :class="{ 'is-active': activeTab === 'quiz' }" @click="activeTab = 'quiz'">
-            <SquareCheck :size="16" /> 题目测试
-            <small>检查关键概念和应用判断</small>
-          </button>
-          <button type="button" role="tab" :aria-selected="activeTab === 'feynman'" :class="{ 'is-active': activeTab === 'feynman' }" @click="activeTab = 'feynman'">
-            <MessageCircle :size="16" /> 费曼反讲
-            <small>用自己的话讲清楚知识关系</small>
-          </button>
-        </div>
-
-        <ChapterCheck
-          v-if="canStartTest && activeTab === 'quiz'"
-          :key="`quiz-${activeNode.id}`"
-          :path-id="learningPath.path_id"
-          :node-id="activeNode.id"
-          :session-id="activeNode.session_id || nodeDetail?.quiz_session_id || ''"
-          :chapter-title="activeNode.title"
-          :quiz-config="nodeDetail?.quiz_config || {}"
-          @close="leaveTest"
-          @passed="handlePassed"
-          @submitted="handleSubmitted"
-        />
         <FeynmanCoach
-          v-else-if="canStartTest && activeTab === 'feynman'"
+          v-if="canStartTest && activeTab === 'feynman'"
           :key="`feynman-${activeNode.id}`"
           :path-id="learningPath.path_id"
           :node-id="activeNode.id"
@@ -161,7 +138,6 @@
 import { computed, onMounted, ref } from 'vue'
 import { ArrowRight, BookOpenText, CircleAlert, LoaderCircle, MessageCircle, Route, SquareCheck } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
-import ChapterCheck from '@/features/fundamentals/ChapterCheck.vue'
 import FeynmanCoach from '@/features/fundamentals/FeynmanCoach.vue'
 import PageTitle from '@/shared/ui/PageTitle.vue'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
@@ -329,13 +305,9 @@ function leaveTest() {
   router.push({ path: '/learning/fundamentals', query: { pathId: learningPath.value?.path_id, node: activeNode.value?.id } })
 }
 
-function handleSubmitted(result) {
-  latestResult.value = result
-  refreshInsights()
-}
-
-function handlePassed() {
-  notice.value = '题目测试已通过。你可以继续做一次费曼反讲，确认自己能够独立讲清楚。'
+function openQuiz() {
+  if (!learningPath.value || !activeNode.value || !canStartTest.value) return
+  router.push({ name: 'foundationQuiz', query: { pathId: learningPath.value.path_id, node: activeNode.value.id } })
 }
 
 onMounted(loadPage)

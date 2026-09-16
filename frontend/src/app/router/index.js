@@ -9,6 +9,7 @@ import DiagnosisResultPage from '@/pages/onboarding/DiagnosisResultPage.vue'
 import OverviewPage from '@/pages/learning/OverviewPage.vue'
 import FundamentalsPage from '@/pages/learning/FundamentalsPage.vue'
 import FoundationTestPage from '@/pages/learning/FoundationTestPage.vue'
+import FoundationQuizPage from '@/pages/learning/FoundationQuizPage.vue'
 import AdvancedLearningPage from '@/pages/learning/AdvancedLearningPage.vue'
 import ResourceLibraryPage from '@/pages/resources/ResourceLibraryPage.vue'
 import SettingsPage from '@/pages/settings/SettingsPage.vue'
@@ -37,6 +38,7 @@ const router = createRouter({
       meta: { requiresAuth: true, contentLayout: 'workspace' },
     },
     { path: '/learning/foundation-test', name: 'foundationTest', component: FoundationTestPage, meta: { requiresAuth: true } },
+    { path: '/learning/foundation-test/quiz', name: 'foundationQuiz', component: FoundationQuizPage, meta: { requiresAuth: true, contentLayout: 'workspace' } },
     { path: '/learning/advanced', name: 'advancedLearning', component: AdvancedLearningPage, meta: { requiresAuth: true } },
     { path: '/learning/consolidation', redirect: (to) => ({ path: '/learning/advanced', query: to.query }) },
     { path: '/learning/navigation', name: 'learningNavigation', redirect: '/learning/overview' },

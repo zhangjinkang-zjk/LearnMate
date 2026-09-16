@@ -1205,7 +1205,7 @@ onBeforeUnmount(() => {
 .path-progress > div:first-child { display: flex; align-items: baseline; justify-content: space-between; color: var(--muted); font-size: 10px; }
 .path-progress strong { color: var(--accent-deep); font-size: 18px; }
 .path-progress small { color: var(--muted); font-size: 10px; text-align: right; }
-.learning-layout { display: grid; min-height: 0; grid-template-columns: 52px minmax(0, 1fr) minmax(280px, 310px); align-items: stretch; gap: 14px; overflow: hidden; }
+.learning-layout { --workspace-panel-height: min(760px, calc(100dvh - 190px)); display: grid; min-height: 0; height: var(--workspace-panel-height); grid-template-columns: 52px minmax(0, 1fr) minmax(280px, 310px); align-items: stretch; gap: 14px; overflow: hidden; }
 .path-switch-error { display: flex; min-height: 42px; align-items: center; gap: 9px; margin: 0 0 12px; padding: 9px 12px; border: 1px solid #ead6c8; border-radius: 6px; background: #fff9f4; color: #965536; font-size: 11px; }
 .path-switch-error > span { min-width: 0; flex: 1; }
 .path-switch-error .button { min-height: 28px; padding: 0 9px; font-size: 10px; }
@@ -1219,7 +1219,7 @@ onBeforeUnmount(() => {
 .workspace-rail__divider { width: 28px; height: 1px; margin: 3px auto; background: var(--line); }
 .lesson-main { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto; gap: 12px; overflow: hidden; }
 .lesson-main > .lesson-document, .lesson-main > .document-loading, .lesson-main > .ppt-editor-frame, .lesson-main > .mindmap-preview, .lesson-main > .chapter-check { min-height: 0; height: 100%; overflow: auto; }
-.learning-layout :deep(.learning-assistant) { min-height: 0; height: 100%; max-height: none; }
+.learning-layout :deep(.learning-assistant) { position: static; min-height: 0; height: 100%; max-height: none; }
 .resource-toolbar { display: flex; min-height: 34px; align-items: center; gap: 10px; }
 .resource-tabs { display: flex; align-items: center; gap: 4px; }
 .resource-tabs button { display: inline-flex; min-height: 34px; align-items: center; gap: 7px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 11px; }
@@ -1279,7 +1279,7 @@ onBeforeUnmount(() => {
   .lesson-context { align-items: stretch; flex-direction: column; gap: 16px; }
   .path-progress { flex-basis: auto; width: min(360px, 100%); }
   .path-progress small { text-align: left; }
-  .learning-layout { grid-template-columns: 1fr; overflow: auto; }
+  .learning-layout { height: auto; grid-template-columns: 1fr; overflow: auto; }
   .learning-layout > :last-child { display: none; }
   .workspace-rail { position: static; display: flex; gap: 7px; padding: 0 0 10px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
   .workspace-rail button { display: flex; width: auto; min-width: 72px; min-height: 38px; gap: 6px; padding: 0 10px; }
