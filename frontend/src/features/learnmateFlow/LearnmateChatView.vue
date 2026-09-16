@@ -12,25 +12,27 @@
     </router-link>
 
     <section class="conversation-shell" aria-label="LearnMate conversation">
-      <div ref="conversationList" class="conversation-list" role="log" aria-live="polite">
-        <div v-for="(message, index) in messages" :key="`${message.role}-${index}`" class="chat-message" :class="`chat-message--${message.role}`">
-          {{ message.text }}
+      <div class="conversation-track">
+        <div ref="conversationList" class="conversation-list" role="log" aria-live="polite">
+          <div v-for="(message, index) in messages" :key="`${message.role}-${index}`" class="chat-message" :class="`chat-message--${message.role}`">
+            {{ message.text }}
+          </div>
+          <div v-if="isLoading" class="chat-message chat-message--assistant chat-message--typing">...</div>
         </div>
-        <div v-if="isLoading" class="chat-message chat-message--assistant chat-message--typing">...</div>
-      </div>
 
-      <form class="conversation-input" @submit.prevent="sendMessage">
-        <input
-          v-model="messageDraft"
-          type="text"
-          autocomplete="off"
-          :placeholder="step < PORTRAIT_MAX_STEPS ? 'Reply to LearnMate...' : 'Type start to enter your path...'"
-          aria-label="Message LearnMate"
-        />
-        <button type="submit" :disabled="!messageDraft.trim() || isLoading || isSaving" aria-label="Send message">
-          <span aria-hidden="true">↗</span>
-        </button>
-      </form>
+        <form class="conversation-input" @submit.prevent="sendMessage">
+          <input
+            v-model="messageDraft"
+            type="text"
+            autocomplete="off"
+            :placeholder="step < PORTRAIT_MAX_STEPS ? 'Reply to LearnMate...' : 'Type start to enter your path...'"
+            aria-label="Message LearnMate"
+          />
+          <button type="submit" :disabled="!messageDraft.trim() || isLoading || isSaving" aria-label="Send message">
+            <span aria-hidden="true">↗</span>
+          </button>
+        </form>
+      </div>
     </section>
   </main>
 </template>
@@ -275,13 +277,20 @@ onMounted(() => {
   pointer-events: none;
 }
 
+.conversation-track {
+  position: absolute;
+  inset-block: 0;
+  left: clamp(200px, 22vw, 460px);
+  width: min(900px, 68vw);
+}
+
 .conversation-list {
   position: absolute;
   top: clamp(150px, 24vh, 260px);
-  left: clamp(120px, 20vw, 380px);
+  left: 0;
   display: grid;
   gap: 22px;
-  width: min(850px, 68vw);
+  width: 100%;
   max-height: 58vh;
   overflow-y: auto;
   padding: 2px clamp(32px, 5vw, 72px) 18px 0;
@@ -314,8 +323,9 @@ onMounted(() => {
   left: 50%;
   display: flex;
   align-items: center;
-  width: min(660px, calc(100% - 40px));
+  width: min(660px, 100%);
   padding: 7px 8px 7px 20px;
+  box-sizing: border-box;
   border: 1px solid rgba(226, 244, 82, 0.48);
   border-radius: 999px;
   background: rgba(7, 26, 19, 0.84);
@@ -592,15 +602,17 @@ onMounted(() => {
 
   .conversation-list {
     top: 23%;
-    left: 18px;
-    width: calc(100% - 36px);
     max-height: 52vh;
     gap: 18px;
   }
 
+  .conversation-track {
+    left: 18px;
+    width: calc(100% - 36px);
+  }
+
   .conversation-input {
     bottom: 20px;
-    width: calc(100% - 36px);
     padding-left: 15px;
   }
 

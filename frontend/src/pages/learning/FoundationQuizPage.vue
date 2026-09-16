@@ -1,8 +1,12 @@
 <template>
   <div class="foundation-quiz-page">
-    <PageTitle eyebrow="CHAPTER QUIZ" title="题目测试" description="完成本章检查题，结果会同步到学习概览和基础测试。">
+    <PageTitle :eyebrow="''" title="题目测试">
       <template #actions>
-        <RouterLink class="button button--quiet" :to="backToTest">返回基础测试</RouterLink>
+        <div v-if="activeNode" class="quiz-page__chapter-meta">
+          <span>{{ chapterPosition }}</span>
+          <strong>{{ activeNode.title }}</strong>
+        </div>
+        <RouterLink class="quiz-page__back" :to="backToTest" title="返回学习复盘" aria-label="返回学习复盘"><ArrowLeft :size="18" /></RouterLink>
       </template>
     </PageTitle>
 
@@ -24,10 +28,6 @@
     </section>
 
     <template v-else>
-      <section class="quiz-context surface">
-        <div><p class="eyebrow">CURRENT CHAPTER</p><h2>{{ activeNode.title }}</h2><p>{{ activeNode.summary || '围绕本章关键概念与应用判断完成检查。' }}</p></div>
-        <span>{{ chapterPosition }}</span>
-      </section>
       <ChapterCheck
         :key="`quiz-${learningPath.path_id}-${activeNode.id}`"
         :path-id="learningPath.path_id"
@@ -44,7 +44,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { BookOpenText, CircleAlert, LoaderCircle } from 'lucide-vue-next'
+import { ArrowLeft, BookOpenText, CircleAlert, LoaderCircle } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 import ChapterCheck from '@/features/fundamentals/ChapterCheck.vue'
 import PageTitle from '@/shared/ui/PageTitle.vue'
@@ -95,10 +95,14 @@ onMounted(loadQuizPage)
 </script>
 
 <style scoped>
-.foundation-quiz-page { display: grid; min-width: 0; min-height: 0; gap: 14px; }
-.foundation-quiz-page :deep(.page-heading) { margin-bottom: 4px; }.foundation-quiz-page :deep(.page-heading h1) { font-size: 28px; }
+.foundation-quiz-page { display: grid; min-width: 0; min-height: 0; height: 100%; grid-template-rows: auto minmax(0, 1fr); gap: 10px; overflow: hidden; }
+.foundation-quiz-page :deep(.page-heading) { min-height: 42px; margin-bottom: 0; }.foundation-quiz-page :deep(.page-heading h1) { font-size: 26px; }
+.quiz-page__chapter-meta { display: flex; min-width: 0; max-width: min(720px, 56vw); align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }.quiz-page__chapter-meta span { flex: 0 0 auto; color: var(--accent-deep); font-weight: 800; }.quiz-page__chapter-meta strong { overflow: hidden; color: var(--ink); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }.quiz-page__back { display: grid; width: 36px; height: 36px; flex: 0 0 36px; place-items: center; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); color: var(--ink); }.quiz-page__back:hover { background: var(--soft); color: var(--accent-deep); }.quiz-page__back:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
 .quiz-state { display: flex; min-height: 128px; align-items: center; gap: 14px; padding: 22px; color: var(--accent-deep); }.quiz-state > div { min-width: 0; flex: 1; }.quiz-state strong { color: var(--ink); }.quiz-state p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }.quiz-state--error { color: #a66442; }
-.quiz-context { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 20px; padding: 16px 20px; background: #fbfcfa; }.quiz-context .eyebrow { margin-bottom: 5px; }.quiz-context h2 { margin: 0; font-size: 18px; }.quiz-context p:last-child { max-width: 760px; margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }.quiz-context > span { flex: 0 0 auto; color: var(--accent-deep); font-size: 11px; font-weight: 800; }
+.foundation-quiz-page :deep(.chapter-check) { width: 100%; min-height: 0; height: 100%; }
 .spin { animation: spin .8s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
-@media (max-width: 680px) { .quiz-context { align-items: flex-start; flex-direction: column; gap: 8px; }.quiz-state { align-items: flex-start; flex-wrap: wrap; padding: 18px; }.quiz-state .button { width: 100%; } }
+:global(.page-container:has(.foundation-quiz-page)) { width: 100%; max-width: none; height: 100%; box-sizing: border-box; margin: 0; padding: 12px 28px 18px; overflow: hidden; background: #f7f7f7; }
+:global(.app-content:has(.foundation-quiz-page)) { background: #f7f7f7; }
+:global(.app-content:has(.foundation-quiz-page) .app-header) { border-bottom-color: #e8e8e8; background: #f7f7f7; }
+@media (max-width: 680px) { :global(.page-container:has(.foundation-quiz-page)) { padding: 10px 14px 14px; }.foundation-quiz-page :deep(.page-heading h1) { font-size: 23px; }.quiz-page__chapter-meta { max-width: calc(100vw - 148px); gap: 6px; font-size: 10px; }.quiz-page__chapter-meta strong { font-size: 11px; }.quiz-state { align-items: flex-start; flex-wrap: wrap; padding: 18px; }.quiz-state .button { width: 100%; } }
 </style>
