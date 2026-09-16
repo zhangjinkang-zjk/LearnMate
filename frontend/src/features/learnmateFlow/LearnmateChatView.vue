@@ -17,7 +17,6 @@
           <div v-for="(message, index) in messages" :key="`${message.role}-${index}`" class="chat-message" :class="`chat-message--${message.role}`">
             {{ message.text }}
           </div>
-          <div v-if="isLoading" class="chat-message chat-message--assistant chat-message--typing">...</div>
         </div>
 
         <form class="conversation-input" @submit.prevent="sendMessage">
@@ -26,10 +25,9 @@
             type="text"
             autocomplete="off"
             :placeholder="inputPlaceholder"
-            :disabled="isLoading"
             aria-label="Message LearnMate"
           />
-          <button type="submit" :disabled="!messageDraft.trim() || isLoading" aria-label="Send message">
+          <button type="submit" :disabled="!messageDraft.trim()" aria-label="Send message">
             <span aria-hidden="true">↗</span>
           </button>
         </form>
@@ -42,6 +40,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { getNextPortraitInterviewQuestion } from '../../shared/api/portraitApi'
+import { learningState, persistLearningProfile } from '@/entities/learning/learningState'
 
 const router = useRouter()
 const PORTRAIT_MAX_STEPS = 5
@@ -49,7 +48,8 @@ const step = ref(0)
 const messageDraft = ref('')
 const portraitQuestions = ref([])
 const portraitAnswers = ref([])
-const isLoading = ref(false)
+// 没有 isLoading：下一问不再等网络（本地兜底题立刻显示，模型版本在后台替换），
+// 用户答完就能接着答，输入框和气泡都没有需要禁用的等待窗口。
 const isSaving = ref(false)
 const messages = ref([])
 const conversationList = ref(null)
@@ -73,7 +73,7 @@ const scrollToLatest = async () => {
 }
 
 watch(
-  () => [messages.value.length, isLoading.value, isSaving.value],
+  () => [messages.value.length, isSaving.value],
   () => void scrollToLatest(),
   { flush: 'post' },
 )
@@ -108,21 +108,67 @@ const fallbackQuestionVariants = [
   ]
 ]
 
+// 第 1 题答成这些时，"答案"里没有可用的方向。模板里的「如果把「{first}」做好了」
+// 会把它原样嵌进去，于是"这句回答没有信息量"被后面几问各复读一遍 —— 这是"五个
+// 问题过于生硬"的主要来源（第 1 问本身就允许回答"还没想好"）。
+// 这份表要和后端 _NON_DIRECTION_ANSWERS 保持一致。
+const NON_DIRECTION_ANSWERS = new Set([
+  '无', '没有', '暂无', '不知道', '还不知道', '不知道学什么', '不清楚', '不确定',
+  '不明白', '随便', '都行', '都可以', '什么都行', '还没想好', '没想好',
+  '嗯', '哦', '好的', '好', '是', '否', 'test', '测试',
+  '1', '2', '3', '4', '5', '0', '。', '？', '?', '.', '无。', '不知道。', '还没想好。',
+])
+
+const usableDirection = () => {
+  const answer = String(portraitAnswers.value[0] || '').replace(/\s+/g, ' ').trim()
+  if (!answer || NON_DIRECTION_ANSWERS.has(answer.toLowerCase())) return ''
+  // 单个数字或符号（"1"、"？"）不是方向；单个汉字或字母（"学"、"a"）可能是。
+  if (answer.length < 2 && !/^[a-zA-Z一-龥]$/.test(answer)) return ''
+  return answer.slice(0, 24)
+}
+
+// 拿不到可用的方向时改问这些：不引用用户的回答，也就不会把一句无意义的话放大。
+// 与后端 _GENERIC_QUESTION_VARIANTS 对应。
+const genericQuestionVariants = [
+  [],
+  [
+    '你希望把想学的这件事用在什么地方？可以是课程作业、实习任务、竞赛项目，或者工作里的某件事。',
+    '你打算先拿它做成点什么？说一个你希望看到的结果就够了。'
+  ],
+  [
+    '你以前试过这个方向吗？可以从最近一次尝试说起，照着教程做一遍也算。',
+    '现在把这个方向交给你，你能先自己做完哪一步？说个具体动作就好。'
+  ],
+  [
+    '做这件事的时候，哪个动作最容易让你停住或者返工？比如拆需求、选方案、调试、检查结果。',
+    '从开始到交付，中间哪一段你最没把握？比如判断方向、动手实现，或者确认效果。'
+  ],
+  []
+]
+
 const fallbackQuestionForStep = currentStep => {
-  const first = (portraitAnswers.value[0] || '这件事').trim().slice(0, 24)
+  const first = usableDirection()
   const seedText = portraitAnswers.value.slice(0, currentStep).join('')
   const seed = [...seedText].reduce((sum, char) => sum + char.charCodeAt(0), 0)
-  const variants = fallbackQuestionVariants[Math.min(currentStep, fallbackQuestionVariants.length - 1)]
+  const index = Math.min(currentStep, fallbackQuestionVariants.length - 1)
+  const variants = first
+    ? fallbackQuestionVariants[index]
+    : (genericQuestionVariants[index]?.length ? genericQuestionVariants[index] : fallbackQuestionVariants[index])
   const selected = variants[(seed + currentStep) % variants.length]
   return typeof selected === 'function' ? selected(first) : selected
 }
 
 const INTERVIEW_KEY = 'learnmate_portrait_dialogue'
 
-const buildDialogue = () => portraitQuestions.value.map((question, index) => ({
-  question,
-  answer: portraitAnswers.value[index] || ''
-})).filter(turn => turn.question || turn.answer)
+// upTo 用来在请求下一问时只送"已经答完"的轮次：当前这一问刚显示出来、还没作答，
+// 一起送过去会让模型以为用户看过它却答不出来。
+const buildDialogue = (upTo = portraitQuestions.value.length) => portraitQuestions.value
+  .slice(0, upTo)
+  .map((question, index) => ({
+    question,
+    answer: portraitAnswers.value[index] || ''
+  }))
+  .filter(turn => turn.question || turn.answer)
 
 // 每答一轮就落一次盘。原先只在答完第 5 题那一刻才写 sessionStorage，
 // 于是中途刷新或切走会把前面几轮回答全部丢掉，回来只能从第 0 题重来。
@@ -160,31 +206,59 @@ const restoreInterview = () => {
 
 const getResponseData = result => result?.data?.data ?? result?.data ?? result
 
-const askNextQuestion = async () => {
-  if (step.value >= PORTRAIT_MAX_STEPS || isLoading.value) return
-  isLoading.value = true
+// 题面先由本地兜底表立刻给出，不等模型：这一问实测要 ~50 秒（提示词 1662 字、
+// 输出只有一行 JSON，慢在模型本身），让访谈卡在 "..." 上一分钟比模板题更难看。
+// 模型那一版如果赶在用户动笔之前回来，再由 upgradeQuestion 替换掉屏幕上的题面。
+const askNextQuestion = () => {
+  if (step.value >= PORTRAIT_MAX_STEPS) return
   const currentStep = step.value
-  let question = fallbackQuestionForStep(currentStep)
+  const question = fallbackQuestionForStep(currentStep)
+  portraitQuestions.value[currentStep] = question
+  messages.value.push({ role: 'assistant', text: question })
+  persistInterview()
+  void upgradeQuestion(currentStep, question)
+}
+
+const upgradeQuestion = async (currentStep, shown) => {
   try {
     const result = await getNextPortraitInterviewQuestion({
-      dialogue: buildDialogue(),
+      dialogue: buildDialogue(currentStep),
       step: currentStep,
       max_steps: PORTRAIT_MAX_STEPS
     })
     const data = getResponseData(result)
-    question = String(data?.question || question).trim()
+    const question = String(data?.question || '').trim()
+    // 只认模型写的那一版：后端拿不到模型时也会回一句兜底题，直接替换等于把一句
+    // 模板换成另一句模板，题面会在用户眼皮底下改样。
+    if (data?.source !== 'agent' || !question || question === shown) return
+    // 用户已经动笔、或者这一轮已经答完：不再改题面。
+    if (step.value !== currentStep || messageDraft.value.trim()) return
+    const index = messages.value.findIndex(message => message.role === 'assistant' && message.text === shown)
+    if (index < 0) return
+    messages.value[index] = { role: 'assistant', text: question }
+    portraitQuestions.value[currentStep] = question
+    persistInterview()
   } catch (error) {
-    console.warn('[LearnMate] portrait question unavailable, using fallback:', error)
+    // 拿不到就用手上这句兜底题，访谈本身不中断。
+    console.warn('[LearnMate] portrait question unavailable, keeping the local question:', error)
   }
-  portraitQuestions.value[currentStep] = question
-  messages.value.push({ role: 'assistant', text: question })
-  isLoading.value = false
-  persistInterview()
+}
+
+// 方向/目标现在由访谈问出来（DirectionSetupPage 那一步只强制身份，方向和目标允许
+// 留空并注明"交给访谈补齐"），必须在跳诊断页之前落盘：诊断的 /learning/diagnosis/start
+// 要求两者非空，否则就是一个必然 422 的请求。
+// 第 1 问固定问方向、第 2 问固定问用途 —— prompts/portrait/interview_next.yaml 把
+// 这条顺序写成了"必须遵守"的硬规则，所以按下标取是稳的。
+const persistInterviewDirection = () => {
+  const answers = portraitAnswers.value.map(answer => String(answer || '').trim())
+  if (answers[0]) learningState.direction = answers[0].slice(0, 120)
+  if (answers[1]) learningState.goal = answers[1].slice(0, 160)
+  persistLearningProfile()
 }
 
 const sendMessage = async () => {
   const value = messageDraft.value.trim()
-  if (!value || isLoading.value) return
+  if (!value) return
   messages.value.push({ role: 'user', text: value })
   messageDraft.value = ''
 
@@ -193,8 +267,9 @@ const sendMessage = async () => {
     step.value += 1
     persistInterview()
     if (step.value < PORTRAIT_MAX_STEPS) {
-      await askNextQuestion()
+      askNextQuestion()
     } else {
+      persistInterviewDirection()
       sessionStorage.removeItem('learnmate_portrait_summary')
       sessionStorage.removeItem('learnmate_diagnosis_result')
       router.push('/onboarding/diagnosis')

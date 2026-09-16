@@ -5,6 +5,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from backend.src.ai_core.resource_graph import resource_graph
+from backend.src.ai_core.agent_names import SAVER_AGENT
 from backend.src.service.resource.task_runtime import (
     cache_task_state as _runtime_cache_task_state,
     notify_task_sse as _runtime_notify_task_sse,
@@ -503,6 +504,28 @@ class ResourceService:
 #  后台任务执行
 # ═══════════════════════════════════════════════
 
+def _collect_review_stat(chunk: dict, stat: dict) -> None:
+    """从 graph 推出的 agent_event 里收集审核结果。
+
+    逐章节的审核发生在 graph 内部（生成→审核→重生成循环）。任务层如果不主动收集，
+    走到"审核阶段"那一步时手里什么都没有，只能报一个进度数字 —— 日志里那一段就是空的。
+    """
+    if chunk.get("type") != "agent_event" or str(chunk.get("phase", "")).lower() != "reviewer":
+        return
+    status = str(chunk.get("status", "")).lower()
+    stat["events"] += 1
+    if status == "done":
+        stat["passed"] += 1
+    elif status == "retrying":
+        stat["needs_fix"] += 1
+    elif status == "failed":
+        stat["failed"] += 1
+    score = chunk.get("score")
+    # bool 是 int 的子类，得排掉，否则 True 会被当成 1 分混进均分。
+    if isinstance(score, (int, float)) and not isinstance(score, bool):
+        stat["scores"].append(int(score))
+
+
 async def _run_generation_task(db_id: int, task_id: str, answers: dict | None = None, skip_review: bool = False, ppt_theme_id: str | None = None, save_to_chat_history: bool = True):
     """后台运行资源生成任务，更新 DB 进度并推送 SSE"""
     import time as _time
@@ -563,7 +586,11 @@ async def _run_generation_task(db_id: int, task_id: str, answers: dict | None = 
         await _notify_task_sse(task_id, {"type": "status", "status": "running", "progress": 10, "progress_msg": "AI 规划中…", "elapsed_ms": int((_time.perf_counter() - _t_init) * 1000)})
         asyncio.ensure_future(_cache_task_state(task_id, {"task_id": task_id, "status": "running", "progress": 10, "progress_msg": "AI 规划中…", "user_id": user_id}))
 
+        # 自定义事件一秒能来几十条（PPT 逐页推正文），逐条打日志会把真正有用的行淹掉。
+        # 改成按类型计数、收尾汇总一行；审核结果另开一份收集，见 _collect_review_stat。
         _custom_count = 0
+        _custom_types: dict[str, int] = {}
+        _review_stat = {"events": 0, "passed": 0, "needs_fix": 0, "failed": 0, "scores": []}
         async for mode, chunk in resource_graph.astream(initial_state, stream_mode=["values", "custom"]):
             if mode == "custom":
                 _custom_count += 1
@@ -618,9 +645,9 @@ async def _run_generation_task(db_id: int, task_id: str, answers: dict | None = 
                                 "user_id": user_id,
                             }))
                     continue
-                if _custom_count <= 3 or chunk.get("type") in ("stream_slide", "stream_section_replace", "stream_start"):
-                    logger.info("[TaskStream] 自定义事件 #%d mode=%s type=%s keys=%s",
-                                _custom_count, mode, chunk.get("type", "?"), list(chunk.keys())[:5])
+                chunk_type = str(chunk.get("type", "?"))
+                _custom_types[chunk_type] = _custom_types.get(chunk_type, 0) + 1
+                _collect_review_stat(chunk, _review_stat)
                 await _notify_task_sse(task_id, chunk)
                 continue
 
@@ -652,13 +679,31 @@ async def _run_generation_task(db_id: int, task_id: str, answers: dict | None = 
             final_passed = chunk.get("review_passed", False)
             final_retry = chunk.get("retry_count", 0)
 
-        # 审核阶段
-        _t_review = _time.perf_counter()
+        # 审核阶段：真正的审核（逐章节 生成→审核→重生成）已经在上面 graph 流式过程中跑完了，
+        # 这一段只是把进度推到 70%，给前端一个"审核中"的档位。所以这里该做的不是"开始审核"，
+        # 而是把流式过程中收集到的审核结果汇报出来 —— 否则日志里这一阶段是完全空的，
+        # 排查时会误以为"审核根本没跑"。（原先这里有个 _t_review 计时，但中间没有任何
+        # 被计时的代码，报出来的耗时恒等于 0，已删。）
         task.progress = 70
         task.progress_msg = "AI 审核中…"
         await task.save()
         await _notify_task_sse(task_id, {"type": "status", "progress": 70, "progress_msg": "AI 审核中…"})
         asyncio.ensure_future(_cache_task_state(task_id, {"task_id": task_id, "status": "running", "progress": 70, "progress_msg": "AI 审核中…", "user_id": user_id}))
+
+        if _custom_types:
+            top = ", ".join(
+                f"{name}×{count}"
+                for name, count in sorted(_custom_types.items(), key=lambda item: -item[1])
+            )
+            logger.info("[TaskStream] 自定义事件汇总 task_id=%s 共=%d 条 分布=%s",
+                        task_id, _custom_count, top)
+        scores = _review_stat["scores"]
+        if _review_stat["events"]:
+            logger.info("[Task] 审核结果 task_id=%s 审核事件=%d 通过=%d 待修订=%d 异常=%d 评分均分=%s",
+                        task_id, _review_stat["events"], _review_stat["passed"], _review_stat["needs_fix"],
+                        _review_stat["failed"], f"{sum(scores) / len(scores):.1f}" if scores else "无")
+        else:
+            logger.info("[Task] 审核结果 task_id=%s 本轮没有审核事件（全部命中缓存，或该类型无需审核）", task_id)
 
         # 保存到 DB
         task.progress = 85
@@ -667,7 +712,7 @@ async def _run_generation_task(db_id: int, task_id: str, answers: dict | None = 
         await _notify_task_sse(task_id, {
             "type": "agent_event",
             "agent_id": "saver",
-            "agent_name": "ResourceService",
+            "agent_name": SAVER_AGENT,
             "phase": "saver",
             "status": "saving",
             "message": "正在保存生成资源",
@@ -732,7 +777,7 @@ async def _run_generation_task(db_id: int, task_id: str, answers: dict | None = 
         await _notify_task_sse(task_id, {
             "type": "agent_event",
             "agent_id": "saver",
-            "agent_name": "ResourceService",
+            "agent_name": SAVER_AGENT,
             "phase": "saver",
             "status": "done",
             "message": f"已保存 {len(saved)} 个资源",

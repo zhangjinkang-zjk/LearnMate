@@ -221,7 +221,11 @@ class StudyService:
             "reason": f"{weak_tag} 当前正确率约 {weak_points[0]['accuracy']}%，先补强该知识点能减少后续反复。" if weak_tag else "完成一次学习节点后，系统才能给出更精确的下一步判断。",
             "criteria": f"能够解释“{current_node.get('title')}”的关键方法，并通过节点测验。" if current_node else None,
             "target_id": current_node.get("id") if current_node else None,
-            "action_type": (current_path or {}).get("next_action", {}).get("type") if current_path else None,
+            # `next_action` 这个键**一定存在**，没有当前节点时它的值是 None
+            # （path/service.py 里 `next_action = None`），所以 `.get(k, {})` 的默认值
+            # 永远不生效，会直接在 None 上再 .get 一次 —— 路径学完 / 没有已解锁节点时
+            # 整个学习总览 500。默认值要用 `or {}` 兜。
+            "action_type": ((current_path or {}).get("next_action") or {}).get("type") if current_path else None,
             "status": "ready" if current_node or weak_tag else "generating",
         }
         summary_text = ""
@@ -244,6 +248,9 @@ class StudyService:
                 "progress": (current_path or {}).get("progress", 0),
                 "completed_nodes": completed_nodes,
                 "total_nodes": total_nodes,
+                # 全部节点学完时 next_content 必然是空的 —— 那是正常终态，不是"还在生成"。
+                # 前端以前只有"正在生成下一步学习内容…"这一个分支，学完的人会一直看它转。
+                "completed": bool(total_nodes) and completed_nodes >= total_nodes,
                 "difficulty_trend": difficulty_trend,
                 "resource_difficulty_match": resource_difficulty_match,
             },

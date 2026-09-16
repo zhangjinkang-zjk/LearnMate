@@ -233,6 +233,62 @@ async def reconcile_completed_prerequisites(progress_records, node_order: dict[i
     return records
 
 
+def frontier_node_id(progress_records, node_order: dict[int, int] | None = None) -> int | None:
+    """路径没有任何可学节点时，返回应该被补解锁的那个节点 id；不需要修就返回 None。
+
+    可学 = `unlocked` / `in_progress`。线性路径上这个集合为空只有两种可能：
+
+    1. **整条路径都学完了** —— 正常终态，不修，返回 None。
+    2. **还有 `locked` 的节点，却一个都没解锁** —— 死锁。用户学不了任何东西：
+       基础讲解没有当前节点可进，学习总览的"下一步"是空的（并且以前会直接 500），
+       而且没有任何接口能把他从这个状态里救出来 —— `unlock_next_node` 只在交卷时调用，
+       交卷又要求节点已经解锁。这时补解锁**最小 order 的未完成节点**。
+
+    这个状态是怎么来的：`regenerate_path` 承接已完成 topic 时用的是批量
+    `.update(node_status="completed")`，不会解锁后面的节点；而新路径的 node 1
+    在创建时本来是 `unlocked`，如果它的 topic 恰好也已完成，就会被这次承接覆盖成
+    `completed`，于是整条路径一个可学节点都不剩。手动改过库也会留下同样的状态。
+    """
+    records = list(progress_records or [])
+    if not records:
+        return None
+    if any(record.node_status in ("unlocked", "in_progress") for record in records):
+        return None
+    order = node_order or {}
+    ordered = sorted(
+        records,
+        key=lambda record: order.get(record.node_id, getattr(getattr(record, "node", None), "order_index", 10**9)),
+    )
+    for record in ordered:
+        if record.node_status != "completed":
+            return record.node_id
+    return None
+
+
+async def reconcile_unlocked_frontier(progress_records, node_order: dict[int, int] | None = None) -> list[int]:
+    """补解锁死锁路径，返回被补解锁的节点 id。
+
+    和 `reconcile_completed_prerequisites` 一样属于"修复不可能的状态"，同样只在
+    真的需要时才写库。**不预生成资料**：它挂在读路径（`get_current_path`）上，
+    资料交给用户真正进入节点时的按需生成，读接口保持轻。
+    """
+    node_id = frontier_node_id(progress_records, node_order)
+    if node_id is None:
+        return []
+    record = next((item for item in progress_records if item.node_id == node_id), None)
+    if record is None:
+        return []
+    await UserPathProgress.filter(user_id=record.user_id, path_id=record.path_id, node_id=node_id).update(
+        node_status="unlocked"
+    )
+    logger.warning(
+        "路径没有任何可学节点，已补解锁 frontier path_id=%s node_id=%s",
+        record.path_id,
+        node_id,
+    )
+    return [node_id]
+
+
 async def check_resource_viewed(node_id: int, user_id: int) -> tuple[bool, int]:
     """Return whether any node resource has been viewed and the total view count."""
     progress = await UserPathProgress.filter(user_id=user_id, node_id=node_id).first()

@@ -20,6 +20,7 @@ from backend.src.models.resource_model import GeneratedResource
 from backend.src.models.notification_model import Notification
 from backend.src.models.chat_history_model import ChatHistory
 from backend.src.ai_core.llm_config import llm
+from backend.src.ai_core.agent_names import LEADER_AGENT, SAVER_AGENT, resource_agent_name
 from backend.src.utils.prompt_loader import load_prompt, fill_prompt
 from backend.src.utils.exceptions import ServiceError
 from backend.src.utils.chat_utils import allocate_chat_group_id
@@ -813,13 +814,13 @@ async def _notify_sse(presentation_id: int, data: dict):
 
 
 _VIDEO_PROGRESS_AGENT_MAP = {
-    "portrait_intro": ("leader", "LeaderAgent", "leader", None),
+    "portrait_intro": ("leader", LEADER_AGENT, "leader", None),
     "generate_document": ("executor:document", "文档生成智能体", "executor", "document"),
     "generate_ppt": ("executor:ppt", "PPT生成智能体", "executor", "ppt"),
     "build_intro": ("executor:document", "文档生成智能体", "executor", "document"),
     "build_ppt": ("executor:ppt", "PPT生成智能体", "executor", "ppt"),
-    "generate_resources": ("executor", "视频生成智能体", "executor", None),
-    "render_html": ("saver", "ResourceService", "saver", None),
+    "generate_resources": ("executor", resource_agent_name("video"), "executor", None),
+    "render_html": ("saver", SAVER_AGENT, "saver", None),
     "audio": ("executor:audio", "TTS生成智能体", "executor", None),
     "done": ("complete", "完成", "complete", None),
     "error": ("complete", "生成失败", "complete", None),
@@ -850,7 +851,7 @@ def _push_agent_progress(
     """给前端智能体工作流面板推送统一事件。"""
     agent_id, agent_name, phase, resource_type = _VIDEO_PROGRESS_AGENT_MAP.get(
         step,
-        ("executor", "视频生成智能体", "executor", None),
+        ("executor", resource_agent_name("video"), "executor", None),
     )
     event = {
         "type": "agent_event",

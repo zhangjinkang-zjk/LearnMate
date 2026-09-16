@@ -256,7 +256,11 @@
                   <strong>{{ chapterFooterTitle }}</strong>
                   <span>{{ documentContent ? `${estimatedReadMinutes} 分钟阅读 · ${activeNode.knowledge_tags?.length || 0} 个知识点` : '正在准备学习材料' }}</span>
                 </div>
-                <button class="button button--primary" type="button" :disabled="!documentContent || isResourceLoading" @click="handlePrimaryAction">
+                <RouterLink v-if="pathCompleted && !nextNode" class="button button--primary" to="/learning/advanced">
+                  去做实战任务
+                  <ArrowRight :size="15" />
+                </RouterLink>
+                <button v-else class="button button--primary" type="button" :disabled="!documentContent || isResourceLoading" @click="handlePrimaryAction">
                   {{ primaryActionLabel }}
                   <ArrowRight :size="15" />
                 </button>
@@ -431,9 +435,16 @@ const primaryActionLabel = computed(() => {
   if (activeNode.value?.status === 'completed') return '复习本章检查'
   return '完成阅读，进入检查'
 })
+// 整条路径都学完了：末章后面没有可进的章节是正常终态，得说清楚并指个去处，
+// 否则用户停在最后一章只看到"本章已完成"，不知道是没有下一步还是加载坏了。
+const pathCompleted = computed(() => {
+  const nodes = learningPath.value?.nodes || []
+  return nodes.length > 0 && nodes.every((node) => node.status === 'completed')
+})
 const chapterFooterTitle = computed(() => {
   if (activeNode.value?.status !== 'completed') return '读完正文，再用检查确认真正掌握'
-  return nextNode.value ? '本章已完成，下一章已经解锁' : '本章已完成'
+  if (nextNode.value) return '本章已完成，下一章已经解锁'
+  return pathCompleted.value ? '这条路径的节点都学完了' : '本章已完成'
 })
 
 function openNavigationDrawer(drawer) {

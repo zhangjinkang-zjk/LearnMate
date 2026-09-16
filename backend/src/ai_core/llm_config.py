@@ -31,14 +31,38 @@ def _build_chat_model(**kwargs) -> ChatOpenAI | None:
     return ChatOpenAI(**kwargs)
 
 
-_raw_llm = _build_chat_model(
-    model=os.getenv("AI_MODEL", "mimo-v2.5"),
-    api_key=api_key,
-    base_url=os.getenv("AI_BASE_URL", "https://api.xiaomimimo.com/v1"),
-    temperature=0.3,
-    streaming=True,
-    request_timeout=120,  # 单次请求超时 120 秒，避免断连后无限等待
-)
+_BASE_TEMPERATURE = 0.3
+
+# 叙述类正文（文档/案例/阅读材料）用的温度：比默认档高，用来打散句式套路、减少"AI 味"。
+# 仍受控——评分硬指标要求幻觉率 < 5%，过高会牺牲事实稳定性，故默认 0.7 而非 1.0。
+# 结构化输出（习题/导图/PPT 的 JSON）与审核打分继续用默认档。
+CREATIVE_TEMPERATURE = float(os.getenv("AI_CREATIVE_TEMPERATURE", "0.7"))
+
+
+def _build_text_model(temperature: float) -> ChatOpenAI | None:
+    return _build_chat_model(
+        model=os.getenv("AI_MODEL", "mimo-v2.5"),
+        api_key=api_key,
+        base_url=os.getenv("AI_BASE_URL", "https://api.xiaomimimo.com/v1"),
+        temperature=temperature,
+        streaming=True,
+        request_timeout=120,  # 单次请求超时 120 秒，避免断连后无限等待
+    )
+
+
+_raw_llm = _build_text_model(_BASE_TEMPERATURE)
+
+# 非默认温度档的模型按需惰性构建，避免为没人用的档位白建连接池。
+_temp_models: dict[float, ChatOpenAI | None] = {}
+
+
+def _profile_llm(temperature: float) -> ChatOpenAI | None:
+    """取指定温度档的底层模型；默认档直接复用 _raw_llm。"""
+    if temperature == _BASE_TEMPERATURE:
+        return _raw_llm
+    if temperature not in _temp_models:
+        _temp_models[temperature] = _build_text_model(temperature)
+    return _temp_models[temperature]
 
 # 多模态 LLM（MiMo，用于视觉审查 PPT 截图等）
 _vision_llm = _build_chat_model(
@@ -99,9 +123,32 @@ def _get_user_sync_sem(user_id: int, pool: str = "default") -> threading.Bounded
 class _PriorityLLM:
     """LLM 代理：每用户每池独立并发 + 全局优先级限流 + 可选的 Redis 响应缓存。"""
 
-    def __init__(self, raw_llm=None, cache_ttl: int = 0):
+    def __init__(
+        self,
+        raw_llm=None,
+        cache_ttl: int = 0,
+        cache_ns: str = "llm",
+        temp_profiles: bool = False,
+    ):
         self._raw = raw_llm or _raw_llm
         self._cache_ttl = cache_ttl  # 0=不缓存；>0 缓存秒数（如 3600=1h）
+        self._cache_ns = cache_ns
+        # 是否允许调用方按 temperature= 参数切档。仅文本主模型开启；视觉模型是另一套
+        # 端点和参数，切档会把它指向错误的模型。
+        self._temp_profiles = temp_profiles
+
+    def _target(self, temperature: float | None):
+        """解析本次调用用哪个底层模型与缓存命名空间。
+
+        温度不同，同一 prompt 的结果不可互相复用，所以命名空间必须带上温度档，
+        否则调高温度后仍会读回默认档的缓存，切档形同虚设。
+        """
+        if temperature is None or not self._temp_profiles:
+            return self._raw, self._cache_ns
+        temp = float(temperature)
+        if temp == _BASE_TEMPERATURE:
+            return self._raw, self._cache_ns
+        return _profile_llm(temp), f"{self._cache_ns}:t{temp:g}"
 
     def __getattr__(self, name):
         if self._raw is None:
@@ -119,7 +166,15 @@ class _PriorityLLM:
         except Exception:
             return None
 
-    async def ainvoke(self, prompt, priority: str = "high", user_id: int = 0, pool: str = "default"):
+    async def ainvoke(
+        self,
+        prompt,
+        priority: str = "high",
+        user_id: int = 0,
+        pool: str = "default",
+        temperature: float | None = None,
+    ):
+        raw_llm, cache_ns = self._target(temperature)
         # 计算缓存 key（仅在 cache_ttl > 0 时）
         _cache_key_str = self._prompt_to_key(prompt) if self._cache_ttl else None
 
@@ -127,7 +182,7 @@ class _PriorityLLM:
         if _cache_key_str:
             try:
                 from backend.src.utils.redis_client import cache_get as _cg, _cache_key as _ck
-                _cached = await _cg(_ck("llm", _cache_key_str))
+                _cached = await _cg(_ck(cache_ns, _cache_key_str))
                 if _cached is not None and isinstance(_cached, dict) and "content" in _cached:
                     return AIMessage(
                         content=_cached["content"],
@@ -147,19 +202,19 @@ class _PriorityLLM:
             user_sem = _user_pool_async[key]
 
         async def _call():
-            if self._raw is None:
+            if raw_llm is None:
                 raise RuntimeError("AI model is not configured. Set api_key in backend/.env.")
             if user_sem:
                 async with user_sem:
-                    resp = await self._raw.ainvoke(prompt)
+                    resp = await raw_llm.ainvoke(prompt)
             else:
-                resp = await self._raw.ainvoke(prompt)
+                resp = await raw_llm.ainvoke(prompt)
             # 异步回填缓存（仅非流式结果）
             if _cache_key_str and resp and resp.content and len(str(resp.content).strip()) > 5:
                 try:
                     from backend.src.utils.redis_client import cache_set as _cs, _cache_key as _ck2
                     _meta = getattr(resp, "response_metadata", {}) or {}
-                    await _cs(_ck2("llm", _cache_key_str), {
+                    await _cs(_ck2(cache_ns, _cache_key_str), {
                         "content": resp.content,
                         "response_metadata": {k: str(v) for k, v in _meta.items() if isinstance(v, (str, int, float))},
                     }, self._cache_ttl)
@@ -185,17 +240,25 @@ class _PriorityLLM:
             else:
                 return await _call()
 
-    def invoke(self, prompt, priority: str = "high", user_id: int = 0, pool: str = "default"):
+    def invoke(
+        self,
+        prompt,
+        priority: str = "high",
+        user_id: int = 0,
+        pool: str = "default",
+        temperature: float | None = None,
+    ):
+        raw_llm, _ = self._target(temperature)
         user_sem = _get_user_sync_sem(user_id, pool)
 
         def _call():
-            if self._raw is None:
+            if raw_llm is None:
                 raise RuntimeError("AI model is not configured. Set api_key in backend/.env.")
             if user_sem:
                 with user_sem:
-                    return self._raw.invoke(prompt)
+                    return raw_llm.invoke(prompt)
             else:
-                return self._raw.invoke(prompt)
+                return raw_llm.invoke(prompt)
 
         global _sync_high_active
         if priority == "high":
@@ -219,5 +282,5 @@ class _PriorityLLM:
 # 环境变量 LLM_CACHE_TTL 控制 LLM 缓存秒数（默认 0=关闭，设置如 300=5分钟）
 _DEFAULT_CACHE_TTL = int(os.getenv("LLM_CACHE_TTL", "0"))
 
-llm = _PriorityLLM(cache_ttl=_DEFAULT_CACHE_TTL)
+llm = _PriorityLLM(cache_ttl=_DEFAULT_CACHE_TTL, temp_profiles=True)
 llm_vision = _PriorityLLM(_vision_llm, cache_ttl=_DEFAULT_CACHE_TTL)

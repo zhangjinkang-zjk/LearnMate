@@ -22,7 +22,7 @@
         <div class="overview-left">
           <div class="overview-top-cards">
             <section class="surface surface-pad compact-panel goal-panel"><div class="goal-heading"><div><p class="eyebrow">CURRENT FOCUS</p><h2>当前学习目标</h2></div><span v-if="goalItems.length" class="goal-count">{{ goalItems.length }}</span></div><ul v-if="goalItems.length" class="goal-list"><li v-for="(item, index) in goalItems" :key="item.id || item.title"><span class="goal-index">{{ String(index + 1).padStart(2, '0') }}</span><span class="goal-copy">{{ item.title }}</span><span class="goal-status" aria-hidden="true"></span></li></ul><div v-else class="empty-state">正在生成学习目标…</div></section>
-            <section class="surface surface-pad compact-panel next-panel"><div class="next-heading"><div><p class="eyebrow">NEXT STEP</p><h2>下一步学习内容</h2></div><span class="next-mark"><ArrowUpRight :size="19" /></span></div><div v-if="nextTopic" class="next-content"><span class="next-label">推荐学习节点</span><p class="next-topic">{{ nextTopic }}</p></div><div v-else class="empty-state next-empty">正在生成下一步学习内容…</div><RouterLink v-if="hasNextAction" class="button button--primary overview-start-button" :to="nextAction.to">开始学习 <ArrowRight :size="14" /></RouterLink></section>
+            <section class="surface surface-pad compact-panel next-panel"><div class="next-heading"><div><p class="eyebrow">NEXT STEP</p><h2>下一步学习内容</h2></div><span class="next-mark"><ArrowUpRight :size="19" /></span></div><div v-if="nextTopic" class="next-content"><span class="next-label">推荐学习节点</span><p class="next-topic">{{ nextTopic }}</p></div><div v-else-if="path.completed" class="empty-state next-empty">这条路径的节点都学完了，可以进入进阶学习做实战任务。</div><div v-else class="empty-state next-empty">正在生成下一步学习内容…</div><RouterLink v-if="hasNextAction" class="button button--primary overview-start-button" :to="nextAction.to">开始学习 <ArrowRight :size="14" /></RouterLink><RouterLink v-else-if="path.completed" class="button button--primary overview-start-button" to="/learning/advanced">进入进阶学习 <ArrowRight :size="14" /></RouterLink></section>
           </div>
           <section class="surface surface-pad blindspot-panel"><div class="section-heading section-heading--compact"><div><p class="eyebrow module-eyebrow">KNOWLEDGE GAPS</p><h2>知识盲区</h2></div><span class="muted">{{ weakPoints.length }} 个待巩固</span></div><div v-if="weakPoints.length" class="blindspot-list"><article v-for="(point, index) in weakPoints" :key="point.tag" class="blindspot-item"><div class="blindspot-copy"><span class="blindspot-index">{{ String(index + 1).padStart(2, '0') }}</span><div><strong>{{ point.tag }}</strong><small>{{ point.accuracy === null ? '正在生成' : `正确率 ${point.accuracy}%` }}</small></div></div><div v-if="point.accuracy !== null" class="mini-progress"><span :style="{ width: `${point.accuracy}%` }"></span></div><RouterLink class="icon-link" to="/learning/advanced" :aria-label="`练习${point.tag}`" title="开始练习"><ArrowRight :size="15" /></RouterLink></article></div><div v-else class="empty-state">正在生成知识盲区…</div></section>
         </div>
@@ -50,7 +50,7 @@ import { learningApi } from '@/shared/api/learningApi'
 const loading = ref(true)
 const errorMessage = ref('')
 const profile = reactive({ direction: '', goal: '' })
-const path = reactive({ id: null, subject: '', currentNode: '', nextAction: null, nodes: [], difficultyTrend: [], resourceDifficultyMatch: [], progress: null })
+const path = reactive({ id: null, subject: '', currentNode: '', nextAction: null, nodes: [], difficultyTrend: [], resourceDifficultyMatch: [], progress: null, completed: false })
 const stats = reactive({ studySeconds: 0, examAnswered: 0, weakPoints: [] })
 const goals = ref([])
 const nextContent = ref([])
@@ -125,7 +125,7 @@ const pathProgressLabel = computed(() => path.progress === null ? '正在生成'
 const hasNextAction = computed(() => Boolean(path.nextAction?.type && nextTopic.value))
 function resetOverviewState() {
   Object.assign(profile, { direction: '', goal: '' })
-  Object.assign(path, { id: null, subject: '', currentNode: '', nextAction: null, nodes: [], difficultyTrend: [], resourceDifficultyMatch: [], progress: null })
+  Object.assign(path, { id: null, subject: '', currentNode: '', nextAction: null, nodes: [], difficultyTrend: [], resourceDifficultyMatch: [], progress: null, completed: false })
   Object.assign(stats, { studySeconds: 0, examAnswered: 0, weakPoints: [] })
   goals.value = []
   nextContent.value = []
@@ -146,7 +146,7 @@ async function loadOverview() {
     const pathData = overview.path || {}
     const content = Array.isArray(overview.next_content) ? overview.next_content : []
     const progress = Number(pathData.progress)
-    Object.assign(path, { id: pathData.id || null, subject: subjects[0]?.name || '', currentNode: content[0]?.title || '', nextAction: overview.recommendation?.action_type ? { type: overview.recommendation.action_type } : null, nodes: content, difficultyTrend: Array.isArray(pathData.difficulty_trend) ? pathData.difficulty_trend : [], resourceDifficultyMatch: Array.isArray(pathData.resource_difficulty_match) ? pathData.resource_difficulty_match : [], progress: Number.isFinite(progress) ? Math.round(progress) : null })
+    Object.assign(path, { id: pathData.id || null, subject: subjects[0]?.name || '', currentNode: content[0]?.title || '', nextAction: overview.recommendation?.action_type ? { type: overview.recommendation.action_type } : null, nodes: content, difficultyTrend: Array.isArray(pathData.difficulty_trend) ? pathData.difficulty_trend : [], resourceDifficultyMatch: Array.isArray(pathData.resource_difficulty_match) ? pathData.resource_difficulty_match : [], progress: Number.isFinite(progress) ? Math.round(progress) : null, completed: pathData.completed === true })
     goals.value = Array.isArray(overview.goals) ? overview.goals : []
     nextContent.value = content
     const summary = overview.summary || {}

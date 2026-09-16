@@ -85,23 +85,58 @@ def _detach(task: asyncio.Task) -> None:
     task.add_done_callback(_finished)
 
 
+def _diagnosis_event(status: str, message: str, **extra) -> dict:
+    """把诊断包装成一条 agent_event，让它在"智能体流程"里成为一个可见角色。
+
+    以前这里只推 status/result，诊断在智能体工作流里完全不可见 —— 而学情诊断正是
+    协同闭环的第一个角色（分析→生成→校验→决策），看不见就等于没参与。
+    """
+    return {
+        "type": "agent_event",
+        "agent_id": "diagnosis",
+        "agent_name": "学情诊断智能体",
+        "phase": "diagnosis",
+        "status": status,
+        "message": message,
+        **extra,
+    }
+
+
+def _describe_result(result) -> str:
+    """按诊断返回体拼一句人话，别只报"完成"。"""
+    if not isinstance(result, dict):
+        return "诊断步骤完成"
+    if result.get("finished"):
+        percentage = (result.get("result") or {}).get("percentage")
+        return f"诊断完成，正确率 {percentage}%" if percentage is not None else "诊断完成"
+    index, total = result.get("current_index"), result.get("total_questions")
+    if index is not None and total:
+        return f"第 {int(index) + 1}/{int(total)} 题已就绪"
+    return "诊断题目已就绪"
+
+
 async def _stream_diagnosis(operation, status_message: str):
     """Keep the diagnosis connection alive while the LLM generates a question."""
     task = asyncio.create_task(operation())
     try:
+        yield _sse(_diagnosis_event("running", status_message))
         yield _sse({"type": "status", "message": status_message})
         while not task.done():
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=5)
             except asyncio.TimeoutError:
                 yield _sse({"type": "keepalive"})
-        yield _sse({"type": "result", "data": task.result()})
+        result = task.result()
+        yield _sse(_diagnosis_event("done", _describe_result(result)))
+        yield _sse({"type": "result", "data": result})
     except asyncio.CancelledError:
         raise
     except ValueError as exc:
+        yield _sse(_diagnosis_event("failed", str(exc)))
         yield _sse({"type": "error", "message": str(exc)})
     except Exception:
         logger.exception("诊断流处理失败")
+        yield _sse(_diagnosis_event("failed", "诊断服务暂时不可用"))
         yield _sse({"type": "error", "message": "诊断服务暂时不可用，请稍后重试"})
     finally:
         # 正常跑完时 task 已 done，这里是个空操作；只有被取消退出时才真正接管它。

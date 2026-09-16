@@ -19,6 +19,11 @@ from backend.src.models.resource_model import GeneratedResource
 from backend.src.models.usermodel import User
 from backend.src.models.user_agent_model import UserAgent
 from backend.src.models.path_model import PathNode, UserPathProgress
+from backend.src.service.advanced.practice_service import (
+    AdvancedPracticeService,
+    PhaseStreamStripper,
+    practice_record_text,
+)
 from backend.src.service.agent.service import create as _agent_create
 from backend.src.service.chat.service import (
     _build_portrait_context as _build_global_portrait_context,
@@ -447,8 +452,22 @@ async def _build_classroom_path_context(
     return "\n".join(lines)
 
 
-def _compose_user_prompt(scenario: str, text: str, segment: dict) -> str:
-    """把学生的反讲、开放回答或提问翻译成给模型的输入。"""
+def _practice_session_blocked(scenario: str, session) -> bool:
+    """这次实践请求该不该被拒。
+
+    总结读的是一份已经暂存的记录 —— 它本来就是给"结束但还没提交"准备的；继续对话
+    则不能碰提交过的会话（提交后阶段和评价都定稿了，再聊下去进度和分数就对不上）。
+    """
+    if session is None:
+        return True
+    return scenario == "practice" and session.status == "completed"
+
+
+def _compose_user_prompt(scenario: str, text: str, segment: dict, record: str = "") -> str:
+    """把学生的反讲、开放回答或提问翻译成给模型的输入。
+
+    `record` 是服务端拼的会话记录（见 `practice_record_text`），目前只有总结场景用得到。
+    """
     text = str(text or "").strip()
     question = segment.get("question") or {}
     if scenario == "open":
@@ -467,17 +486,31 @@ def _compose_user_prompt(scenario: str, text: str, segment: dict) -> str:
         )
     if scenario == "practice":
         phase = _clip(segment.get("phase") or segment.get("current_phase") or "当前阶段", 40)
-        return (
+        lines = [
             "【学习巩固】学生正在完成一个应用实践任务，当前阶段是「"
             f"{phase}」。学生的思考是：\n{_clip(text, 1000)}\n"
             "请先指出其中一个明确的有效判断或缺口，再只追问一个能推动当前阶段的问题。"
             "如果学生请求提示，给出不泄露结论的最小提示；不要替学生写完整方案，不要跳到后续阶段。"
-        )
+        ]
+        # 阶段推进的开关：学生点"请求一个提示"时前端会关掉它，这一轮就不该记进度。
+        if segment.get("phase_advance") is not False:
+            lines.append(
+                f"判断标准：如果学生的回答已经足以支撑「{phase}」这个阶段，"
+                "在回复的**最末尾单独一行**输出 [[PHASE:done]]；还不足以支撑就不要输出。"
+                "这个标记由系统读取、不会展示给学生，只在确实可以进入下一阶段时写一次，"
+                "不要用它来鼓励或评价学生。"
+            )
+        else:
+            lines.append("学生这一轮只是在请求提示，不要输出任何阶段标记。")
+        return "\n".join(lines)
     if scenario in {"practice_summary", "feynman_summary"}:
+        # record 是服务端从会话记录里拼出来的版本，优先用它；`text` 只在没有会话
+        # （比如费曼反讲那边）时才当输入。
+        source = _clip(record, 1400) or _clip(text, 1400)
         return (
             "【学习记录总结】请根据学生刚才的学习过程，概括已经说清的内容、仍需补强的一个点，"
             "以及下一步可执行的小练习。不要给出虚假的分数或完成状态。\n"
-            f"学生记录：{_clip(text, 1400)}"
+            f"学生记录：{source}"
         )
     return text or "……"
 
@@ -508,17 +541,18 @@ async def stream_classroom_chat(
 ):
     """async generator：以普通聊天相同的持久化和流式顺序产出 SSE 事件。"""
     fallback = _FALLBACK_REPLIES.get(scenario, _FALLBACK_REPLIES["free"])
+    practice_session = None
     try:
-        if scenario == "practice" and practice_session_id:
+        if scenario in {"practice", "practice_summary"} and practice_session_id:
             from backend.src.models.advanced_practice_model import AdvancedPracticeSession
 
-            session = await AdvancedPracticeSession.filter(
+            practice_session = await AdvancedPracticeSession.filter(
                 user_id=user_id,
                 session_key=practice_session_id,
                 path_id=path_id,
                 node_id=node_id,
             ).first()
-            if not session or session.status == "completed":
+            if _practice_session_blocked(scenario, practice_session):
                 yield _sse({"error": "巩固会话不存在、无权访问或已经完成"})
                 yield _sse(None, done=True)
                 return
@@ -539,15 +573,18 @@ async def stream_classroom_chat(
 
         lock = await get_node_generation_lock(user_id, path_id, node_id, "classroom_chat")
         async with lock:
-            brain = _get_classroom_brain(user_id, path_id, node_id, agent_id, practice_session_id if scenario == "practice" else None)
-            user_prompt = _compose_user_prompt(scenario, text, segment)
-            portrait_ctx = await _build_global_portrait_context(user_id)
-            chat_group_id = _classroom_group_id(
-                user_id,
-                path_id,
-                node_id,
-                practice_session_id if scenario == "practice" else None,
+            # 总结和对话一样属于这次实践会话，不能落到节点课堂那个历史组里 ——
+            # 否则课堂标签页的历史里会冒出一段实践总结。
+            practice_scope = practice_session_id if scenario in {"practice", "practice_summary"} else None
+            brain = _get_classroom_brain(user_id, path_id, node_id, agent_id, practice_scope)
+            user_prompt = _compose_user_prompt(
+                scenario,
+                text,
+                segment,
+                record=practice_record_text(practice_session) if practice_session is not None else "",
             )
+            portrait_ctx = await _build_global_portrait_context(user_id)
+            chat_group_id = _classroom_group_id(user_id, path_id, node_id, practice_scope)
 
             # 与普通流式聊天一致：先记下用户输入，再从该课堂专属组恢复短期历史。
             # 这样进程重启后仍能接上本节点的课堂对话，工具也能读取当前问题。
@@ -562,6 +599,11 @@ async def stream_classroom_chat(
 
             got_chunk = False
             full_response = ""
+            # 实践对话的回复里可能带 `[[PHASE:done]]`：它既不能出现在学生看到的文字里，
+            # 又会跨分片到达。剥掉之后剩下的文本（stripper.text）才是要落库的回复。
+            # 按 scenario 而不是按会话是否存在来决定剥不剥：提示词是按 scenario 拼的，
+            # 万一哪次调用没带 practice_session_id，标记仍然必须被剥掉（只是不记进度）。
+            stripper = PhaseStreamStripper() if scenario == "practice" else None
             started_at = time.monotonic()
             logger.info(
                 "[ClassroomChat] 流式开始 user=%s path=%s node=%s segment=%s group=%s",
@@ -579,15 +621,30 @@ async def stream_classroom_chat(
                 memory_context="",
             ):
                 if isinstance(event, dict):
-                    if event.get("type") in ("chunk", "content") and event.get("content"):
-                        got_chunk = True
-                        full_response += str(event["content"])
-                    yield _sse(event)
+                    payload = event
                 elif event:
-                    content = str(event)
+                    payload = {"role": "assistant", "type": "chunk", "content": str(event)}
+                else:
+                    continue
+                content = payload.get("content")
+                is_chunk = bool(content) and payload.get("type") in ("chunk", "content")
+                if is_chunk:
                     got_chunk = True
-                    full_response += content
-                    yield _sse({"role": "assistant", "type": "chunk", "content": content})
+                    full_response += str(content)
+                if stripper is None or not is_chunk:
+                    yield _sse(payload)
+                    continue
+                # 剥完可能什么都不剩（整个分片就是一个标记），这时不发空事件。
+                clean = stripper.feed(content)
+                if clean:
+                    yield _sse({**payload, "content": clean})
+
+            if stripper is not None:
+                tail = stripper.flush()
+                if tail:
+                    yield _sse({"role": "assistant", "type": "chunk", "content": tail})
+                if stripper.text.strip():
+                    full_response = stripper.text
 
             if not got_chunk:
                 full_response = fallback
@@ -595,6 +652,15 @@ async def stream_classroom_chat(
 
             record.res = full_response
             await record.save()
+
+            # 阶段进度由这次回复里的标记决定，客户端不再自己往前走。
+            phase_state = await AdvancedPracticeService.record_phase_markers(
+                practice_session,
+                stripper.markers if stripper is not None else [],
+            )
+            if phase_state:
+                yield _sse({"role": "system", "type": "phase", **phase_state})
+
             # 课堂一问一答是完整观察样本；复用普通聊天的画像后处理，
             # 但不把当前节点的临时问答写入全局长期记忆。
             schedule_post_chat_enrichment(

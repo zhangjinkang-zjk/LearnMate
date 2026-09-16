@@ -42,6 +42,8 @@ from backend.src.service.path.helpers import (
     update_portrait_from_mastery,
     update_progress_resource_ids,
     reconcile_completed_prerequisites,
+    reconcile_unlocked_frontier,
+    frontier_node_id,
 )
 from backend.src.service.path.generation_locks import get_node_generation_lock
 from backend.src.service.path.node_resource_jobs import ensure_job, stream_job
@@ -1705,6 +1707,27 @@ class PathService:
                     user_id=user_id, path_id=new_path_id, node_id=nd["node_id"]
                 ).update(node_status="completed", quiz_passed=True)
 
+        # 承接已完成 topic 用批量 update，**不会解锁后面的节点**。而新路径的 node 1 在
+        # 创建时本来是 unlocked —— 如果它的 topic 恰好也已完成，就会被上面这段覆盖成
+        # completed，整条路径一个可学节点都不剩：用户学不了任何东西，"下一步"是空的。
+        # 这里补一次解锁，复用交卷那套（顺带后台预生成资料/题目/课堂）。
+        #
+        # order 从 progress 行取而不是从 result["nodes"] 取：frontier_node_id 只会返回
+        # **未完成**的节点，所以由它推出来的 order 不可能撞到一个已完成的节点上。
+        carried = await UserPathProgress.filter(user_id=user_id, path_id=new_path_id)\
+            .prefetch_related("node").all()
+        frontier_id = frontier_node_id(carried)
+        frontier = next((r for r in carried if r.node_id == frontier_id), None)
+        if frontier is not None and frontier.node:
+            await unlock_next_node(
+                new_path_id,
+                frontier.node.order_index - 1,
+                user_id,
+                PathService.generate_node_resources,
+                PathService.generate_node_quiz,
+                PathService.generate_node_classroom,
+            )
+
         return {
             "path_id": new_path_id,
             "regenerated": True,
@@ -2041,6 +2064,13 @@ class PathService:
             .prefetch_related("node").all()
         progresses.sort(key=lambda p: p.node.order_index if p.node else 0)
         progresses = await reconcile_completed_prerequisites(progresses)
+        # 补解锁死锁的路径。放在这里而不是调用方，是因为它是"路径读"的唯一入口：
+        # 修一次就落库了，学习总览/基础讲解/进阶学习这些下游全部受益。
+        repaired_frontier = await reconcile_unlocked_frontier(progresses)
+        if repaired_frontier:
+            for record in progresses:
+                if record.node_id in repaired_frontier:
+                    record.node_status = "unlocked"
 
         # 批量收集所有资源 ID → 一次查询
         all_resource_ids = []
