@@ -79,13 +79,19 @@ const isFreshFlow = computed(() => Boolean(route.query.fresh))
 const selectedIdentity = ref(isFreshFlow.value ? '' : (localStorage.getItem('learnmate_identity') || ''))
 const storedDirection = localStorage.getItem('learnmate_direction') || ''
 const storedGoal = localStorage.getItem('learnmate_goal') || ''
-const selectedDirection = ref(directionOptions.includes(storedDirection) ? storedDirection : directionOptions[0])
-const selectedGoal = ref(goalOptions.includes(storedGoal) ? storedGoal : goalOptions[0])
+// 方向/目标这两项现在由画像访谈问出来（`.direction-fields` 是隐藏的），所以这里
+// **不能**再拿 directionOptions[0] / goalOptions[0] 当默认值：那会把"智能系统与知识工程"
+// 写进 localStorage，再经 PortraitSummaryPage 传成 onboarding_context.direction；
+// 而 init_from_dialogue 里 `selected_direction or learning_direction` 是请求值优先，
+// 于是访谈真正问出来的方向会被这条写死的默认值盖掉，用户的学习路径就按它生成了。
+const selectedDirection = ref(directionOptions.includes(storedDirection) ? storedDirection : '')
+const selectedGoal = ref(goalOptions.includes(storedGoal) ? storedGoal : '')
 const customDirection = ref(directionOptions.includes(storedDirection) ? '' : storedDirection)
 const customGoal = ref(goalOptions.includes(storedGoal) ? '' : storedGoal)
 const resolvedDirection = computed(() => customDirection.value.trim() || selectedDirection.value)
 const resolvedGoal = computed(() => customGoal.value.trim() || selectedGoal.value)
-const canContinue = computed(() => Boolean(selectedIdentity.value && resolvedDirection.value && resolvedGoal.value))
+// 身份是这一步唯一必须由用户给出的信息；方向/目标允许留空，交给访谈补齐。
+const canContinue = computed(() => Boolean(selectedIdentity.value))
 
 const identityOptions = [
   '在校大学生',
@@ -100,26 +106,12 @@ const identityOptions = [
   '自由职业者',
 ]
 
-identityOptions.splice(
-  0,
-  identityOptions.length,
-  '在校大学生',
-  '高职 / 中职学生',
-  '应届毕业生',
-  '一线技术人员',
-  '工程师 / 开发者',
-  '产品 / 项目管理者',
-  '教师 / 培训师',
-  '企业管理者',
-  '想转行的学习者',
-  '自由职业者'
-)
-
 const continueToStudy = () => {
   if (!canContinue.value) return
   learningState.identity = selectedIdentity.value
-  learningState.direction = resolvedDirection.value
-  learningState.goal = resolvedGoal.value
+  // 只有用户真的给过方向/目标才覆盖，否则保留原值（含空值），让访谈的结果说了算。
+  if (resolvedDirection.value) learningState.direction = resolvedDirection.value
+  if (resolvedGoal.value) learningState.goal = resolvedGoal.value
   persistLearningProfile()
   window.dispatchEvent(new CustomEvent('learnmate:identity-selected', { detail: selectedIdentity.value }))
   router.push('/learnmate-chat')

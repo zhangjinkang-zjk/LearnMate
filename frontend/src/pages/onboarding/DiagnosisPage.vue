@@ -37,7 +37,7 @@
     <p v-if="isLoading" class="conversation-status" role="status">{{ loadingMessage }}</p>
     <p v-else-if="errorMessage" class="conversation-status conversation-status--error" role="alert">
       <span>{{ errorMessage }}</span>
-      <button class="diagnosis-retry" type="button" @click="startDiagnosis">重试</button>
+      <button class="diagnosis-retry" type="button" @click="retryFailedStep">重试</button>
     </p>
   </main>
 </template>
@@ -56,6 +56,8 @@ const isFinished = ref(false)
 const errorMessage = ref('')
 const answeredCount = ref(0)
 const answerDraft = ref('')
+// 失败的是哪一步，决定"重试"要重发什么：整个诊断重开会把已经答完的题丢掉。
+const failedStep = ref('start')
 const currentQuestion = ref(null)
 const messages = ref([])
 const sessionId = ref('')
@@ -87,10 +89,16 @@ async function startDiagnosis() {
     currentQuestion.value = result.question
     messages.value.push({ role: 'assistant', text: questionText(result.question) })
   } catch (error) {
+    failedStep.value = 'start'
     errorMessage.value = error.response?.data?.detail || error.message || '暂时无法开始能力诊断，请检查网络后重试。'
   } finally {
     isLoading.value = false
   }
+}
+
+function retryFailedStep() {
+  if (failedStep.value === 'answer') return submitAnswer()
+  return startDiagnosis()
 }
 
 async function submitAnswer() {
@@ -107,7 +115,11 @@ async function submitAnswer() {
       answer,
       max_steps: totalQuestions,
     }, handleStreamEvent)
-    answeredCount.value += 1
+    // 用服务端的进度而不是本地自增：重复提交时服务端会接着已经落库的作答往下走，
+    // 自增会把题号算重。
+    answeredCount.value = Number.isInteger(result.current_index)
+      ? result.current_index
+      : answeredCount.value + 1
     const feedback = result.feedback || {}
     messages.value.push({ role: 'assistant', text: feedback.is_correct ? '这道题回答正确，我继续确认你在实际应用中的判断。' : (feedback.analysis || '正在生成回复…') })
     answerDraft.value = ''
@@ -121,6 +133,9 @@ async function submitAnswer() {
       messages.value.push({ role: 'assistant', text: questionText(result.question) })
     }
   } catch (error) {
+    // 重发的是同一题（answerDraft 没被清空），不是整轮重开：服务端会把已经落库的
+    // 那次作答接着往下推，所以翻车之后仍然能从当前题继续，而不是被"该题已经提交过"钉死。
+    failedStep.value = 'answer'
     errorMessage.value = error.response?.data?.detail || error.message || '回答提交失败，请重试。'
     messages.value.pop()
   } finally {

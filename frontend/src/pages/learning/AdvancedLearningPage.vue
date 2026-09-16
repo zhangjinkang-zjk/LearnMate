@@ -6,7 +6,7 @@
 
     <section v-if="loading" class="surface surface-pad state-panel" aria-live="polite"><LoaderCircle class="spin" :size="20" /><div><strong>正在整理实践任务</strong><p>系统正在读取你的学习目标、路径进度和能力诊断。</p></div></section>
     <section v-else-if="errorMessage" class="surface surface-pad state-panel state-panel--error"><CircleAlert :size="20" /><div><strong>暂时无法读取实践任务</strong><p>{{ errorMessage }}</p></div><button class="button button--quiet" type="button" @click="loadTask">重试</button></section>
-    <section v-else-if="!task" class="surface surface-pad empty-panel"><p class="eyebrow">进阶学习</p><h2>{{ learningStatus === 'locked' ? '先完成基础学习，再进入实践' : '还没有可开始的实践任务' }}</h2><p v-if="learningStatus === 'locked'">已完成 {{ milestone.completed_nodes }} / {{ milestone.unlock_nodes }} 个基础学习节点，还需 {{ milestone.remaining }} 个节点解锁第一组进阶任务。</p><p v-else>完成基础讲解和学习复盘后，系统会在下一个学习里程碑生成实践入口。</p><RouterLink class="button button--primary" to="/learning/fundamentals">继续基础学习</RouterLink></section>
+    <section v-else-if="!task" class="surface surface-pad empty-panel"><p class="eyebrow">进阶学习</p><h2>{{ learningStatus === 'locked' ? '先完成基础学习，再进入实践' : '还没有可开始的实践任务' }}</h2><p v-if="learningStatus === 'locked' && hasMilestone">已完成 {{ milestone.completed_nodes }} / {{ milestone.unlock_nodes }} 个基础学习节点，还需 {{ milestone.remaining }} 个节点解锁第一组进阶任务。</p><p v-else-if="learningStatus === 'locked'">完成基础讲解和学习复盘后，这里会显示还需要多少个节点才能解锁进阶任务。</p><p v-else>完成基础讲解和学习复盘后，系统会在下一个学习里程碑生成实践入口。</p><RouterLink class="button button--primary" to="/learning/fundamentals">继续基础学习</RouterLink></section>
 
     <template v-else>
       <template v-if="!practiceOpen">
@@ -30,7 +30,7 @@
         <aside class="surface surface-pad decision-reason"><p class="eyebrow">推荐依据</p><h2>根据你的基础学习</h2><p>{{ task.context?.reason || task.recommendation || '系统会根据当前学习节点生成实践入口。' }}</p><div class="decision-reason__line"><span>学习节点</span><strong>{{ task.context?.node_title || '当前节点' }}</strong></div><div class="decision-reason__line"><span>节点状态</span><strong>{{ task.context?.node_status_label || path.stage || '学习中' }}</strong></div><div class="decision-reason__line"><span>学习材料</span><strong>{{ task.context?.resource_label || `${task.resources?.length || 0} 份关联材料` }}</strong></div><div class="decision-reason__line"><span>路径进度</span><strong>{{ path.stage || '基础到应用' }}</strong></div></aside>
       </section>
 
-      <section v-if="optionalTasks.length" class="task-catalog"><div class="catalog-heading"><div><p class="eyebrow">可选实践任务</p><h2>换一个情境练习迁移</h2></div><span>第 {{ milestone.current }} 个里程碑 · {{ optionalTasks.length }} 个可选任务</span></div><div class="catalog-grid" role="list">
+      <section v-if="optionalTasks.length" class="task-catalog"><div class="catalog-heading"><div><p class="eyebrow">可选实践任务</p><h2>换一个情境练习迁移</h2></div><span v-if="hasMilestone">第 {{ milestone.current }} 个里程碑 · {{ optionalTasks.length }} 个可选任务</span><span v-else>{{ optionalTasks.length }} 个可选任务</span></div><div class="catalog-grid" role="list">
         <button v-for="item in optionalTasks" :key="item.id" type="button" class="catalog-card" :class="{ 'is-selected': item.id === task.id }" :aria-pressed="item.id === task.id" :aria-label="`选择${item.kind_label || '实践任务'}：${item.title}`" @click="selectTask(item)"><span class="catalog-card__top"><strong>{{ item.kind_label || '实践任务' }}</strong><small>{{ item.difficulty_label || '当前阶段' }}</small></span><h3>{{ item.title }}</h3><p>{{ item.why || item.brief }}</p><span class="catalog-card__footer"><span>{{ item.practice_status_label || (item.id === task.id ? '当前已选' : item.status === 'completed' ? '已完成' : '选择任务') }}</span><ArrowUpRight :size="14" /></span></button>
       </div></section>
       </template>
@@ -71,7 +71,11 @@ const chapterContent = ref('')
 const resourceId = ref(null)
 const profile = reactive({ identity: '', direction: '', goal: '' })
 const path = reactive({ stage: '', progress: 0, completed_nodes: 0, total_nodes: 0 })
-const milestone = reactive({ size: 10, unlock_nodes: 10, completed_nodes: 0, current: 0, next: 10, remaining: 10 })
+const milestone = reactive({ size: 0, unlock_nodes: 0, completed_nodes: 0, current: 0, next: 0, remaining: 0 })
+// 里程碑是后端算出来的。原来给了一组 {size:10, unlock_nodes:10, ...} 的默认值，
+// 后端漏字段时页面会显示"已完成 0 / 10 个基础学习节点，还需 10 个节点"和"第 0 个里程碑"
+// ——看着像真实进度，其实是编的。所以改成：后端给了才显示数字。
+const hasMilestone = ref(false)
 const unwrap = (response) => response?.data?.data ?? response?.data ?? null
 function getTaskWorkspace(value) {
   const workspace = value?.workspace || {}
@@ -95,6 +99,7 @@ async function loadTask() {
     Object.assign(profile, result?.profile || {})
     Object.assign(path, result?.path || { stage: '', progress: 0, completed_nodes: 0, total_nodes: 0 })
     Object.assign(milestone, result?.milestone || {})
+    hasMilestone.value = Boolean(result?.milestone)
     const source = Array.isArray(result?.tasks) && result.tasks.length ? result.tasks : (result?.task ? [result.task] : [])
     tasks.value = result?.status === 'ready' ? source : []
     task.value = tasks.value.find((item) => String(item.id) === String(route.query.taskId)) || tasks.value.find((item) => item.status === 'active') || tasks.value[0] || null
