@@ -892,6 +892,8 @@ class PathService:
                     "order_index": r.node.order_index if r.node else 0,
                     "status": r.node_status,
                     "quiz_passed": r.quiz_passed,
+                    # 与 get_current_path / get_node 保持一致，前端兜底路径依赖它复用已有测验。
+                    "session_id": r.quiz_session_id,
                 }
                 for r in sorted(records, key=lambda x: x.node.order_index if x.node else 0)
             ],
