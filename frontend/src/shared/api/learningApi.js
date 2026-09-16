@@ -12,6 +12,6 @@ export const learningApi = {
   getMastery: () => httpClient.get('/exam/mastery'),
   getLearningGuidance: () => httpClient.get('/study/learning-guidance'),
   getExamWeekly: () => httpClient.get('/study/exam-weekly'),
-  submitDiagnosis: (payload) => httpClient.post('/learning/diagnosis', payload),
-  saveDecision: (payload) => httpClient.post('/learning/decisions', payload),
+  // 诊断走 diagnosisApi（/learning/diagnosis/start|answer|…/stream）。
+  // 这里曾有一个 POST /learning/diagnosis，但后端只注册了子路径，调用必 404。
 }
