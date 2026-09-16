@@ -145,6 +145,7 @@
               :quiz-config="nodeDetail?.quiz_config || {}"
               @close="closeChapterCheck"
               @passed="handleChapterPassed"
+              @session="handleQuizSession"
             />
 
             <template v-else>
@@ -900,12 +901,22 @@ async function selectNodeFromDrawer(nodeId) {
 async function selectNode(nodeId, updateUrl = true) {
   const node = learningPath.value?.nodes.find((item) => item.id === nodeId)
   if (!node || node.status === 'locked') return
+  // Captured before activeNodeId is reassigned below, otherwise it always matches.
+  const isSameLoadedNode = activeNodeId.value != null
+    && Number(activeNodeId.value) === Number(nodeId)
+    && Boolean(documentContent.value)
   if (activeNodeId.value && activeNodeId.value !== nodeId) await reportReadDuration(true)
   activeNodeId.value = nodeId
   resourceView.value = 'document'
   resourceDownloadError.value = ''
   isChecking.value = false
   if (updateUrl) router.replace({ query: { ...route.query, node: nodeId } })
+  // Re-selecting the chapter already on screen only needs the view state reset above.
+  // Posting generate-resources again would re-run the idempotent backend path for
+  // nothing. documentContent is cleared at the start of every loadActiveNode and only
+  // refilled on a successful read, so it means "this chapter is already usable".
+  // Keeping documentError out of the condition leaves the retry path reachable.
+  if (isSameLoadedNode && !isResourceLoading.value && !documentError.value) return
   await loadActiveNode()
 }
 
@@ -1141,6 +1152,15 @@ async function openChapterCheck() {
 function closeChapterCheck() {
   isChecking.value = false
   if (documentContent.value && document.visibilityState === 'visible') openedAt = Date.now()
+}
+
+// Same reason as FoundationTestPage: a freshly generated session_id stays inside
+// ChapterCheck, so reopening the panel would fall back to the stale prop and
+// generate another set of questions.
+function handleQuizSession(sessionId) {
+  if (!sessionId) return
+  if (activeNode.value) activeNode.value.session_id = sessionId
+  if (nodeDetail.value) nodeDetail.value.quiz_session_id = sessionId
 }
 
 async function handlePrimaryAction() {

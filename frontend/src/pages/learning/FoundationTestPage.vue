@@ -137,6 +137,7 @@
           @close="leaveTest"
           @passed="handlePassed"
           @submitted="handleSubmitted"
+          @session="handleQuizSession"
         />
         <FeynmanCoach
           v-else-if="canStartTest && activeTab === 'feynman'"
@@ -336,6 +337,15 @@ function handleSubmitted(result) {
 
 function handlePassed() {
   notice.value = '题目测试已通过。你可以继续做一次费曼反讲，确认自己能够独立讲清楚。'
+}
+
+// A freshly generated session_id only lives inside ChapterCheck, so remounting the
+// component (switching tabs) falls back to the stale prop and generates a new quiz.
+// Writing it back onto the node keeps :session-id usable across remounts.
+function handleQuizSession(sessionId) {
+  if (!sessionId) return
+  if (activeNode.value) activeNode.value.session_id = sessionId
+  if (nodeDetail.value) nodeDetail.value.quiz_session_id = sessionId
 }
 
 onMounted(loadPage)
