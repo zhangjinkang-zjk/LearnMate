@@ -1073,6 +1073,9 @@ class PathService:
                 job.publish(_resource_event_from_record(r, path_id=path_id, node_id=node_id))
 
             bound_ids: list[int] | None = None
+            # 必须早于 _bind_current：missing_types 为空时会在生成分支之前调用它，
+            # 若此时 generated_ids 尚未绑定，闭包读取会抛 NameError。
+            generated_ids: list[int] = []
 
             async def _bind_current() -> None:
                 """把当前已知的 id 集合绑上去；没有新东西就不重复写库。"""
@@ -1092,8 +1095,6 @@ class PathService:
 
             if gen_types:
                 job.publish(_status_event(f"开始生成 {len(gen_types)} 种资源..."))
-
-            generated_ids: list[int] = []
 
             def _remember_generated_id(value) -> bool:
                 """记下一个新生成的资源 id；返回是否确实新增。"""

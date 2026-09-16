@@ -37,8 +37,10 @@ from backend.src.utils.json_parser import parse_llm_json
 from backend.src.utils.slide_schema import PPT_SPEAKER_NOTES_MAX_CHARS, limit_speaker_notes
 from backend.src.service.path.teaching_context import format_teaching_context
 from backend.src.service.resource.document_quality import (
+    document_meaningful_length,
     evaluate_key_point_coverage,
     validate_document_chapter,
+    validate_document_safety,
     validate_document_section,
 )
 from backend.src.service.resource.persistence import is_failed_generation_content
@@ -56,6 +58,12 @@ def _int_env(name: str, default: int) -> int:
 PPT_TARGET_CONCURRENT_USERS = max(1, _int_env("PPT_TARGET_CONCURRENT_USERS", 5))
 PPT_MAX_SECTIONS_PER_REQUEST = max(1, _int_env("PPT_MAX_SECTIONS_PER_REQUEST", 19))
 _PPT_GLOBAL_GEN_SEM = asyncio.Semaphore(PPT_TARGET_CONCURRENT_USERS * PPT_MAX_SECTIONS_PER_REQUEST)
+
+# 文档小节重写次数；以及整章校验不达标时允许的整章重修轮数。
+# 两者都用尽后保留尽力稿并留痕 —— 文档生成不再因为"没通过质量检查"抛异常，
+# 否则同一批并行生成的 PPT / 思维导图会被一起作废，用户看到任务凭空中断。
+_DOC_SECTION_ATTEMPTS = 2
+_DOC_CHAPTER_REPAIR_ROUNDS = 1
 
 # 资源类型 → 默认 prompt 路径
 PROMPT_MAP = {
@@ -1211,6 +1219,31 @@ def _fallback_document_outline(
     return result
 
 
+def _fallback_document_section(topic: str, section_title: str) -> str:
+    """某一节彻底生成不出来时的兜底正文。
+
+    与 ``_fallback_ppt_section`` 同一个取舍：宁可给一节"怎么学"的稳定骨架，
+    也不要让整章因为一节写砸而作废。这里刻意不写任何学科结论 —— 兜底稿是确定性的，
+    编造具体知识点等于把幻觉固化进教材。也不写"待补充"这类占位语，那会让整份文档在
+    复用校验里被判成坏内容，每次进章节都被重新生成一遍。
+    """
+    safe_title = re.sub(r"[#<>`$]", "", str(section_title or topic)).strip() or "本小节"
+    return (
+        f"## {safe_title}\n\n"
+        f"这一节用来把「{safe_title}」放回「{topic}」的完整学习链条里。先确认它讨论的对象是什么、"
+        "在什么条件下成立、要解决哪一类问题，再进入具体细节；这三件事说不清楚时，后面的例子和结论都会变成死记硬背。"
+        "把对象、条件、目标三句话写下来，贴在笔记最上面，后面每读到一步都回头对一遍，能对上的才是真正读懂了。\n\n"
+        "接着用一个最小规模的情形检验理解：把每一步为什么成立都说出来，而不是直接跳到结果。"
+        "如果某一步解释不了，说明前面某个环节还没接上，应该回到上一节把它补完，再回到这里继续推。"
+        "最小例子的价值在于它足够小、可以手工走完全过程，任何含糊的地方都会立刻暴露出来。\n\n"
+        "然后把这节内容和上一节接起来：说明上一节的结论在这里用到了哪里，这一节的结果又会怎样被下一节使用。"
+        "学习材料里的每一节都不是孤立的，能说清前后依赖关系，才能在做综合题时知道该从哪一步入手、"
+        "遇到卡壳时该退回到哪个环节重看。\n\n"
+        "最后对照常见错误自查：符号位置、适用条件和单位是否对得上，有没有把只在特殊情形下成立的结论当成普遍规律。"
+        "把本节内容写成几句可以复查的话，并标出哪些已经能独立解释、哪些还需要回到材料确认，这样下一节的推进才有依据。\n"
+    )
+
+
 def _normalize_document_outline(
     value,
     topic: str,
@@ -1248,6 +1281,34 @@ def _strip_outer_markdown_fence(content: str) -> str:
         flags=re.IGNORECASE,
     )
     return match.group(1).strip() if match else text
+
+
+def _promote_section_heading(content: str) -> str:
+    """把小节开头的三级标题提回二级。
+
+    ``validate_document_section`` 接受 ``##`` 或 ``###``，但整章校验只数 ``^##``。
+    模型把某一节的标题写成 ``###`` 时，整章就会因为"小节不足三个"被判不达标，
+    而这是**重写正文修不好**的问题 —— 重写只会再随机一次标题层级。所以在这里
+    确定性地对齐，而不是拿一次重写去赌。
+    """
+    text = str(content or "").lstrip()
+    return re.sub(r"^###(\s+)", r"##\1", text, count=1)
+
+
+def _document_repair_targets(parts: list[str], chapter_errors: list[str]) -> list[int]:
+    """把整章校验意见映射回具体小节。
+
+    定得住的（某一节自己就含占位语、代码块没闭合）只改那一节，不连累写好的部分；
+    定不住的（字数不足、缺一级标题这种整章性的问题）就整章重修 —— 只补最短的一节
+    通常还是凑不够字数，白花一次调用。
+    """
+    targets: set[int] = set()
+    for index, part in enumerate(parts):
+        if validate_document_safety(part):
+            targets.add(index)
+    if not targets or any("字符" in error for error in chapter_errors):
+        targets.update(range(len(parts)))
+    return sorted(targets)
 
 
 async def generate_doc_outline(
@@ -1348,15 +1409,20 @@ async def generate_document_parallel(
     total = len(sections)
     completed_count = [0]
 
-    async def gen_section(idx: int, section_title: str) -> tuple[int, str]:
+    async def gen_section(
+        idx: int,
+        section_title: str,
+        chapter_feedback: str = "",
+        repair_round: int = 0,
+    ) -> tuple[int, str]:
         section_agent_id = f"executor:document:section-{idx}"
         _push_agent_event(
             stream_writer,
             section_agent_id,
             f"文档第 {idx + 1} 节",
             "executor",
-            "running",
-            f"正在撰写「{section_title}」",
+            "running" if repair_round == 0 else "retrying",
+            f"正在撰写「{section_title}」" if repair_round == 0 else f"正在按整章校验意见重修「{section_title}」",
             resource_type="document",
             current=idx + 1,
             total=total,
@@ -1366,7 +1432,11 @@ async def generate_document_parallel(
                 stream_writer({
                     "type": "stream_progress",
                     "file_type": "document",
-                    "message": f"正在生成第 {idx + 1}/{total} 节「{section_title}」...",
+                    "message": (
+                        f"正在生成第 {idx + 1}/{total} 节「{section_title}」..."
+                        if repair_round == 0
+                        else f"正在按整章校验意见重修第 {idx + 1}/{total} 节「{section_title}」..."
+                    ),
                     "current": idx + 1,
                     "total": total,
                 })
@@ -1388,9 +1458,10 @@ async def generate_document_parallel(
         except Exception:
             logger.exception("[Doc-RAG] 小节知识检索失败 idx=%d section=%s", idx, section_title)
         t0 = time.perf_counter()
-        quality_feedback = feedback
+        quality_feedback = "\n\n".join(part for part in (chapter_feedback, feedback) if part)
+        best_content = ""
         last_error: Exception | None = None
-        for attempt in range(2):
+        for attempt in range(_DOC_SECTION_ATTEMPTS):
             section_prompt = build_resource_prompt(
                 "document",
                 topic,
@@ -1417,7 +1488,11 @@ async def generate_document_parallel(
                     user_id=user_id,
                     pool="document",
                 )
-                content = _strip_outer_markdown_fence(str(response.content or ""))
+                content = _promote_section_heading(
+                    _strip_outer_markdown_fence(str(response.content or ""))
+                )
+                if len(content) > len(best_content):
+                    best_content = content
                 if teaching_context:
                     quality_errors = validate_document_section(content, section_title)
                 elif not content or is_failed_generation_content(content):
@@ -1471,41 +1546,89 @@ async def generate_document_parallel(
                 )
 
         elapsed = time.perf_counter() - t0
+        # 单节重写次数用尽还不达标：留尽力稿，连尽力稿都没有（或它本身就是坏内容）就换兜底骨架。
+        # 这里**不抛异常** —— 抛出去会经 executor 的 gather 连带作废同一批已经生成好的
+        # PPT / 思维导图，用户看到的就是"审核发现问题之后任务直接中断"。
+        section_ok = (
+            not validate_document_section(best_content, section_title)
+            if teaching_context
+            else bool(best_content) and not is_failed_generation_content(best_content)
+        )
+        if not section_ok:
+            best_content = _fallback_document_section(topic, section_title)
+        # 这一节到此为止，标 done；要不要再修由整章校验决定，那一步会另发 executor:document 的 retrying。
         _push_agent_event(
             stream_writer,
             section_agent_id,
             f"文档第 {idx + 1} 节",
             "executor",
-            "failed",
-            f"「{section_title}」未通过质量检查",
+            "done",
+            f"「{section_title}」已完成" if section_ok else f"「{section_title}」使用兜底内容",
             resource_type="document",
             current=idx + 1,
             total=total,
             elapsed_ms=int(elapsed * 1000),
         )
-        raise RuntimeError(f"文档小节「{section_title}」生成失败") from last_error
+        logger.warning(
+            "[Doc-Section] 小节重写次数用尽 idx=%d section=%s 保留尽力稿=%s 长度=%d error=%s",
+            idx, section_title, section_ok, len(best_content), last_error,
+        )
+        return idx, best_content
 
-    tasks = [gen_section(i, s) for i, s in enumerate(sections)]
-    results = await asyncio.gather(*tasks)
+    def _compose(parts: list[str]) -> str:
+        chapter_title = str(
+            (teaching_context or {}).get("current", {}).get("topic") or topic
+        ).strip()
+        return f"# {chapter_title}\n\n" + "\n\n".join(part for part in parts if part)
+
+    results = await asyncio.gather(*(gen_section(i, s) for i, s in enumerate(sections)))
     results.sort(key=lambda x: x[0])
+    parts = [content for _, content in results]
 
-    parts = [content for _, content in results if content]
-    chapter_title = str(
-        (teaching_context or {}).get("current", {}).get("topic") or topic
-    ).strip()
-    combined = f"# {chapter_title}\n\n" + "\n\n".join(parts)
+    combined = _compose(parts)
     chapter_errors = validate_document_chapter(combined, teaching_context) if teaching_context else []
-    if chapter_errors:
+
+    # 整章校验是**生成质量目标**，不是终止条件：不达标就带着校验意见重修被点名的小节，
+    # 修完仍不达标也照样发出（下面的 done 事件带提示），不再抛异常。
+    for repair_round in range(1, _DOC_CHAPTER_REPAIR_ROUNDS + 1):
+        if not chapter_errors:
+            break
+        targets = _document_repair_targets(parts, chapter_errors)
+        logger.warning(
+            "[Doc-Parallel] 整章校验未通过，第 %d 轮重修 sections=%s errors=%s",
+            repair_round,
+            ",".join(str(index) for index in targets),
+            "；".join(chapter_errors),
+        )
         _push_agent_event(
             stream_writer,
             "executor:document",
             "文档生成智能体",
             "executor",
-            "failed",
-            "完整文档未通过质量检查",
+            "retrying",
+            "整章校验发现问题，正在按意见重修",
             resource_type="document",
         )
-        raise RuntimeError("完整文档未通过质量检查：" + "；".join(chapter_errors))
+        chapter_feedback = "整章校验未通过，请针对以下问题完整重写本小节：\n" + "\n".join(
+            f"- {error}" for error in chapter_errors
+        )
+        completed_count[0] = 0
+        repaired = await asyncio.gather(*(
+            gen_section(index, sections[index], chapter_feedback, repair_round)
+            for index in targets
+        ))
+        for index, (_, content) in zip(targets, repaired):
+            parts[index] = content
+        combined = _compose(parts)
+        chapter_errors = validate_document_chapter(combined, teaching_context) if teaching_context else []
+
+    if chapter_errors:
+        logger.warning(
+            "[Doc-Parallel] 整章校验仍未通过，保留尽力稿 topic=%s 字数=%d errors=%s",
+            topic,
+            document_meaningful_length(combined),
+            "；".join(chapter_errors),
+        )
 
     # 关键点覆盖是措辞问题，不作为失败条件：生成用的 prompt 里已经带着同一批关键点，
     # 因为措辞没逐字复现就否决会让同一份文档每次访问都重新生成。这里只留痕，便于排查。
@@ -1518,7 +1641,18 @@ async def generate_document_parallel(
         )
 
     logger.info("[Doc-Parallel] 完成 小节数=%d 全程耗时=%.1fs", len(sections), time.perf_counter() - _t_total)
-    _push_agent_event(stream_writer, "executor:document", "文档生成智能体", "executor", "done", "文档内容生成完成", resource_type="document", current=total, total=total, elapsed_ms=int((time.perf_counter() - _t_total) * 1000))
+    _push_agent_event(
+        stream_writer,
+        "executor:document",
+        "文档生成智能体",
+        "executor",
+        "done",
+        "文档内容生成完成" if not chapter_errors else "文档已生成，整章校验仍有待改进项",
+        resource_type="document",
+        current=total,
+        total=total,
+        elapsed_ms=int((time.perf_counter() - _t_total) * 1000),
+    )
 
     if stream_writer:
         try:
@@ -1714,15 +1848,48 @@ async def executor_node(state: ResourceState) -> dict:
     doc_coro = _run_doc()
     image_coro = _run_image()
 
+    def _survive(branch: str, value):
+        """并行分支不允许互相拖累：某一路炸了就丢掉那一路，其余照常交付。"""
+        if not isinstance(value, BaseException):
+            return value
+        logger.error("[Executor] %s 分支异常，已单独放弃：%s", branch, value, exc_info=value)
+        _push_agent_event(
+            writer,
+            f"executor:{branch}",
+            resource_agent_name(branch),
+            "executor",
+            "failed",
+            f"{resource_agent_name(branch)}生成失败",
+            resource_type=branch,
+        )
+        return None
+
     if thread_types:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
             other_futures = asyncio.gather(
-                *[loop.run_in_executor(pool, gen_one_sync, rt) for rt in thread_types]
+                *[loop.run_in_executor(pool, gen_one_sync, rt) for rt in thread_types],
+                return_exceptions=True,
             )
-            ppt_content, doc_content, image_result, other_results = await asyncio.gather(ppt_coro, doc_coro, image_coro, other_futures)
+            ppt_content, doc_content, image_result, other_results = await asyncio.gather(
+                ppt_coro, doc_coro, image_coro, other_futures, return_exceptions=True
+            )
     else:
         other_results = []
-        ppt_content, doc_content, image_result = await asyncio.gather(ppt_coro, doc_coro, image_coro)
+        ppt_content, doc_content, image_result = await asyncio.gather(
+            ppt_coro, doc_coro, image_coro, return_exceptions=True
+        )
+
+    ppt_content = _survive("ppt", ppt_content)
+    doc_content = _survive("document", doc_content)
+    image_result = _survive("image", image_result)
+
+    survived_results = []
+    for item in other_results or []:
+        if isinstance(item, BaseException):
+            logger.error("[Executor] 线程池资源分支异常，已单独放弃：%s", item, exc_info=item)
+            continue
+        survived_results.append(item)
+    other_results = survived_results
 
     logger.info("[Executor] 全部生成完成 并行总耗时=%.2fs types=%s", time.perf_counter() - t_gen_start, resource_types)
     _push_agent_event(

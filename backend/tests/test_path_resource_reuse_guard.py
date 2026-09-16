@@ -56,7 +56,7 @@ async def test_invalid_bound_document_is_unbound_without_deleting_record(monkeyp
         user_id=7,
         topic="文档切分",
         resource_type="document",
-        content="# 旧文档\n\n内容不完整",
+        content="# 旧文档\n\n待补充",
     )
     valid_mindmap = SimpleNamespace(
         id=202,
@@ -78,13 +78,13 @@ async def test_invalid_bound_document_is_unbound_without_deleting_record(monkeyp
     def filter_progress(**filters):
         return FakeQuery(update_callback=lambda fields: binding_updates.append((filters, fields)))
 
-    def fake_validate(content, context):
-        validation_calls.append((content, context))
-        return ["文档有效内容不足 900 字符"]
+    def fake_validate(content):
+        validation_calls.append(content)
+        return ["文档包含省略或待补充占位语"]
 
     monkeypatch.setattr(helpers.GeneratedResource, "filter", filter_resources)
     monkeypatch.setattr(helpers.UserPathProgress, "filter", filter_progress)
-    monkeypatch.setattr(helpers, "validate_document_chapter", fake_validate)
+    monkeypatch.setattr(helpers, "validate_document_safety", fake_validate)
 
     existing, missing = await helpers.get_bound_node_resources(
         progress,
@@ -96,13 +96,56 @@ async def test_invalid_bound_document_is_unbound_without_deleting_record(monkeyp
 
     assert [record.id for record in existing] == [202]
     assert missing == ["document"]
-    assert len(validation_calls) == 1
+    assert validation_calls == ["# 旧文档\n\n待补充"]
     assert resource_queries == [{"id__in": [101, 202], "user_id": 7}]
     assert binding_updates == [
         ({"id": 41, "user_id": 7}, {"resource_ids": "[202]"}),
     ]
     assert progress.resource_ids == "[202]"
-    assert invalid_document.content == "# 旧文档\n\n内容不完整"
+    assert invalid_document.content == "# 旧文档\n\n待补充"
+
+
+@pytest.mark.asyncio
+async def test_short_but_sound_document_is_reused_instead_of_regenerated(monkeypatch):
+    """复用校验只拦坏内容。
+
+    曾经这里用的是整章质量目标（≥900 字、≥3 个小节），于是一份"短但完好"的成稿
+    每次进章节都被解绑、再整章重新生成一遍；生成侧又修不动这些目标，就成了死循环。
+    """
+    progress = SimpleNamespace(
+        id=43,
+        resource_ids=json.dumps([505]),
+        node_status="in_progress",
+    )
+    short_document = SimpleNamespace(
+        id=505,
+        user_id=7,
+        topic="文档切分",
+        resource_type="document",
+        content="# 文档切分\n\n## 语义边界\n\n短，但内容本身是完好的。",
+    )
+    binding_updates = []
+
+    def filter_resources(**filters):
+        return FakeQuery(records=[short_document])
+
+    def filter_progress(**filters):
+        return FakeQuery(update_callback=lambda fields: binding_updates.append((filters, fields)))
+
+    monkeypatch.setattr(helpers.GeneratedResource, "filter", filter_resources)
+    monkeypatch.setattr(helpers.UserPathProgress, "filter", filter_progress)
+
+    existing, missing = await helpers.get_bound_node_resources(
+        progress,
+        7,
+        ["document"],
+        topic="文档切分",
+        teaching_context=_teaching_context(),
+    )
+
+    assert [record.id for record in existing] == [505]
+    assert missing == []
+    assert binding_updates == [], "完好的成稿不该被解绑"
 
 
 @pytest.mark.asyncio

@@ -15,7 +15,7 @@ from backend.src.models.portraitmodel import User_picture
 from backend.src.models.resource_model import GeneratedResource
 from backend.src.models.usermodel import User
 from backend.src.service.notification.service import check_and_create_node_unlocked
-from backend.src.service.resource.document_quality import validate_document_chapter
+from backend.src.service.resource.document_quality import validate_document_safety
 from backend.src.service.resource.persistence import is_failed_generation_content
 from backend.src.service.path.teaching_context import PATH_DEFAULT_RESOURCE_TYPES
 from backend.src.ai_core.ppt_planner import PPT_MAX_PAGES_PER_DECK
@@ -144,7 +144,10 @@ async def get_bound_node_resources(
             rejected_ids.add(record.id)
             continue
         if resource_type == "document" and teaching_context is not None:
-            quality_errors = validate_document_chapter(record.content, teaching_context)
+            # 复用校验只拦"内容本身是坏的"。曾经这里用的是整章质量目标
+            # （≥900 字、≥3 个小节），于是任何一份稍短的成稿每次进章节都会被解绑、
+            # 然后整章重新生成一遍 —— 生成侧修不动这些目标时就成了死循环。
+            quality_errors = validate_document_safety(record.content)
             if quality_errors:
                 rejected_ids.add(record.id)
                 logger.info(
