@@ -37,6 +37,7 @@ from backend.src.utils.json_parser import parse_llm_json
 from backend.src.utils.slide_schema import PPT_SPEAKER_NOTES_MAX_CHARS, limit_speaker_notes
 from backend.src.service.path.teaching_context import format_teaching_context
 from backend.src.service.resource.document_quality import (
+    evaluate_key_point_coverage,
     validate_document_chapter,
     validate_document_section,
 )
@@ -564,7 +565,7 @@ async def generate_ppt_parallel(
                     from backend.src.utils.slide_schema import slides_to_markdown
                     return _repair_ppt_content(slides_to_markdown(section_title, slides).strip(), section_title)
             except Exception:
-                logger.debug("[PPT-Gen] structured output normalization failed", exc_info=True)
+                logger.debug("[PPT-Gen] 结构化输出归一化失败", exc_info=True)
 
         first_title = re.search(r"(?m)^\s{0,3}#{1,2}\s+\S+", content)
         if first_title and first_title.start() > 0:
@@ -753,7 +754,7 @@ async def generate_ppt_parallel(
                 "content": _content,
             })
         except Exception:
-            logger.debug("[PPT-Parallel] section_complete emit failed idx=%s", _idx, exc_info=True)
+            logger.debug("[PPT-Parallel] 小节完成事件发送失败 idx=%s", _idx, exc_info=True)
 
     async def _review_ppt_section(content: str, section_title: str, format_checked: bool = False) -> dict:
         """调用 reviewer 审核单个章节，返回 {passed, score, feedback}
@@ -800,7 +801,7 @@ async def generate_ppt_parallel(
                     "current": idx + 1, "total": total,
                 })
             except Exception:
-                logger.warning("Suppressed exception at backend/src/ai_core/resource_graph.py:711", exc_info=True)
+                logger.warning("已忽略异常 backend/src/ai_core/resource_graph.py:711", exc_info=True)
 
         is_portrait_section = has_portrait and idx == 0
 
@@ -819,7 +820,7 @@ async def generate_ppt_parallel(
                         f"【课程级知识库检索】\n{kb}"
                     )
             except Exception:
-                logger.exception("[PPT-RAG] section knowledge search failed idx=%d section=%s", idx, section_title)
+                logger.exception("[PPT-RAG] 小节知识检索失败 idx=%d section=%s", idx, section_title)
 
         base_prompt = build_resource_prompt(
             ppt_prompt_key, topic, portrait=_eff_portrait, kb=section_kb, guidance=_eff_guidance,
@@ -894,7 +895,7 @@ async def generate_ppt_parallel(
                         "section_title": _title,
                     })
                 except Exception:
-                    logger.warning("Suppressed exception at backend/src/ai_core/resource_graph.py:804", exc_info=True)
+                    logger.warning("已忽略异常 backend/src/ai_core/resource_graph.py:804", exc_info=True)
             _push_section(_idx, _content, _title)
 
         round_idx = 0
@@ -920,7 +921,7 @@ async def generate_ppt_parallel(
                         "current": idx + 1, "total": total,
                     })
                 except Exception:
-                    logger.warning("Suppressed exception at backend/src/ai_core/resource_graph.py:830", exc_info=True)
+                    logger.warning("已忽略异常 backend/src/ai_core/resource_graph.py:830", exc_info=True)
 
             # 拼接审核反馈到 prompt
             if not is_first_round and review_feedback:
@@ -1369,7 +1370,7 @@ async def generate_document_parallel(
                     "total": total,
                 })
             except Exception:
-                logger.warning("Suppressed exception at backend/src/ai_core/resource_graph.py:1173", exc_info=True)
+                logger.warning("已忽略异常 backend/src/ai_core/resource_graph.py:1173", exc_info=True)
 
         prev_section = sections[idx - 1] if idx > 0 else "（无）"
         next_section = sections[idx + 1] if idx < len(sections) - 1 else "（无）"
@@ -1384,7 +1385,7 @@ async def generate_document_parallel(
                     f"【节点级知识库检索】\n{kb}"
                 )
         except Exception:
-            logger.exception("[Doc-RAG] section knowledge search failed idx=%d section=%s", idx, section_title)
+            logger.exception("[Doc-RAG] 小节知识检索失败 idx=%d section=%s", idx, section_title)
         t0 = time.perf_counter()
         quality_feedback = feedback
         last_error: Exception | None = None
@@ -1446,7 +1447,7 @@ async def generate_document_parallel(
                         elapsed_ms=int(elapsed * 1000),
                     )
                     logger.info(
-                        "[Doc-Section] %d/%d idx=%d section=%s len=%d elapsed=%.2fs",
+                        "[Doc-Section] 已完成 %d/%d idx=%d section=%s 长度=%d 耗时=%.2fs",
                         completed_count[0], total, idx, section_title, len(content), elapsed,
                     )
                     return idx, content
@@ -1457,13 +1458,13 @@ async def generate_document_parallel(
                 )
                 last_error = ValueError(quality_feedback)
                 logger.warning(
-                    "[Doc-Section] quality retry idx=%d attempt=%d errors=%s",
+                    "[Doc-Section] 质量不达标触发重试 idx=%d 第 %d 次 errors=%s",
                     idx, attempt + 1, quality_errors,
                 )
             except Exception as error:
                 last_error = error
                 logger.warning(
-                    "[Doc-Section] generation retry idx=%d attempt=%d error=%s",
+                    "[Doc-Section] 生成失败触发重试 idx=%d 第 %d 次 error=%s",
                     idx, attempt + 1, error,
                     exc_info=True,
                 )
@@ -1505,6 +1506,16 @@ async def generate_document_parallel(
         )
         raise RuntimeError("完整文档未通过质量检查：" + "；".join(chapter_errors))
 
+    # 关键点覆盖是措辞问题，不作为失败条件：生成用的 prompt 里已经带着同一批关键点，
+    # 因为措辞没逐字复现就否决会让同一份文档每次访问都重新生成。这里只留痕，便于排查。
+    coverage_gaps = evaluate_key_point_coverage(combined, teaching_context) if teaching_context else []
+    if coverage_gaps:
+        logger.info(
+            "[Doc-Parallel] 关键点覆盖提示 topic=%s gaps=%s",
+            (teaching_context or {}).get("current", {}).get("topic"),
+            "；".join(coverage_gaps),
+        )
+
     logger.info("[Doc-Parallel] 完成 小节数=%d 全程耗时=%.1fs", len(sections), time.perf_counter() - _t_total)
     _push_agent_event(stream_writer, "executor:document", "文档生成智能体", "executor", "done", "文档内容生成完成", resource_type="document", current=total, total=total, elapsed_ms=int((time.perf_counter() - _t_total) * 1000))
 
@@ -1512,7 +1523,7 @@ async def generate_document_parallel(
         try:
             stream_writer({"type": "stream_progress", "file_type": "document", "message": "文档生成完成", "current": total, "total": total})
         except Exception:
-            logger.warning("Suppressed exception at backend/src/ai_core/resource_graph.py:1282", exc_info=True)
+            logger.warning("已忽略异常 backend/src/ai_core/resource_graph.py:1282", exc_info=True)
 
     return combined
 
@@ -1626,7 +1637,7 @@ async def executor_node(state: ResourceState) -> dict:
                 "file_url": file_url or "",
             })
         except Exception:
-            logger.debug("[Executor] resource_complete emit failed rt=%s", rt, exc_info=True)
+            logger.debug("[Executor] 资源完成事件发送失败 rt=%s", rt, exc_info=True)
 
     async def _run_ppt():
         if not has_ppt:

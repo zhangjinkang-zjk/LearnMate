@@ -101,14 +101,14 @@ class MockClassroomASR:
                 "raw": MockClassroomASR._compact_raw_result(result),
             }
         except ImportError:
-            logger.warning("[MockClassroom] FunASR is not installed", exc_info=True)
+            logger.warning("[MockClassroom] 未安装 FunASR", exc_info=True)
             return {
                 "status": "failed",
                 "text": "",
                 "message": "本地 ASR 依赖未安装，暂时无法把音频转成文字。",
             }
         except Exception as exc:
-            logger.warning("[MockClassroom] FunASR failed: %s", exc, exc_info=True)
+            logger.warning("[MockClassroom] FunASR 执行失败：%s", exc, exc_info=True)
             return {
                 "status": "failed",
                 "text": "",
@@ -200,7 +200,7 @@ class MockClassroomASR:
                 "raw": {key: value for key, value in payload.items() if key != "text"},
             }
         except Exception as exc:
-            logger.warning("[MockClassroom] ASR failed: %s", exc, exc_info=True)
+            logger.warning("[MockClassroom] ASR 识别失败：%s", exc, exc_info=True)
             return {
                 "status": "failed",
                 "text": "",

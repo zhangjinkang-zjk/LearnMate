@@ -35,7 +35,7 @@ def _cleanup_old_files():
                     f.unlink()
                     cleaned += 1
             except OSError:
-                logger.debug("Suppressed exception at backend/src/utils/scheduler.py:33", exc_info=True)
+                logger.debug("已忽略异常 backend/src/utils/scheduler.py:33", exc_info=True)
         if d.name != "_cache" and d.parent.name == "audio":
             continue
     audio_dir = STATIC_DIR / "audio"
@@ -46,7 +46,7 @@ def _cleanup_old_files():
                     if not any(sub.iterdir()):
                         sub.rmdir()
                 except OSError:
-                    logger.debug("Suppressed exception at backend/src/utils/scheduler.py:46", exc_info=True)
+                    logger.debug("已忽略异常 backend/src/utils/scheduler.py:46", exc_info=True)
     if cleaned:
         logger.info("清理过期文件 %d 个", cleaned)
 

@@ -226,7 +226,7 @@ async def search_recent_web_brief(query: str, max_results: int = 3) -> list[dict
         # 课堂等待页只在结果已返回后做卡片字段裁剪，不再维护另一套搜索兜底。
         results, search_note = await _search_searxng(cleaned_query)
     except (httpx.RequestError, RuntimeError, ValueError) as exc:
-        logger.warning("[Search][ClassroomBrief] request failed query=%r error=%s", cleaned_query, exc)
+        logger.warning("[Search][ClassroomBrief] 请求失败 query=%r error=%s", cleaned_query, exc)
         return []
 
     briefs: list[dict[str, str]] = []
@@ -251,7 +251,7 @@ async def search_recent_web_brief(query: str, max_results: int = 3) -> list[dict
         if len(briefs) >= limit:
             break
     logger.info(
-        "[Search][ClassroomBrief] query=%r raw=%s briefs=%s note=%s",
+        "[Search][ClassroomBrief] 查询 query=%r raw=%s briefs=%s note=%s",
         cleaned_query,
         len(results),
         len(briefs),

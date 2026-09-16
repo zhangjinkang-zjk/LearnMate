@@ -93,7 +93,7 @@ class ResourceTaskService:
                 else:
                     await redis.expire(lock_key, 30)
             except Exception:
-                logger.debug("Redis task lock unavailable; creating task without duplicate guard")
+                logger.debug("Redis 任务锁不可用；创建任务时不做重复校验")
 
         chat_group_id = await ensure_chat_group_id(user_id, chat_group_id, bind_chat_history)
         task_id = uuid.uuid4().hex

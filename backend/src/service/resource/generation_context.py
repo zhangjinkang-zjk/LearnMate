@@ -125,15 +125,15 @@ async def make_generation_state(
     t_gather = time.perf_counter()
 
     if isinstance(learning_guidance, Exception):
-        logger.exception("学习指导生成失败 user_id=%s", user_id)
+        logger.error("学习指导生成失败 user_id=%s", user_id, exc_info=learning_guidance)
         learning_guidance = ""
 
     if isinstance(kb_result, Exception):
-        logger.exception("知识库搜索失败 topic=%s", topic)
+        logger.error("知识库搜索失败 topic=%s", topic, exc_info=kb_result)
         kb_result = "暂无相关知识库资料"
 
     if isinstance(skills, Exception):
-        logger.exception("Skills 查询失败 user_id=%s", user_id)
+        logger.error("Skills 查询失败 user_id=%s", user_id, exc_info=skills)
         skills = []
 
     base_portrait_parts = []
@@ -170,7 +170,7 @@ async def make_generation_state(
 
     t_total = time.perf_counter() - t0
     logger.info(
-        "make_generation_state total=%.2fs chat=%.2fs gather=%.2fs portrait=%.2fs topic=%s types=%s",
+        "构建生成状态 make_generation_state 总耗时=%.2fs chat=%.2fs gather=%.2fs portrait=%.2fs topic=%s types=%s",
         t_total,
         t_init - t0,
         t_gather - t_init,

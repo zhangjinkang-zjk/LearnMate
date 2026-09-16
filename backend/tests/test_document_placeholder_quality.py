@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from backend.src.service.resource.document_quality import (
+    evaluate_key_point_coverage,
     validate_document_chapter,
     validate_document_section,
 )
@@ -81,3 +82,70 @@ raise NotImplementedError("TBD")
         "文档质量检查",
     ) == []
     assert validate_document_chapter(_make_chapter(code_examples)) == []
+
+
+_COVERAGE_PARAGRAPH = (
+    "文档切分决定了检索时每个片段能承载多少语义信息，块大小过大时会混入多个主题，"
+    "块大小过小时又会丢掉上下文。实践中通常先按语义边界切分，再通过窗口重叠把相邻"
+    "片段的衔接部分补回来，使跨越边界的问题仍然能够被召回。"
+)
+
+
+def _coverage_chapter() -> str:
+    sections = [
+        f"## {title}\n\n{_COVERAGE_PARAGRAPH * 4}"
+        for title in ("切分粒度", "窗口重叠", "召回验证")
+    ]
+    return "# 文档切分策略：块大小与重叠调优\n\n" + "\n\n".join(sections)
+
+
+def _coverage_context(key_points: list[str], topic: str = "文档切分策略：块大小与重叠调优") -> dict:
+    return {"current": {"topic": topic, "teaching_spec": {"key_points": key_points}}}
+
+
+def test_coverage_gap_is_advisory_and_never_blocks_the_document():
+    """Coverage depends on wording, so it must not reject a structurally sound chapter.
+
+    The generating prompt already carries these key points, so a wording mismatch
+    would repeat on every regeneration instead of converging.
+    """
+    chapter = _coverage_chapter()
+    context = _coverage_context(["文档切分与块重叠"])
+
+    # 正文写了「文档切分」「窗口重叠」，但没有逐字写出「块重叠」这一段。
+    assert "块重叠" not in chapter
+    assert evaluate_key_point_coverage(chapter, context) != []
+    assert validate_document_chapter(chapter, context) == []
+
+
+@pytest.mark.parametrize(
+    "key_point",
+    [
+        "文档切分/窗口重叠",
+        "文档切分与窗口重叠",
+        "文档切分（块大小、窗口重叠）",
+    ],
+)
+def test_composite_key_points_match_their_own_terms(key_point):
+    """Composite key points are authored with delimiters, so match them per term."""
+    assert evaluate_key_point_coverage(_coverage_chapter(), _coverage_context([key_point])) == []
+
+
+def test_aspect_suffix_matches_the_bare_concept():
+    """「文档切分作用」 names a concept plus an angle; the text only writes the concept."""
+    assert evaluate_key_point_coverage(_coverage_chapter(), _coverage_context(["文档切分作用"])) == []
+
+
+def test_unrelated_key_points_are_still_reported():
+    """The advisory signal must not degrade into always-clean."""
+    gaps = evaluate_key_point_coverage(
+        _coverage_chapter(),
+        _coverage_context(["向量检索", "余弦相似度", "近邻搜索"]),
+    )
+    assert len(gaps) == 3
+
+
+def test_topic_only_key_points_are_never_flagged():
+    """`key_points == [topic]` is the deliberate fallback and always hits the H1."""
+    context = _coverage_context(["文档切分策略：块大小与重叠调优"])
+    assert evaluate_key_point_coverage(_coverage_chapter(), context) == []

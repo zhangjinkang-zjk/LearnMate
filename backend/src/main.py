@@ -124,7 +124,7 @@ async def startup():
         from backend.src.utils.knowledge_base import _get_embed_model_async
         await _get_embed_model_async()
     else:
-        logger.info("BGE preload skipped by PRELOAD_BGE_ON_STARTUP=false")
+        logger.info("PRELOAD_BGE_ON_STARTUP=false，已跳过 BGE 预加载")
     # 启动定时任务（周报 + AI 建议）
     from backend.src.utils.scheduler import start
     start()

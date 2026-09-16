@@ -234,7 +234,7 @@ class StudyRoomService:
         try:
             session = await StudyRoomService._get_session(user_id, session_key)
         except StudyRoomNotFound:
-            logger.warning("[StudyRoom] timelapse skipped, session not found: %s", session_key)
+            logger.warning("[StudyRoom] 未找到会话，跳过延时摄影：%s", session_key)
             return
 
         if not session.vlog_enabled:
@@ -252,7 +252,7 @@ class StudyRoomService:
 
         ffmpeg_bin = StudyRoomService._ffmpeg_bin()
         if not ffmpeg_bin:
-            logger.warning("[StudyRoom] ffmpeg not found, timelapse failed session=%s", session.session_key)
+            logger.warning("[StudyRoom] 未找到 ffmpeg，延时摄影失败 session=%s", session.session_key)
             await StudyRoomService._mark_timelapse(session, "failed", None)
             return
 
@@ -291,12 +291,12 @@ class StudyRoomService:
                 f"/static/study-room/{session.session_key}/timelapse.mp4",
             )
         except Exception:
-            logger.warning("[StudyRoom] timelapse generation failed session=%s", session.session_key, exc_info=True)
+            logger.warning("[StudyRoom] 延时摄影生成失败 session=%s", session.session_key, exc_info=True)
             if tmp_output_path.exists():
                 try:
                     tmp_output_path.unlink()
                 except OSError:
-                    logger.debug("[StudyRoom] cleanup tmp timelapse failed", exc_info=True)
+                    logger.debug("[StudyRoom] 清理延时摄影临时文件失败", exc_info=True)
             await StudyRoomService._mark_timelapse(session, "failed", None)
 
     @staticmethod

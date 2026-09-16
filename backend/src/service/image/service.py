@@ -135,7 +135,7 @@ async def _save_image_history(info: dict, images: list[dict]) -> None:
         url = image.get("url") or ""
         lines.append(f"- [{label}]({url})" if url else f"- {label}")
 
-    _logger.info("_save_image_history() user_id=%s chat_group_id=%s prompt=%s",
+    _logger.info("保存图片历史 _save_image_history() user_id=%s chat_group_id=%s prompt=%s",
                   info.get("user_id"), info.get("chat_group_id"), info.get("prompt", "")[:60])
     await ChatHistory.create(
         user=user,
@@ -163,7 +163,7 @@ async def submit(prompt: str, user_id: int, aspect_ratio: str = "1:1", img_count
         raise RuntimeError("用户不存在")
 
     chat_group_id = chat_group_id if chat_group_id and chat_group_id > 0 else await allocate_chat_group_id(user_id)
-    _logger.info(f"submit user_id={user_id} chat_group_id={chat_group_id}")
+    _logger.info(f"提交图片任务 submit user_id={user_id} chat_group_id={chat_group_id}")
 
     prompt_json = json.dumps({
         "image": [],
@@ -330,7 +330,7 @@ async def poll_once(task_id: str, save_history: bool = True) -> dict | None:
                 # 子任务 task_status: 3=成功, 1-2=排队/处理中, 0/4=失败
                 sub_status = item.get("task_status", -1)
                 sub_completion = item.get("task_completion", 0)
-                _logger.info(f"task_id={task_id} sub_task_id={item.get('sub_task_id')} "
+                _logger.info(f"图片子任务状态 task_id={task_id} sub_task_id={item.get('sub_task_id')} "
                              f"task_status={sub_status} task_completion={sub_completion} "
                              f"image={item.get('image', '')[:80]} image_wm={item.get('image_wm', '')[:80]}")
                 if not img_url:

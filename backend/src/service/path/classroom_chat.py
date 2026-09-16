@@ -564,7 +564,7 @@ async def stream_classroom_chat(
             full_response = ""
             started_at = time.monotonic()
             logger.info(
-                "[ClassroomChat] stream started user=%s path=%s node=%s segment=%s group=%s",
+                "[ClassroomChat] 流式开始 user=%s path=%s node=%s segment=%s group=%s",
                 user_id,
                 path_id,
                 node_id,
@@ -605,7 +605,7 @@ async def stream_classroom_chat(
                 persist_memory=False,
             )
             logger.info(
-                "[ClassroomChat] stream finished user=%s path=%s node=%s chars=%s elapsed=%.2fs",
+                "[ClassroomChat] 流式结束 user=%s path=%s node=%s 字数=%s 耗时=%.2fs",
                 user_id,
                 path_id,
                 node_id,
@@ -617,7 +617,7 @@ async def stream_classroom_chat(
         yield _sse({"error": str(exc)})
         yield _sse(None, done=True)
     except Exception:
-        logger.exception("classroom chat failed user_id=%s path_id=%s node_id=%s", user_id, path_id, node_id)
+        logger.exception("课堂对话失败 user_id=%s path_id=%s node_id=%s", user_id, path_id, node_id)
         yield _sse({"error": "LearnMate 助教暂时无法回复，请稍后重试"})
         yield _sse(None, done=True)
 

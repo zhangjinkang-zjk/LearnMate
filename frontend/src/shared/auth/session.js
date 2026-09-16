@@ -16,6 +16,9 @@ export function clearAuthSession() {
     'learnmate_goal',
     'learnmate_onboarding_complete',
     'learnmate_diagnosis_result',
+    // Set when the profile is confirmed, cleared when the diagnosis is answered.
+    // Without this, an abandoned diagnosis would send the next account here.
+    'learnmate_diagnosis_pending',
   ]) {
     localStorage.removeItem(key)
   }

@@ -252,5 +252,80 @@ async def test_teaching_context_disables_global_cache_for_stream(monkeypatch):
     assert events[-1] == "data: [DONE]\n\n"
 
 
+_CHAPTER_PARAGRAPH = (
+    "文档切分决定了检索时每个片段能承载多少语义信息，块大小过大时会混入多个主题，"
+    "块大小过小时又会丢掉上下文。实践中通常先按语义边界切分，再通过窗口重叠把相邻"
+    "片段的衔接部分补回来，使跨越边界的问题仍然能够被召回。判断切分是否合适，"
+    "要看召回结果里是否同时出现完整语义和足够的上下文线索。"
+)
+
+
+def _paraphrased_chapter() -> str:
+    """A structurally valid chapter that never writes the key point verbatim."""
+    sections = [
+        f"## {title}\n\n{_CHAPTER_PARAGRAPH * 3}"
+        for title in ("切分粒度", "窗口重叠", "召回验证")
+    ]
+    return "# 文档切分策略：块大小与重叠调优\n\n" + "\n\n".join(sections)
+
+
+@pytest.mark.asyncio
+async def test_bound_document_with_paraphrased_key_points_stays_bound(monkeypatch):
+    """Regression: a wording mismatch must not unbind an otherwise valid document.
+
+    The generating prompt carries the same key points, so re-running generation
+    reproduces the same wording.  Unbinding on coverage made every visit to the
+    chapter regenerate the whole document forever.  Uses the real validator.
+    """
+    chapter = _paraphrased_chapter()
+    assert "文档切分" in chapter and "块重叠" not in chapter
+
+    progress = SimpleNamespace(
+        id=51,
+        resource_ids=json.dumps([601]),
+        node_status="in_progress",
+    )
+    bound_document = SimpleNamespace(
+        id=601,
+        user_id=7,
+        topic="文档切分策略：块大小与重叠调优",
+        resource_type="document",
+        content=chapter,
+    )
+    binding_updates = []
+
+    monkeypatch.setattr(
+        helpers.GeneratedResource,
+        "filter",
+        lambda **filters: FakeQuery(records=[bound_document]),
+    )
+
+    def filter_progress(**filters):
+        return FakeQuery(update_callback=lambda fields: binding_updates.append(fields))
+
+    monkeypatch.setattr(helpers.UserPathProgress, "filter", filter_progress)
+
+    # 683 在真实库里的形态：单条 key point 直接来自 knowledge_tags。
+    teaching_context = {
+        "current": {
+            "topic": "文档切分策略：块大小与重叠调优",
+            "teaching_spec": {"key_points": ["文档切分与块重叠"]},
+        },
+    }
+
+    existing, missing = await helpers.get_bound_node_resources(
+        progress,
+        7,
+        ["document"],
+        topic="文档切分策略：块大小与重叠调优",
+        teaching_context=teaching_context,
+    )
+
+    assert [record.id for record in existing] == [601]
+    assert missing == []
+    assert binding_updates == []
+    assert progress.resource_ids == json.dumps([601])
+
+
 async def _async_value(value):
     return value

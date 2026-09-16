@@ -95,7 +95,7 @@ const props = defineProps({
   quizConfig: { type: Object, default: () => ({}) },
 })
 
-const emit = defineEmits(['close', 'passed', 'submitted'])
+const emit = defineEmits(['close', 'passed', 'submitted', 'session'])
 const answers = reactive({})
 const questions = ref([])
 const currentIndex = ref(0)
@@ -190,7 +190,11 @@ async function loadQuiz() {
         if (event?.type === 'status') loadingMessage.value = event.msg || event.message || loadingMessage.value
         if (event?.type === 'blocked') throw new Error(event.reason || '请先完成本章阅读')
         if (event?.type === 'error') throw new Error(event.detail || event.message || '检查题生成失败')
-        if (event?.type === 'done' && event.session_id) activeSessionId.value = event.session_id
+        if (event?.type === 'done' && event.session_id) {
+          activeSessionId.value = event.session_id
+          // 回传父组件，否则本组件被重挂载时父组件仍拿着旧的/空的 session_id，会重新出题。
+          emit('session', event.session_id)
+        }
       }, requestController.signal)
     }
 
@@ -200,6 +204,7 @@ async function loadQuiz() {
       loadingMessage.value = '正在确认检查题会话'
       const generated = await fundamentalsApi.generateQuizNow(props.pathId, props.nodeId)
       activeSessionId.value = generated?.session_id || ''
+      if (activeSessionId.value) emit('session', activeSessionId.value)
     }
     if (!activeSessionId.value) throw new Error('检查题生成完成，但没有返回有效会话')
     const session = await fundamentalsApi.getQuizSession(activeSessionId.value)
