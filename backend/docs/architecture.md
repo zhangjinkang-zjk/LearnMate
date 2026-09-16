@@ -26,7 +26,7 @@ flowchart TB
     end
 
     subgraph Gen["生成服务"]
-        LLM[DeepSeek LLM]
+        LLM[MiMo LLM]
         TTS[EdgeTTS<br/>语音合成]
         IMG[讯飞星火<br/>图片生成]
         PPT[讯飞智文<br/>PPT生成]
@@ -74,7 +74,7 @@ sequenceDiagram
     participant F as 前端
     participant API as FastAPI
     participant AG as Agent管线
-    participant LLM as DeepSeek
+    participant LLM as MiMo
     participant TTS as EdgeTTS
     participant DB as MySQL
 
