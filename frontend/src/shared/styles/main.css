@@ -15,12 +15,12 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #app { min-height: 100%; margin: 0; }
-body { min-width: 320px; overflow-x: hidden; background: var(--stage); }
+html, body, #app { height: 100%; min-height: 100%; margin: 0; }
+body { min-width: 320px; overflow: hidden; background: var(--stage); }
 button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
 
-.app-shell { display: flex; width: 100%; min-height: 100vh; overflow-x: hidden; background: var(--stage); }
+.app-shell { display: flex; width: 100%; height: 100dvh; min-height: 0; overflow: hidden; background: var(--stage); }
 .app-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 20; display: flex; flex-direction: column; width: 112px; padding: 26px 0 22px; background: transparent; color: #eff3e8; pointer-events: none; }
 .brand-lockup { display: flex; align-items: center; justify-content: flex-start; width: 96px; margin: 0 0 0 14px; padding: 0; pointer-events: auto; }
 .brand-name { display: block; color: #ffffff; font-family: Georgia, serif; font-size: 16px; letter-spacing: .01em; text-decoration: none; white-space: nowrap; }
@@ -52,8 +52,8 @@ button { cursor: pointer; }
 .logout-button { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; border: 1px solid rgba(30,60,52,.2); border-radius: 5px; background: transparent; color: rgba(30,60,52,.68); cursor: pointer; transition: background .15s ease, color .15s ease, border-color .15s ease; }
 .logout-button:hover { border-color: rgba(30,60,52,.6); background: rgba(30,60,52,.08); color: #1e3c34; }
 .logout-button:focus-visible { outline: 2px solid #d5f242; outline-offset: 2px; }
-.app-content { width: calc(100% - 112px); min-width: 0; min-height: 100vh; margin-left: 112px; border-radius: 30px 0 0 0; background: #ffffff; overflow: hidden; }
-.app-header { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; min-height: 64px; padding: 0 42px; border-bottom: 1px solid #edf1ed; background: rgba(255,255,255,.94); color: var(--ink); }
+.app-content { display: grid; width: calc(100% - 112px); min-width: 0; height: 100dvh; min-height: 0; grid-template-rows: 64px minmax(0, 1fr); margin-left: 112px; border-radius: 30px 0 0 0; background: #ffffff; overflow: hidden; }
+.app-header { z-index: 10; display: flex; min-height: 0; align-items: center; justify-content: space-between; padding: 0 42px; border-bottom: 1px solid #edf1ed; background: rgba(255,255,255,.94); color: var(--ink); }
 .header-context { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; }
 .header-kicker { color: var(--ink); font-weight: 800; }
 .header-divider { color: #a3ada4; }
@@ -65,8 +65,8 @@ button { cursor: pointer; }
 .header-avatar:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(3,20,13,.28); }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #70aa63; }
 .menu-button { display: none; border: 0; background: transparent; color: var(--ink); font-size: 21px; }
-.page-container { width: min(1180px, 100%); margin: 0 auto; padding: 42px 42px 72px; }
-.page-container--workspace { width: 100%; max-width: none; padding: 24px 28px 48px; }
+.page-container { width: min(1180px, 100%); min-height: 0; margin: 0 auto; padding: clamp(24px, 4vh, 42px) 42px clamp(32px, 6vh, 58px); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
+.page-container--workspace { width: 100%; max-width: none; padding: clamp(18px, 3vh, 24px) 28px clamp(24px, 5vh, 40px); }
 .sidebar-backdrop { display: none; }
 
 .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 34px; }
@@ -132,8 +132,8 @@ button { cursor: pointer; }
   .menu-button { display: inline-flex; }
   .header-context { margin-right: auto; margin-left: 12px; }
   .header-actions { display: none; }
-  .page-container { padding: 30px 20px 58px; }
-  .page-container--workspace { padding: 18px 14px 40px; }
+  .page-container { padding: 24px 20px 40px; }
+  .page-container--workspace { padding: 16px 14px 28px; }
   .grid--three, .grid--two { grid-template-columns: 1fr; }
   .page-heading { display: block; }
   .page-actions { margin-top: 18px; }

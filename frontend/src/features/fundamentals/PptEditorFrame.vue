@@ -34,8 +34,8 @@ watch(() => [props.content, props.title, props.themeId], loadEditor, { immediate
 </script>
 
 <style scoped>
-.ppt-editor-frame { min-height: min(760px, calc(100vh - 148px)); overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
-.ppt-editor-frame iframe { display: block; width: 100%; height: min(760px, calc(100vh - 148px)); min-height: 620px; border: 0; }
+.ppt-editor-frame { height: min(760px, calc(100dvh - 210px)); min-height: 440px; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+.ppt-editor-frame iframe { display: block; width: 100%; height: 100%; min-height: 0; border: 0; }
 .ppt-editor-frame__empty { display: grid; min-height: 360px; place-items: center; color: var(--muted); font-size: 13px; }
-@media (max-width: 680px) { .ppt-editor-frame { min-height: 620px; border-radius: 5px; }.ppt-editor-frame iframe { min-height: 620px; } }
+@media (max-width: 680px) { .ppt-editor-frame { height: min(620px, calc(100dvh - 170px)); min-height: 400px; border-radius: 5px; } }
 </style>
