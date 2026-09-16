@@ -1009,7 +1009,6 @@ class PathService:
         node_id: int,
         resource_types: list[str] | None,
         llm_priority: str,
-        rag_mode: str | None = None,
     ) -> None:
         """作业生产者 —— 原来的生成主体，改成把事件 publish 出去而不是 yield。
 
@@ -1018,7 +1017,7 @@ class PathService:
         """
         try:
             await PathService._generate_node_resources_into(
-                job, user_id, path_id, node_id, resource_types, llm_priority, rag_mode
+                job, user_id, path_id, node_id, resource_types, llm_priority
             )
         except asyncio.CancelledError:
             # 只有进程关停会走到这里。留一个终端事件，但绝不吞掉取消。
@@ -1039,7 +1038,6 @@ class PathService:
         node_id: int,
         resource_types: list[str] | None,
         llm_priority: str,
-        rag_mode: str | None = None,
     ) -> None:
         node = await PathNode.filter(id=node_id, path_id=path_id).first()
         if not node:
@@ -1120,9 +1118,6 @@ class PathService:
                         include_request_in_history=False,
                         save_to_chat_history=False,
                         teaching_context=teaching_context,
-                        # rag_mode 走已有的 answers 契约（infer_rag_mode 认这个键），
-                        # 不传则维持原来的推断行为。
-                        answers={"rag_mode": rag_mode} if rag_mode else None,
                     ):
                         if event_str.startswith("data:") and "[DONE]" not in event_str:
                             try:
@@ -1175,19 +1170,17 @@ class PathService:
         user_id: int,
         resource_types: list[str] | None = None,
         llm_priority: str = "high",
-        rag_mode: str | None = None,
     ):
         """流式消费该节点的资源生成作业（SSE）。
 
         本函数只是订阅者：生成跑在独立的后台作业里（见 node_resource_jobs），
         所以客户端断开只会退订，不会中断生成；再次请求会挂到同一个作业上而不是重跑一遍。
         """
-        # 模式进 key：已有一个 reference 作业在跑时，不能把请求 strict 的客户端挂上去。
-        key = (int(user_id), int(path_id), int(node_id), str(rag_mode or ""))
+        key = (int(user_id), int(path_id), int(node_id))
         job = await ensure_job(
             key,
             lambda target: PathService._run_node_resource_job(
-                target, user_id, path_id, node_id, resource_types, llm_priority, rag_mode
+                target, user_id, path_id, node_id, resource_types, llm_priority
             ),
         )
         async for chunk in stream_job(job):

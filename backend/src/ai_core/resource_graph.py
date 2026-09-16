@@ -114,6 +114,7 @@ class ResourceState(TypedDict):
     ppt_theme_id: NotRequired[str]
     rag_mode: NotRequired[str]
     teaching_context: NotRequired[dict]
+    consistency_issues: NotRequired[list]
 
 
 # ═══════════════════════════════════════
@@ -1984,6 +1985,115 @@ def should_review(state: ResourceState) -> str:
 
 
 # ═══════════════════════════════════════
+#  跨章节交叉验证（ConsistencyReviewer）
+# ═══════════════════════════════════════
+
+_CONSISTENCY_PROMPT = "agent/consistency_reviewer"
+_CONSISTENCY_MAX_SECTIONS = 12
+_CONSISTENCY_SECTION_CHARS = 400
+
+
+def split_document_sections(document: str) -> list[tuple[str, str]]:
+    """把成稿切成 [(章节标题, 正文)]。
+
+    真实成稿的约定是 `# {topic}` 作文档标题、`## {小节}` 作章节（已核对库里的实际文档），
+    所以按 H2 切；H1 只是兜底。少于两个章节就没有"跨章节"可言，返回空。
+    """
+    text = str(document or "")
+    if not text.strip():
+        return []
+    for pattern in (r"(?m)^##\s+", r"(?m)^#\s+"):
+        parts = re.split(pattern, text)
+        if len(parts) <= 2:
+            continue
+        sections: list[tuple[str, str]] = []
+
+        # parts[0] 在真实成稿里就是 `# 标题` 那一行，直接丢；但如果标题后面还跟着
+        # 成段的内容，那就是一段没有小标题的前言，丢掉会让交叉验证看不见它。
+        head = parts[0].strip()
+        if head.startswith("#"):
+            head = head.split("\n", 1)[1].strip() if "\n" in head else ""
+        if len(head) > 80:
+            sections.append(("前言", head))
+
+        for part in parts[1:]:
+            lines = part.splitlines()
+            title = lines[0].strip() if lines else ""
+            body = "\n".join(lines[1:]).strip()
+            if title or body:
+                sections.append((title, body))
+        if len(sections) >= 2:
+            return sections
+    return []
+
+
+async def cross_validator_node(state: ResourceState) -> dict:
+    """ConsistencyReviewer: 在成稿上做跨章节交叉验证。
+
+    `reviewer_node` 是**逐章节**审的（generate_document_parallel 内部就是
+    生成→审核→重生成的循环），结构上只看得到单节，看不到节与节之间的问题。
+    这里补的是那一层：概念重复 / 符号冲突 / 逻辑断层 / 前后矛盾 ——
+    其中「前后矛盾」正是幻觉最典型的表征，单节自洽的文本一样会有。
+
+    只报告、不改判：不动 review_passed / retry_count，因此不会改变既有的
+    重试语义，也不会因为这里多判一次而多跑一轮生成。
+    """
+    writer = _safe_stream_writer()
+    document = str((state.get("generated_resources") or {}).get("document") or "")
+    sections = split_document_sections(document)
+
+    if len(sections) < 2:
+        _push_agent_event(
+            writer, "cross_validator", "ConsistencyReviewer", "reviewer", "skipped",
+            "章节数不足两节，无需跨章节验证", sections=len(sections),
+        )
+        return {"consistency_issues": []}
+
+    _push_agent_event(
+        writer, "cross_validator", "ConsistencyReviewer", "reviewer", "reviewing",
+        f"正在对 {len(sections)} 个章节做交叉验证", sections=len(sections),
+    )
+
+    digest = "\n\n".join(
+        f"### {title}\n{body[:_CONSISTENCY_SECTION_CHARS]}"
+        for title, body in sections[:_CONSISTENCY_MAX_SECTIONS]
+    )
+    try:
+        prompt = fill_prompt(load_prompt(_CONSISTENCY_PROMPT), content=digest)
+        response = await llm.ainvoke(
+            prompt,
+            priority=state.get("llm_priority", "high"),
+            user_id=int(state.get("user_id", 0)),
+            pool="reviewer",
+        )
+        parsed = parse_llm_json(str(response.content or "").strip())
+    except Exception:
+        logger.exception("[交叉验证] 调用失败 topic=%s", state.get("topic", ""))
+        _push_agent_event(
+            writer, "cross_validator", "ConsistencyReviewer", "reviewer", "failed",
+            "交叉验证未能完成，已跳过",
+        )
+        return {"consistency_issues": []}
+
+    raw_issues = parsed.get("issues") if isinstance(parsed, dict) else None
+    issues = [item for item in raw_issues if isinstance(item, dict)] if isinstance(raw_issues, list) else []
+    issues = issues[:5]
+
+    _push_agent_event(
+        writer, "cross_validator", "ConsistencyReviewer", "reviewer",
+        "retrying" if issues else "done",
+        f"交叉验证发现 {len(issues)} 处跨章节问题" if issues else "交叉验证通过，未发现跨章节不一致",
+        issue_count=len(issues),
+    )
+    if issues:
+        logger.warning(
+            "[交叉验证] 发现跨章节问题 topic=%s count=%s detail=%s",
+            state.get("topic", ""), len(issues), json.dumps(issues, ensure_ascii=False)[:600],
+        )
+    return {"consistency_issues": issues}
+
+
+# ═══════════════════════════════════════
 #  Graph
 # ═══════════════════════════════════════
 
@@ -1993,6 +2103,7 @@ def build_graph():
     workflow.add_node("leader", leader_node)
     workflow.add_node("executor", executor_node)
     workflow.add_node("reviewer", reviewer_node)
+    workflow.add_node("cross_validator", cross_validator_node)
 
     workflow.add_edge(START, "leader")
     workflow.add_edge("leader", "executor")
@@ -2001,11 +2112,14 @@ def build_graph():
         should_review,
         {"reviewer": "reviewer", "end": END},
     )
+    # 审核判定为"结束"的那一刻（通过，或重试到上限）才做一次跨章节交叉验证；
+    # 还要回 executor 重生成时不做，避免对将被替换的内容白跑一次。
     workflow.add_conditional_edges(
         "reviewer",
         should_continue,
-        {"executor": "executor", "end": END},
+        {"executor": "executor", "end": "cross_validator"},
     )
+    workflow.add_edge("cross_validator", END)
 
     return workflow.compile()
 
