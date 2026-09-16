@@ -15,11 +15,18 @@ export function clearAuthSession() {
     'learnmate_direction',
     'learnmate_goal',
     'learnmate_onboarding_complete',
-    'learnmate_diagnosis_result',
-    // Set when the profile is confirmed, cleared when the diagnosis is answered.
-    // Without this, an abandoned diagnosis would send the next account here.
-    'learnmate_diagnosis_pending',
   ]) {
     localStorage.removeItem(key)
+  }
+  // Also onboarding drafts, but these live in sessionStorage. They used to sit in
+  // the localStorage loop above, where removeItem was a no-op — so on a shared tab
+  // the next account could still read the previous one's diagnosis result
+  // (PortraitSummaryPage reads learnmate_diagnosis_result) and interview answers.
+  for (const key of [
+    'learnmate_diagnosis_result',
+    'learnmate_portrait_dialogue',
+    'learnmate_portrait_summary',
+  ]) {
+    sessionStorage.removeItem(key)
   }
 }

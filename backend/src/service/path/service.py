@@ -598,6 +598,18 @@ class PathService:
             try:
                 final_state = await path_graph.ainvoke(initial_state)
                 nodes_data = final_state.get("nodes", [])
+                # 审核异常的路径会被放行（review_passed 仍为 True），只有 review_source
+                # 能把它和"真的审核通过"区分开。用 WARNING 是为了在日志里能一眼捞出来。
+                review_source = final_state.get("review_source", "llm")
+                log = logger.warning if review_source == "error" else logger.info
+                log(
+                    "路径审核结果 subject=%s passed=%s source=%s nodes=%d retry=%s",
+                    subject,
+                    final_state.get("review_passed"),
+                    review_source,
+                    len(nodes_data),
+                    final_state.get("retry_count", 0),
+                )
             except Exception:
                 logger.exception("Path graph 调用失败 subject=%s", subject)
                 raise RuntimeError("路径生成失败")

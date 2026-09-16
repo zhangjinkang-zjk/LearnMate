@@ -235,14 +235,6 @@ def _prepare_questions_for_storage(questions: list[dict[str, Any]]) -> list[dict
     return prepared
 
 
-def _weight(difficulty: str, question_type: str) -> float:
-    """题目权重：easy=1, medium=2, hard=3，多选 +0.5"""
-    base = {"easy": 1.0, "medium": 2.0, "hard": 3.0}.get(difficulty, 2.0)
-    if (question_type or "").lower() == "multi_choice":
-        base += 0.5
-    return base
-
-
 def _normalize_score(weight: float, total_weight: float) -> float:
     """将权重转为百分制分数"""
     if total_weight == 0:
@@ -270,7 +262,7 @@ def _question_to_dict(q: ExamQuestion) -> dict:
         "analysis": q.analysis,
         "difficulty": q.difficulty,
         "knowledge_tags": _safe_parse(q.knowledge_tags) or [],
-        "weight": 1.0,
+        "weight": float(q.point_value or 1.0),
         "created_at": str(q.created_at),
     }
 
@@ -329,6 +321,9 @@ class ExamService:
         for q in questions:
             qt = (q.get("question_type", "single_choice") or "").lower()
             diff = q.get("difficulty", difficulty)
+            # 每题固定 1 分：会话总分恒为 100，单题得分 = 1/题数*100，不按难度加权。
+            # 这里曾经写入难度权重（easy 1 / medium 2 / hard 3），但聚合处一律
+            # `point_value or 权重`，而 1.0 是 truthy，权重从未生效，已于本次移除。
             pv = 1.0
             record = await ExamQuestion.create(
                 question_type=qt,
@@ -651,7 +646,7 @@ class ExamService:
         correct_count = sum(1 for r in judged if r.is_correct)
         judged_count = len(judged)
         total_weight = sum(
-            float(r.question.point_value or _weight(r.question.difficulty, r.question.question_type))
+            float(r.question.point_value or 1.0)
             for r in session_records if r.question
         )
         earned_weight = sum(float(r.score) for r in session_records if r.score is not None)
@@ -662,7 +657,7 @@ class ExamService:
             "question_id": question_id,
             "is_correct": is_correct,
             "score": question_score,           # 百分制得分
-            "weight": _weight(question.difficulty, question.question_type),
+            "weight": float(question.point_value or 1.0),
             "correct_answer": correct_answer if not is_correct else None,
             "analysis": question.analysis if not is_correct else None,
             "session_id": sid,
@@ -733,7 +728,7 @@ class ExamService:
         correct_count = sum(1 for r in judged if r.is_correct)
         judged_count = len(judged)
         total_weight = sum(
-            float(r.question.point_value or _weight(r.question.difficulty, r.question.question_type))
+            float(r.question.point_value or 1.0)
             for r in records if r.question
         )
         earned_weight = sum(float(r.score) for r in records if r.score is not None)
@@ -776,7 +771,7 @@ class ExamService:
             s = sessions[r.session_id]
             s["total"] += 1
             if r.question:
-                s["total_weight"] += float(r.question.point_value or _weight(r.question.difficulty, r.question.question_type))
+                s["total_weight"] += float(r.question.point_value or 1.0)
             if r.score is not None:
                 s["earned_weight"] += float(r.score)
                 s["judged"] += 1
@@ -809,7 +804,7 @@ class ExamService:
 
         total_correct = sum(1 for r in judged if r.is_correct)
         total_weight = sum(
-            float(r.question.point_value or _weight(r.question.difficulty, r.question.question_type))
+            float(r.question.point_value or 1.0)
             for r in judged if r.question
         )
         earned_weight = sum(float(r.score) for r in judged if r.score is not None)
@@ -823,7 +818,7 @@ class ExamService:
                 if k not in buckets:
                     buckets[k] = {"total": 0, "correct": 0, "total_weight": 0.0, "earned_weight": 0.0}
                 buckets[k]["total"] += 1
-                buckets[k]["total_weight"] += float(r.question.point_value or _weight(r.question.difficulty, r.question.question_type))
+                buckets[k]["total_weight"] += float(r.question.point_value or 1.0)
                 if r.score is not None:
                     buckets[k]["earned_weight"] += float(r.score)
                 if r.is_correct:
@@ -845,7 +840,7 @@ class ExamService:
                 tags = json.loads(r.question.knowledge_tags)
             except (json.JSONDecodeError, TypeError):
                 continue
-            w = float(r.question.point_value or _weight(r.question.difficulty, r.question.question_type))
+            w = float(r.question.point_value or 1.0)
             for tag in tags:
                 if tag not in tag_stats:
                     tag_stats[tag] = {"knowledge_tag": tag, "total": 0, "correct": 0, "total_weight": 0.0, "earned_weight": 0.0}

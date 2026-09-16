@@ -74,7 +74,7 @@
             >
               <ListTree :size="18" />
               <span>章节</span>
-              <small>{{ activeNodeIndex + 1 }}</small>
+              <small>{{ learningPath.nodes.length }}</small>
             </button>
             <span class="workspace-rail__divider" aria-hidden="true"></span>
             <div class="resource-tabs resource-tabs--rail" role="tablist" aria-label="章节材料视图">

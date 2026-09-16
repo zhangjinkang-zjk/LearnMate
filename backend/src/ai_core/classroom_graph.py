@@ -102,6 +102,9 @@ class ClassroomState(TypedDict):
     review_score: NotRequired[float]
     review_feedback: NotRequired[str]              # 未通过时的总体意见
     review_issues: NotRequired[list[dict[str, Any]]]  # [{segment_id, category, message}]
+    # 审核调用异常、按"保留当前幕"放行的幕 id。非空即说明 review_passed 里
+    # 含有故障放行成分，不能当成真的审核通过。
+    review_failed_scenes: NotRequired[list[str]]
     retry_count: NotRequired[int]
 
 
@@ -578,6 +581,10 @@ async def reviewer_node(state: ClassroomState) -> dict:
     llm_priority = state.get("llm_priority", "high")
     logger.info("[ClassroomReviewer] 并行审核开始 trace=%s path=%s node=%s scenes=%s", trace_id, state.get("path_id"), state.get("node_id"), ",".join(_SEGMENT_IDS))
 
+    # 审核崩掉的幕 id 会收集到这里（asyncio 单线程，append 是安全的），
+    # 最后作为 review_failed_scenes 透出，供调用方区分"故障放行"与"审核通过"。
+    failed_scenes: list[str] = []
+
     async def review_scene(scene_id: str) -> tuple[str, bool, float, str, list[dict]]:
         review_started_at = time.perf_counter()
         prompt_text = fill_prompt(
@@ -626,6 +633,9 @@ async def reviewer_node(state: ClassroomState) -> dict:
             )
             return scene_id, passed, score, feedback, normalized_issues
         except Exception:
+            # 审核崩了的幕按通过处理（保留当前内容，避免整课白屏），但记下是哪一幕：
+            # 否则它和"真的审核通过"在下游完全无法区分。
+            failed_scenes.append(scene_id)
             logger.exception("[ClassroomReviewer] 分幕审核失败，保留当前幕 trace=%s path=%s node=%s scene=%s elapsed=%.2fs", trace_id, state.get("path_id"), state.get("node_id"), scene_id, time.perf_counter() - review_started_at)
             return scene_id, True, 0.0, "", []
 
@@ -641,8 +651,9 @@ async def reviewer_node(state: ClassroomState) -> dict:
     ]
     can_retry = not passed and retry_count < state.get("max_retries", _MAX_REVIEW_RETRIES) and bool(actionable_issues)
     next_retry_count = retry_count + 1 if can_retry else retry_count
-    logger.info(
-        "[ClassroomReviewer] 审核完成 trace=%s path=%s node=%s passed=%s score=%.1f issues=%s targeted=%s retry=%s elapsed=%.2fs",
+    log = logger.warning if failed_scenes else logger.info
+    log(
+        "[ClassroomReviewer] 审核完成 trace=%s path=%s node=%s passed=%s score=%.1f issues=%s targeted=%s retry=%s failed_scenes=%s elapsed=%.2fs",
         trace_id,
         state.get("path_id"),
         state.get("node_id"),
@@ -651,6 +662,7 @@ async def reviewer_node(state: ClassroomState) -> dict:
         len(issues),
         ",".join(str(item.get("segment_id")) for item in actionable_issues) or "none",
         next_retry_count,
+        ",".join(sorted(failed_scenes)) or "none",
         time.perf_counter() - started_at,
     )
     return {
@@ -659,6 +671,8 @@ async def reviewer_node(state: ClassroomState) -> dict:
         "review_score": score,
         "review_feedback": feedback[:_REVIEW_FEEDBACK_MAX_LEN] if not passed else "",
         "review_issues": actionable_issues if can_retry else [],
+        # 审核异常被放行的幕；非空表示这次的 passed 里含有故障放行成分。
+        "review_failed_scenes": sorted(failed_scenes),
         "retry_count": next_retry_count,
     }
 

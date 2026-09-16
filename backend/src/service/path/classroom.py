@@ -927,8 +927,11 @@ async def generate_classroom_lesson(
             # 智能体课堂丢掉，造成前端长时间白屏。
             lesson = final_state.get("lesson")
             generated_new_lesson = _is_lesson_ready(lesson)
-            logger.info(
-                "[ClassroomService] 课堂图结束 trace=%s path=%s node=%s user=%s review_passed=%s score=%s retry=%s ready=%s elapsed=%.2fs",
+            failed_scenes = final_state.get("review_failed_scenes") or []
+            # 审核崩掉的幕会被放行，passed 里含故障放行成分；提到 WARNING 便于日志里捞。
+            log = logger.warning if failed_scenes else logger.info
+            log(
+                "[ClassroomService] 课堂图结束 trace=%s path=%s node=%s user=%s review_passed=%s score=%s retry=%s failed_scenes=%s ready=%s elapsed=%.2fs",
                 trace_id,
                 path_id,
                 node_id,
@@ -936,6 +939,7 @@ async def generate_classroom_lesson(
                 bool(final_state.get("review_passed")),
                 final_state.get("review_score"),
                 final_state.get("retry_count", 0),
+                ",".join(str(scene) for scene in failed_scenes) or "none",
                 generated_new_lesson,
                 time.perf_counter() - graph_started_at,
             )

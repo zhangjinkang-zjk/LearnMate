@@ -180,22 +180,11 @@ const enterLearningSpace = async () => {
   // current user's entry flow.
   let hasSavedProfile = false;
   let overviewLoaded = false;
-  // 画像确认时置位，诊断答完清除。没有这一道闸，下面 currentPath 的短路会把
-  // 中途关掉标签页的用户直接送进概览，能力诊断就永久跳过了。
-  // 存量用户没有这个标记，入口行为不变。
-  // 每个浏览器会话只拦一次：诊断接口故障时用户再回首页就能进概览，不会被永久挡在门外。
-  if (
-    localStorage.getItem("learnmate_diagnosis_pending") === "1" &&
-    sessionStorage.getItem("learnmate_diagnosis_gate_shown") !== "1"
-  ) {
-    try {
-      sessionStorage.setItem("learnmate_diagnosis_gate_shown", "1");
-      await router.push("/onboarding/diagnosis");
-    } finally {
-      isEntering.value = false;
-    }
-    return;
-  }
+  // 这里原本有一道 learnmate_diagnosis_pending 闸，用来拦住"画像已确认、诊断未答完"
+  // 的用户，避免下面 currentPath 的短路把他们直接送进概览、能力诊断永久跳过。
+  // 但当前流程是 定向 → 访谈 → 诊断 → 画像确认 → 概览（诊断在前，见 DiagnosisPage 跳
+  // /learnmate-summary），那个中间状态根本进不去；而这个标记前端全库没有任何写入方，
+  // 闸的条件恒为 false，从未触发过，已移除。要恢复它必须先确认写入方在哪一步置位。
   try {
     const currentPathResponse = await learningApi.getCurrentPath();
     if (currentPathResponse?.data?.code === 404) {

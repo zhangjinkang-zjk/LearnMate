@@ -214,6 +214,9 @@ class PathState(TypedDict):
     # Reviewer 输出
     review_passed: NotRequired[bool]
     review_feedback: NotRequired[str]
+    # 审核结论的来源："llm" 正常审核 / "error" 调用异常兜底放行 / "skipped" 无节点可审。
+    # review_passed=True 在 "error" 时是故障放行而非真的通过，消费方需要能区分这两者。
+    review_source: NotRequired[str]
     retry_count: NotRequired[int]
     llm_priority: NotRequired[str]
 
@@ -366,7 +369,7 @@ async def reviewer_node(state: PathState) -> dict:
     t0 = time.perf_counter()
     nodes = state.get("nodes", [])
     if not nodes:
-        return {"review_passed": True, "review_feedback": ""}
+        return {"review_passed": True, "review_feedback": "", "review_source": "skipped"}
 
     subject = state["subject"]
     difficulty = state.get("difficulty", "medium")
@@ -387,8 +390,10 @@ async def reviewer_node(state: PathState) -> dict:
         if not isinstance(result, dict):
             result = {}
     except Exception:
-        logger.exception("[PathReviewer] LLM 调用失败")
-        return {"review_passed": True, "review_feedback": ""}
+        # 审核不可用时不拦路径生成（review_passed 仍为 True，判定不变），
+        # 但必须留下 review_source="error"：否则调用方无法把"故障放行"和"审核通过"分开。
+        logger.exception("[PathReviewer] LLM 调用失败，放行路径 subject=%s", subject)
+        return {"review_passed": True, "review_feedback": "", "review_source": "error"}
 
     passed = result.get("passed", False)
     if isinstance(passed, str):
@@ -399,10 +404,11 @@ async def reviewer_node(state: PathState) -> dict:
 
     retry_count = state.get("retry_count", 0)
     next_retry_count = retry_count if passed else retry_count + 1
-    logger.info(f"[PathReviewer] passed={passed} score={score} issues={len(issues)} retry={next_retry_count} 耗时={time.perf_counter() - t0:.1f}s")
+    logger.info(f"[PathReviewer] passed={passed} source=llm score={score} issues={len(issues)} retry={next_retry_count} 耗时={time.perf_counter() - t0:.1f}s")
     return {
         "review_passed": passed,
         "review_feedback": feedback if not passed else "",
+        "review_source": "llm",
         "retry_count": next_retry_count,
     }
 
