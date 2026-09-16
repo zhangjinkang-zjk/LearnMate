@@ -50,6 +50,7 @@ const messageDraft = ref('')
 const portraitQuestions = ref([])
 const portraitAnswers = ref([])
 const isLoading = ref(false)
+const isSaving = ref(false)
 const messages = ref([])
 const conversationList = ref(null)
 
@@ -61,12 +62,21 @@ const inputPlaceholder = computed(() => (
 
 const scrollToLatest = async () => {
   await nextTick()
-  const element = conversationList.value
-  if (!element) return
-  element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' })
+  requestAnimationFrame(() => {
+    const element = conversationList.value
+    if (!element) return
+    element.scrollTop = element.scrollHeight
+    requestAnimationFrame(() => {
+      element.scrollTop = element.scrollHeight
+    })
+  })
 }
 
-watch([messages, isLoading], scrollToLatest, { deep: true, flush: 'post' })
+watch(
+  () => [messages.value.length, isLoading.value, isSaving.value],
+  () => void scrollToLatest(),
+  { flush: 'post' },
+)
 
 const fallbackQuestionVariants = [
   [
@@ -160,6 +170,7 @@ const sendMessage = async () => {
 }
 
 onMounted(() => {
+  void scrollToLatest()
   void askNextQuestion()
 })
 </script>

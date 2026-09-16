@@ -48,6 +48,14 @@ export const fundamentalsApi = {
     return unwrap(await httpClient.get(`/resource/${resourceId}`))
   },
 
+  async getPathVideo(pathId) {
+    return unwrap(await httpClient.get(`/path/${pathId}/video`))
+  },
+
+  async generatePathVideo(pathId) {
+    return unwrap(await httpClient.post(`/path/${pathId}/video`, undefined, { timeout: 180000 }))
+  },
+
   async markResourceRead(resourceId, durationSeconds = 0) {
     return unwrap(await httpClient.post(`/study/resource/${resourceId}/mark-read`, null, {
       params: { duration_seconds: Math.max(0, Math.round(durationSeconds)) },

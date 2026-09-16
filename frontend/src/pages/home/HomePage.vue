@@ -157,14 +157,11 @@ const entryMessage = ref("");
 const openLogin = (intent = "overview") => {
   loginIntent.value = intent;
   loginError.value = "";
+  loginUsername.value = displayUsername.value || localStorage.getItem("learnmate_username") || "";
   isLoginOpen.value = true;
 };
 
 const handleTopLogin = () => {
-  if (isAuthenticated.value) {
-    void enterLearningSpace();
-    return;
-  }
   openLogin("overview");
 };
 

@@ -17,6 +17,23 @@ function parseDownloadFilename(contentDisposition, fallback) {
 }
 
 export const resourceApi = {
+  async createGenerationTask({ topic, resourceTypes = ['document'], pptThemeId = '' } = {}) {
+    const subject = String(topic || '').trim()
+    if (!subject) throw new Error('请输入想生成的资料说明')
+
+    const types = Array.from(new Set((Array.isArray(resourceTypes) ? resourceTypes : [])
+      .map((type) => String(type || '').trim())
+      .filter(Boolean)))
+    if (!types.length) throw new Error('请选择资料类型')
+
+    return unwrap(await httpClient.post('/resource/generate/task', {
+      topic: subject,
+      resource_types: types,
+      ...(pptThemeId ? { ppt_theme_id: pptThemeId } : {}),
+      save_to_chat_history: false,
+    }))
+  },
+
   async createPptTask({ topic, requirements = '', pptThemeId = 'minimal-white' }) {
     const subject = String(topic || '').trim()
     if (!subject) throw new Error('请输入 PPT 主题')
@@ -48,6 +65,11 @@ export const resourceApi = {
 
   async favorite(resourceId) {
     return unwrap(await httpClient.post(`/resource/${resourceId}/favorite`))
+  },
+
+  async remove(resourceId) {
+    if (!resourceId) throw new Error('资源标识无效')
+    return unwrap(await httpClient.delete(`/resource/${resourceId}`))
   },
 
   async markRead(resourceId, durationSeconds = 1) {
