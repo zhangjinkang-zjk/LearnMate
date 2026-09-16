@@ -652,8 +652,15 @@ class PortraitChatHistory_Service:
         except Exception:
             logger.debug("已忽略异常 backend/src/service/portrait/service.py:449", exc_info=True)
 
-        logger.info("对话画像初始化成功 user_id=%s cognition=%s goal=%s tags=%s",
-                     user_id, cognition, learning_goal, tags)
+        # 只记长度，不记内容：cognition / learning_goal / tags 都是用户画像数据，
+        # 属于赛题「(5) 数据合规与伦理」要求脱敏的交互产物，不该进日志。
+        logger.info(
+            "对话画像初始化成功 user_id=%s cognition_len=%s goal_len=%s tags=%s",
+            user_id,
+            len(cognition or ""),
+            len(learning_goal or ""),
+            len(tags) if isinstance(tags, list) else 0,
+        )
 
         return {
             "cognition": picture.cognition,
@@ -1042,7 +1049,12 @@ async def extract_portrait_from_chat(
         result = parse_llm_json(response.content.strip())
 
         if not result or not isinstance(result, dict):
-            logger.info(f"画像提取无结果 user_id={user_id} result={str(response.content)[:200]}")
+            # 不记 response.content：那是模型对用户访谈原文的抽取结果，含画像数据。
+            logger.info(
+                "画像提取无结果 user_id=%s content_len=%s",
+                user_id,
+                len(str(response.content or "")),
+            )
             return
 
         updated = False

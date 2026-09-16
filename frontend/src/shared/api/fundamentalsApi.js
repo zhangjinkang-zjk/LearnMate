@@ -54,14 +54,18 @@ export const fundamentalsApi = {
     }))
   },
 
-  generateResources(pathId, nodeId, onEvent, signal, resourceTypes = ['document', 'ppt', 'mindmap']) {
+  generateResources(pathId, nodeId, onEvent, signal, resourceTypes = ['document', 'ppt', 'mindmap'], ragMode = null) {
     let requestedTypes = Array.isArray(resourceTypes) && resourceTypes.length
       ? resourceTypes.filter((type) => typeof type === 'string' && type.trim())
       : ['document', 'ppt', 'mindmap']
     if (!requestedTypes.length) requestedTypes = ['document', 'ppt', 'mindmap']
+    // 不传 rag_mode 时后端按 infer_rag_mode 推断（默认 reference）。只有明确要求
+    // 「严格资料模式」时才传 strict —— 知识库为空时 strict 会大量输出"待补充"。
+    const payload = { resource_types: requestedTypes, background: false }
+    if (ragMode) payload.rag_mode = ragMode
     return streamJsonEvents(
       `/path/${pathId}/node/${nodeId}/generate-resources/stream`,
-      { resource_types: requestedTypes, background: false },
+      payload,
       onEvent,
       { signal },
     )

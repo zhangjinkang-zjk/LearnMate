@@ -82,3 +82,11 @@ class GenerateNodeResourcesRequest(BaseModel):
     """为节点生成学习资源（可选指定类型）"""
     resource_types: list[str] | None = Field(default=None, description="指定生成的资源类型；不传则用默认（document/ppt/mindmap）")
     background: bool = Field(default=False, description="是否为后台补全资源；后台任务使用低优先级，避免抢占课堂")
+    rag_mode: str | None = Field(
+        default=None,
+        description=(
+            "知识库使用模式：strict（严格资料模式，只依据知识库）/ reference（智能参考模式，默认）。"
+            "不传则由 infer_rag_mode 按 user_notes 推断。注意 strict 需要知识库确有内容，"
+            "知识库为空时会因检索不到资料而大量输出'待补充'。"
+        ),
+    )

@@ -229,6 +229,36 @@ async def test_late_subscriber_replays_backlog_without_duplicates():
 
 
 @pytest.mark.asyncio
+async def test_rag_mode_reaches_the_generator_and_default_is_unchanged(monkeypatch):
+    """rag_mode 必须真的传到生成器；不传时保持原来的推断行为（answers=None）。
+
+    这条挡的是"参数接了一半又断掉" —— rag_mode 当初就是这么变成死参数的。
+    """
+    seen = []
+
+    async def stream(**kwargs):
+        seen.append(kwargs.get("answers"))
+        yield _done_payload([])
+
+    async def run(rag_mode):
+        saved = []
+        _install(monkeypatch, node_id=707, stream=stream, saved_resource_ids=saved, stream_calls=[])
+        events = [
+            parse_sse_event(e)
+            async for e in path_service.PathService.generate_node_resources_stream(
+                7, 707, 5, rag_mode=rag_mode
+            )
+        ]
+        assert events[-1]["type"] == "done"
+
+    await run("strict")
+    assert seen[-1] == {"rag_mode": "strict"}, f"strict 没传到生成器，实际 {seen[-1]!r}"
+
+    await run(None)
+    assert seen[-1] is None, f"不传时不应改变原行为，实际 {seen[-1]!r}"
+
+
+@pytest.mark.asyncio
 async def test_terminal_event_is_always_last_on_failure(monkeypatch):
     """生成抛异常时，最后一个事件仍然是终端 error。"""
     saved, calls = [], []
