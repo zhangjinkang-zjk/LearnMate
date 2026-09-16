@@ -7,8 +7,13 @@
       </div>
       <div class="mindmap-preview__actions">
         <span class="mindmap-preview__hint">拖动画布查看分支</span>
+        <div class="mindmap-preview__controls" aria-label="思维导图视图控制">
+          <button type="button" title="缩小" aria-label="缩小" :disabled="!isMapReady" @click="changeZoom(-0.12)"><ZoomOut :size="16" /></button>
+          <button type="button" title="适配画布" aria-label="适配画布" :disabled="!isMapReady" @click="fitMapToViewport"><LocateFixed :size="16" /></button>
+          <button type="button" title="放大" aria-label="放大" :disabled="!isMapReady" @click="changeZoom(0.12)"><ZoomIn :size="16" /></button>
+        </div>
         <button
-          class="mindmap-preview__fullscreen"
+          class="mindmap-preview__preview"
           type="button"
           :title="isFullscreen ? '退出全屏预览' : '全屏预览'"
           :aria-label="isFullscreen ? '退出全屏预览' : '全屏预览'"
@@ -16,6 +21,7 @@
         >
           <Minimize2 v-if="isFullscreen" :size="17" />
           <Maximize2 v-else :size="17" />
+          <span>{{ isFullscreen ? '退出预览' : '预览' }}</span>
         </button>
       </div>
     </header>
@@ -29,7 +35,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Maximize2, Minimize2 } from 'lucide-vue-next'
+import { LocateFixed, Maximize2, Minimize2, ZoomIn, ZoomOut } from 'lucide-vue-next'
 import MindElixir from 'mind-elixir'
 import 'mind-elixir/style.css'
 
@@ -42,6 +48,7 @@ const mapEl = ref(null)
 const previewEl = ref(null)
 const errorText = ref('')
 const isFullscreen = ref(false)
+const isMapReady = ref(false)
 let mind = null
 let nodeIndex = 0
 
@@ -90,13 +97,23 @@ function toMindElixirData(value) {
 }
 
 function fitMapToViewport() {
-  requestAnimationFrame(() => { mind?.scaleFit?.(); mind?.toCenter?.() })
+  requestAnimationFrame(() => {
+    mind?.scaleFit?.()
+    mind?.toCenter?.()
+  })
+}
+
+function changeZoom(amount) {
+  if (!mind?.scale) return
+  const currentScale = Number(mind.scaleVal) || 1
+  mind.scale(Math.min(2.4, Math.max(0.35, currentScale + amount)))
 }
 
 async function renderMap() {
   await nextTick()
   if (!mapEl.value) return
   errorText.value = ''
+  isMapReady.value = false
   try {
     if (mind) { mind.destroy(); mind = null }
     mind = new MindElixir({
@@ -111,8 +128,10 @@ async function renderMap() {
       overflowHidden: false,
     })
     mind.init(toMindElixirData(props.content))
+    isMapReady.value = true
     fitMapToViewport()
   } catch (error) {
+    isMapReady.value = false
     errorText.value = error?.message || '知识结构渲染失败'
   }
 }
@@ -148,7 +167,7 @@ onBeforeUnmount(() => {
 .mindmap-preview__header h2 { margin: 0; color: var(--ink); font-size: 17px; }
 .mindmap-preview__actions { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; }
 .mindmap-preview__hint { color: var(--muted); font-size: 10px; }
-.mindmap-preview__fullscreen { display: grid; width: 32px; height: 32px; place-items: center; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); color: var(--ink); }.mindmap-preview__fullscreen:hover { background: var(--soft); color: var(--accent-deep); }.mindmap-preview__fullscreen:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
+.mindmap-preview__controls { display: flex; align-items: center; gap: 4px; }.mindmap-preview__controls button, .mindmap-preview__preview { display: inline-flex; height: 32px; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); color: var(--ink); }.mindmap-preview__controls button { width: 32px; }.mindmap-preview__preview { gap: 5px; padding: 0 9px; font-size: 11px; font-weight: 800; }.mindmap-preview__controls button:hover:not(:disabled), .mindmap-preview__preview:hover { background: var(--soft); color: var(--accent-deep); }.mindmap-preview__controls button:disabled { cursor: not-allowed; opacity: .45; }.mindmap-preview__controls button:focus-visible, .mindmap-preview__preview:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
 .mindmap-canvas { width: 100%; height: clamp(420px, calc(100vh - 320px), 620px); min-height: 420px; background: #f7faf5; }
 .mindmap-canvas.is-hidden { display: none; }
 .mindmap-preview :deep(.map-container) { background: #f7faf5; }
@@ -161,6 +180,7 @@ onBeforeUnmount(() => {
 @media (max-width: 680px) {
   .mindmap-preview__header { align-items: flex-start; flex-direction: column; }
   .mindmap-preview__actions { width: 100%; justify-content: space-between; }
+  .mindmap-preview__hint { display: none; }
   .mindmap-canvas { min-height: 390px; height: 500px; }
 }
 </style>

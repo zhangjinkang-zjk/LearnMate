@@ -6,13 +6,14 @@
       <section class="path-trend-panel">
         <div class="section-heading section-heading--compact"><div><p class="eyebrow path-eyebrow">LEARNING PATH</p><h2>{{ trendMode === 'path' ? '学习路径' : '资源难度匹配' }}</h2><small v-if="path.subject || profile.direction" class="path-subject">{{ path.subject || profile.direction }}</small></div><div class="trend-heading-side"><div class="trend-switch" :class="{ 'is-resource': trendMode === 'resource' }" role="tablist" aria-label="难度曲线类型"><span class="trend-switch-indicator" aria-hidden="true"></span><button type="button" :class="{ 'is-active': trendMode === 'path' }" role="tab" :aria-selected="trendMode === 'path'" @click="trendMode = 'path'">学习路径</button><button type="button" :class="{ 'is-active': trendMode === 'resource' }" role="tab" :aria-selected="trendMode === 'resource'" @click="trendMode = 'resource'">资源匹配</button></div><div class="trend-caption"><span v-if="trendMode === 'path'">当前路径进度 {{ pathProgressLabel }}</span><span v-else>资源难度与当前能力的匹配</span><small>{{ trendMode === 'path' ? '首节点难度 = 1.0' : '实线为资源难度，虚线为当前能力' }}</small></div></div></div>
         <div v-if="activeTrend.length > 1" class="trend-chart" :aria-label="trendMode === 'path' ? '当前学习路径相对难度折线图' : '资源难度与当前能力匹配曲线'">
-          <svg viewBox="0 0 920 180" role="img" :aria-label="trendMode === 'path' ? '学习路径节点相对难度折线图' : '资源难度与当前能力匹配曲线'" preserveAspectRatio="none">
-            <line v-for="level in [25, 50, 75]" :key="level" x1="0" :y1="180 - level * 1.55" x2="920" :y2="180 - level * 1.55" class="chart-grid" />
-            <polyline :points="trendPoints" class="trend-line" :class="{ 'resource-difficulty-line': trendMode === 'resource' }" />
-            <polyline v-if="trendMode === 'resource' && resourceTrendHasUserLevel" :points="userLevelPoints" class="user-level-line" />
-            <circle v-for="(point, index) in activeTrend" :key="point.id" :cx="trendX(index)" :cy="trendY(point.value)" r="4" class="trend-point"><title>{{ point.label }}：{{ point.tooltip }}</title></circle>
+          <svg viewBox="0 0 920 42" role="img" :aria-label="trendMode === 'path' ? '学习路径节点相对难度折线图' : '资源难度与当前能力匹配曲线'" preserveAspectRatio="none">
+            <line v-for="level in [8, 21, 34]" :key="level" x1="0" :y1="level" x2="920" :y2="level" class="chart-grid" />
+            <path v-if="trendMode === 'path'" :d="trendAreaPath" class="trend-area" />
+            <path :d="trendPath" class="trend-line" :class="{ 'resource-difficulty-line': trendMode === 'resource' }" />
+            <path v-if="trendMode === 'resource' && resourceTrendHasUserLevel" :d="userLevelPath" class="user-level-line" />
           </svg>
-          <div class="trend-labels"><span v-for="point in activeTrend" :key="`${point.id}-label`">{{ point.label }}</span></div>
+          <div class="trend-points" aria-hidden="true"><span v-for="(point, index) in activeTrend" :key="point.id" class="trend-point" :style="{ left: `${trendX(index) / 9.2}%`, top: trendPointTop(point.value) }" :title="`${point.label}：${point.tooltip}`"></span></div>
+          <div class="trend-labels" :style="{ gridTemplateColumns: `repeat(${activeTrend.length}, minmax(0, 1fr))` }"><span v-for="point in activeTrend" :key="`${point.id}-label`" :title="point.label">{{ point.label }}</span></div>
         </div>
         <div v-else class="empty-state trend-empty">{{ trendMode === 'path' ? '正在生成学习路径难度数据…' : '正在生成资源难度匹配数据…' }}</div>
       </section>
@@ -31,6 +32,15 @@
     </div>
   </div>
 </template>
+
+<style scoped>
+.overview-page .path-trend-panel .trend-line { stroke-width: 3; filter: drop-shadow(0 2px 2px rgba(30, 60, 52, .12)); }
+.overview-page .trend-area { fill: rgba(30, 60, 52, .08); }
+.overview-page .trend-points { position: absolute; inset: 0 0 16px; }
+.overview-page .trend-points .trend-point { position: absolute; display: block; box-sizing: border-box; width: 10px; height: 10px; border: 2px solid var(--accent-deep); border-radius: 50%; background: var(--paper); box-shadow: 0 1px 3px rgba(30, 60, 52, .18); transform: translate(-50%, -50%); }
+.overview-page .trend-labels { display: grid; gap: 4px; }
+.overview-page .trend-labels span { display: block; overflow: hidden; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+</style>
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
@@ -57,15 +67,58 @@ const resourceTrend = computed(() => path.resourceDifficultyMatch.slice(0, 12).m
 const trendMode = ref('path')
 const activeTrend = computed(() => trendMode.value === 'path' ? pathTrend.value.map((point) => ({ ...point, value: point.relative_difficulty, tooltip: `相对难度 ${point.difficulty_score}` })) : resourceTrend.value)
 const resourceTrendHasUserLevel = computed(() => resourceTrend.value.some((point) => point.user_level !== null))
-const userLevelPoints = computed(() => resourceTrend.value.map((point, index) => `${trendX(index)},${trendY(point.user_level)}`).join(' '))
+const chartHeight = 42
+const chartTop = 6
+const chartBottom = 36
+const trendDomain = computed(() => {
+  const values = activeTrend.value.map((point) => Number(point.value))
+  if (trendMode.value === 'resource') values.push(...resourceTrend.value.filter((point) => point.user_level !== null).map((point) => Number(point.user_level)))
+  const validValues = values.filter(Number.isFinite)
+  if (!validValues.length) return { min: 0, max: 1 }
+
+  const min = Math.min(...validValues)
+  const max = Math.max(...validValues)
+  const span = max - min
+  if (!span) return { min: min - 1, max: max + 1 }
+  const padding = Math.max(span * 0.24, Math.abs(max) * 0.04, 0.15)
+  return { min: min - padding, max: max + padding }
+})
+const userLevelPath = computed(() => smoothPath(resourceTrend.value.map((point, index) => ({ x: trendX(index), y: trendY(point.user_level) }))))
 const masteryItems = computed(() => { const source = (mastery.value.length ? mastery.value : weakPoints.value).slice(0, 6); return source.map((item) => { const tag = item.knowledge_tag || item.tag || item.label; const score = toPercent(item.accuracy ?? item.score); return tag && score !== null ? { tag, shortTag: tag.length > 6 ? `${tag.slice(0, 6)}…` : tag, score, target: 60 } : null }).filter(Boolean) })
 const masteryScore = computed(() => { const summaryScore = Number(overviewSummary.masteryScore); if (overviewSummary.masteryScore !== null && overviewSummary.masteryScore !== undefined && overviewSummary.masteryScore !== '' && Number.isFinite(summaryScore)) return toPercent(summaryScore); const values = masteryItems.value.map((item) => item.score); return values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : null })
 const masteryDelta = computed(() => masteryScore.value === null ? null : masteryScore.value - 60)
 const masteryDeltaLabel = computed(() => `${masteryDelta.value >= 0 ? '+' : ''}${masteryDelta.value}%`)
 const learningSummary = computed(() => overviewSummary.text || '正在生成学习总结…')
-const trendPoints = computed(() => activeTrend.value.map((point, index) => `${trendX(index)},${trendY(point.value)}`).join(' '))
+const trendPath = computed(() => smoothPath(activeTrend.value.map((point, index) => ({ x: trendX(index), y: trendY(point.value) }))))
+const trendAreaPath = computed(() => {
+  const points = activeTrend.value.map((point, index) => ({ x: trendX(index), y: trendY(point.value) }))
+  if (points.length < 2) return ''
+  const firstPoint = points[0]
+  const lastPoint = points[points.length - 1]
+  return `${smoothPath(points)} L ${lastPoint.x} ${chartBottom} L ${firstPoint.x} ${chartBottom} Z`
+})
 const trendX = (index) => activeTrend.value.length < 2 ? 460 : Math.round(index * (920 / (activeTrend.value.length - 1)))
-const trendY = (rate) => 170 - Math.max(0, Math.min(100, Number(rate || 0))) * 1.45
+const trendY = (rate) => {
+  const value = Number(rate)
+  const { min, max } = trendDomain.value
+  const ratio = Number.isFinite(value) && max > min ? Math.max(0, Math.min(1, (value - min) / (max - min))) : 0.5
+  return chartBottom - ratio * (chartBottom - chartTop)
+}
+const trendPointTop = (value) => `${(trendY(value) / chartHeight) * 100}%`
+
+function smoothPath(points) {
+  if (!points.length) return ''
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`
+
+  let path = `M ${points[0].x} ${points[0].y}`
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1]
+    const current = points[index]
+    const midpoint = Math.round((previous.x + current.x) / 2)
+    path += ` C ${midpoint} ${previous.y}, ${midpoint} ${current.y}, ${current.x} ${current.y}`
+  }
+  return path
+}
 function formatDuration(seconds) { const value = Number(seconds || 0); if (value < 60) return `${value}秒`; const minutes = Math.round(value / 60); if (minutes < 60) return `${minutes}分钟`; return `${(minutes / 60).toFixed(1)}小时` }
 
 const pathProgressLabel = computed(() => path.progress === null ? '正在生成' : `${path.progress}%`)

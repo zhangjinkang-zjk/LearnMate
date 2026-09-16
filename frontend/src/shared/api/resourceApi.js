@@ -1,4 +1,5 @@
 import httpClient from './httpClient'
+import { streamJsonEvents } from './sseClient'
 
 const unwrap = (response) => response?.data?.data ?? response?.data ?? response
 
@@ -51,6 +52,14 @@ export const resourceApi = {
   async getGenerationTask(taskId) {
     if (!taskId) throw new Error('生成任务标识无效')
     return unwrap(await httpClient.get(`/resource/generate/task/${taskId}`))
+  },
+
+  watchGenerationTask(taskId, onEvent, signal) {
+    if (!taskId) throw new Error('生成任务标识无效')
+    return streamJsonEvents(`/resource/generate/task/${taskId}/stream`, undefined, onEvent, {
+      method: 'GET',
+      signal,
+    })
   },
 
   async get(resourceId) {

@@ -1,6 +1,6 @@
 <template>
   <div class="profile-page">
-    <PageTitle eyebrow="LEARNING PROFILE" title="个人画像" />
+    <PageTitle eyebrow="学习档案" title="个人画像" />
 
     <div v-if="loading" class="profile-state surface" aria-live="polite"><LoaderCircle class="spin" :size="20" /> 正在读取你的用户画像</div>
     <div v-else class="profile-layout">
@@ -18,7 +18,7 @@
       </section>
 
       <section class="portrait-radar surface" aria-labelledby="radar-title">
-        <div class="section-heading"><div><p class="eyebrow">LEARNING PROFILE</p><h2 id="radar-title">能力画像</h2><p class="radar-method">综合参考练习表现、知识覆盖与学习投入</p></div><span class="radar-updated">{{ radarUpdatedLabel }}</span></div>
+        <div class="section-heading"><div><p class="eyebrow">学习能力</p><h2 id="radar-title">能力画像</h2><p class="radar-method">综合参考练习表现、知识覆盖与学习投入</p></div><span class="radar-updated">{{ radarUpdatedLabel }}</span></div>
         <div v-if="hasRadarData" class="radar-layout">
           <svg class="radar-chart" viewBox="0 0 300 280" role="img" aria-label="六维能力雷达图">
             <polygon v-for="level in radarLevels" :key="level" :points="radarRingPoints(level)" class="radar-ring" />
@@ -33,8 +33,8 @@
       </section>
 
       <section class="portrait-traits surface" aria-labelledby="traits-title">
-        <div class="section-heading"><div><p class="eyebrow">PORTRAIT TRAITS</p><h2 id="traits-title">学习特征</h2></div><span class="radar-updated">{{ traitItems.length }} 项记录</span></div>
-        <div v-if="traitItems.length" class="trait-grid"><article v-for="item in traitItems" :key="item.key" class="trait-item"><span class="trait-label">{{ item.label }}</span><p>{{ item.value }}</p><small v-if="item.confidence">可信度 {{ item.confidence }}%</small></article></div>
+        <div class="section-heading"><div><p class="eyebrow">学习特征</p><h2 id="traits-title">学习特征</h2></div><span class="radar-updated">{{ displayTraitItems.length }} 项记录</span></div>
+        <div v-if="displayTraitItems.length" class="trait-grid"><article v-for="item in displayTraitItems" :key="item.key" class="trait-item"><span class="trait-label">{{ item.label }}</span><p>{{ item.value }}</p><small v-if="item.confidence">可信度 {{ item.confidence }}%</small></article></div>
         <div v-else class="profile-empty"><UserRound :size="20" /> 完成画像访谈后，这里会显示你的学习特征。</div>
       </section>
     </div>
@@ -72,6 +72,109 @@ const formatTraitValue = (key, raw, depth = 0) => {
   }).filter(Boolean).join('；')
 }
 const traitItems = computed(() => Object.entries(portrait.traits || {}).map(([key, raw]) => { const value = formatTraitValue(key, raw); if (!value) return null; const confidence = typeof raw === 'object' && Number.isFinite(Number(raw.confidence)) ? Math.round(Number(raw.confidence) * 100) : 0; return { key, label: traitLabels[key] || key, value, confidence } }).filter(Boolean))
+const displayTraitLabels = {
+  onboarding: '学习定向',
+  learning_signals: '学习动态',
+  learning_direction: '学习方向',
+  learning_direction_goal: '学习目标',
+  learning_direction_subjects: '学习主题',
+  identity: '身份',
+  direction: '学习方向',
+  goal: '学习目标',
+  total_events: '学习记录',
+  activity_counts: '学习活动',
+  last_event: '最近学习',
+  created_at: '创建时间',
+  updated_at: '更新时间',
+  cognition: '认知偏好',
+  learning_goal: '学习目标',
+  profile_summary: '画像总结',
+  knowledge_mastery: '知识掌握情况',
+  learning_pace: '学习节奏',
+  interest: '兴趣方向',
+  strengths: '学习强项',
+  weaknesses: '待提升方向',
+}
+
+const learningEventLabels = {
+  resource_read: '阅读学习资料',
+  resource_download: '下载学习资料',
+  resource_saved: '保存学习资料',
+  node_completed: '完成章节学习',
+  lesson_completed: '完成课程学习',
+  quiz_completed: '完成测试',
+  quiz_submitted: '提交测试',
+  practice_completed: '完成练习',
+}
+
+function formatPortraitDate(value) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+function formatLearningEvent(type) {
+  return learningEventLabels[type] || '学习活动'
+}
+
+function formatOnboardingTrait(raw) {
+  if (!raw) return ''
+  if (typeof raw !== 'object') return '已完成学习定向'
+  return [
+    ['direction', '学习方向'],
+    ['goal', '学习目标'],
+    ['identity', '身份'],
+  ].map(([key, label]) => raw[key] ? `${label}：${raw[key]}` : '').filter(Boolean).join('；')
+}
+
+function formatLearningSignalsTrait(raw) {
+  if (!raw) return ''
+  if (typeof raw !== 'object') return '暂未积累学习记录'
+  const parts = []
+  const totalEvents = Number(raw.total_events)
+  if (Number.isFinite(totalEvents)) parts.push(`累计学习 ${totalEvents} 次`)
+
+  if (raw.activity_counts && typeof raw.activity_counts === 'object') {
+    const activities = Object.entries(raw.activity_counts)
+      .map(([type, count]) => Number.isFinite(Number(count)) ? `${formatLearningEvent(type)} ${Number(count)} 次` : '')
+      .filter(Boolean)
+    if (activities.length) parts.push(activities.join('、'))
+  }
+
+  if (raw.last_event && typeof raw.last_event === 'object') {
+    if (raw.last_event.type) parts.push(`最近学习：${formatLearningEvent(raw.last_event.type)}`)
+    const lastTime = formatPortraitDate(raw.last_event.created_at || raw.last_event.updated_at)
+    if (lastTime) parts.push(`最近时间：${lastTime}`)
+  }
+  return parts.join('；')
+}
+
+function formatDisplayTraitValue(key, raw, depth = 0) {
+  if (raw === null || raw === undefined || raw === '' || depth > 2) return ''
+  if (key === 'onboarding') return formatOnboardingTrait(raw)
+  if (key === 'learning_signals') return formatLearningSignalsTrait(raw)
+  if (key.endsWith('_at') || key === 'updated_at') return formatPortraitDate(raw)
+  if (Array.isArray(raw)) return raw.map((item) => formatDisplayTraitValue(key, item, depth + 1)).filter(Boolean).join('、')
+  if (typeof raw !== 'object') return typeof raw === 'boolean' ? (raw ? '是' : '否') : String(raw)
+  if (raw.value !== undefined || raw.text !== undefined) return formatDisplayTraitValue(key, raw.value ?? raw.text, depth + 1)
+
+  return Object.entries(raw)
+    .map(([childKey, childValue]) => {
+      const label = displayTraitLabels[childKey]
+      const value = formatDisplayTraitValue(childKey, childValue, depth + 1)
+      return label && value ? `${label}：${value}` : ''
+    })
+    .filter(Boolean)
+    .join('；')
+}
+
+const displayTraitItems = computed(() => Object.entries(portrait.traits || {}).map(([key, raw]) => {
+  const value = formatDisplayTraitValue(key, raw)
+  if (!value) return null
+  const rawConfidence = typeof raw === 'object' && raw !== null ? Number(raw.confidence) : NaN
+  const confidence = Number.isFinite(rawConfidence) ? Math.round(rawConfidence <= 1 ? rawConfidence * 100 : rawConfidence) : 0
+  return { key, label: displayTraitLabels[key] || '学习情况', value, confidence }
+}).filter(Boolean))
+
 const fallbackDimensions = [{ key: 'memory', label: '记忆', score: 0, desc: '基础回忆与知识提取表现' }, { key: 'understanding', label: '理解', score: 0, desc: '概念理解与知识关联表现' }, { key: 'application', label: '应用', score: 0, desc: '场景迁移与实际应用表现' }, { key: 'analysis', label: '分析', score: 0, desc: '问题拆解与综合判断表现' }, { key: 'breadth', label: '广度', score: 0, desc: '知识覆盖与探索范围' }, { key: 'persistence', label: '坚持', score: 0, desc: '学习投入与持续参与' }]
 const radarDimensions = computed(() => { const dimensions = Array.isArray(radar.value?.dimensions) ? radar.value.dimensions : []; return fallbackDimensions.map((fallback) => { const current = dimensions.find((item) => item.key === fallback.key) || {}; return { ...fallback, ...current, desc: fallback.desc, score: Math.max(0, Math.min(100, Math.round(Number(current.score ?? fallback.score) || 0))) } }) })
 const hasRadarData = computed(() => Array.isArray(radar.value?.dimensions) && radar.value.dimensions.some((item) => Number(item.score) > 0))
