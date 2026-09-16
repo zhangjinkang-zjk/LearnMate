@@ -54,6 +54,17 @@ _MARKDOWN_PREFIX_RE = re.compile(
 _MEANINGFUL_RE = re.compile(r"[\u4e00-\u9fffA-Za-z0-9]")
 _MAX_PLACEHOLDER_LENGTH = 40
 
+# 关键点覆盖是「建议性」度量：关键点是否命中取决于措辞，而生成用的 prompt 里
+# 本来就带着同一批关键点，重生成不会让措辞更接近。所以它不用来否决文档，只用来提示。
+# 词元拆分让复合关键点（括号注释、斜杠、顿号、并列连词）也能被比对。
+_PARENTHETICAL_RE = re.compile(r"[（(]([^）)]*)[）)]")
+_TERM_SPLIT_RE = re.compile(r"[/、·与和及]")
+_GENERIC_SUFFIX_RE = re.compile(
+    r"(作用|定义|本质|意义|原则|方法|机制|特点|优势|流程|步骤|区别|关系|影响|"
+    r"思路|策略|原理|价值|边界|限制)$"
+)
+_COVERAGE_RATIO = 0.6
+
 
 def _meaningful_length(content: str) -> int:
     return len(_MEANINGFUL_RE.findall(content or ""))
@@ -168,7 +179,12 @@ def validate_document_chapter(
     content: str,
     teaching_context: dict | None = None,
 ) -> list[str]:
-    """Reject incomplete chapter-shaped documents before persistence or SSE completion."""
+    """Reject structurally incomplete chapter-shaped documents.
+
+    Only deterministic defects belong here.  Key-point coverage is wording
+    dependent and lives in ``evaluate_key_point_coverage`` as an advisory
+    signal, because a hard failure on it never converges.
+    """
     text = str(content or "").strip()
     errors: list[str] = []
     if not text:
@@ -189,10 +205,58 @@ def validate_document_chapter(
     if is_path_chapter and len(re.findall(r"(?m)^##\s+\S+", text)) < 3:
         errors.append("路径节点文档至少需要三个完整小节")
 
-    key_points = _expected_key_points(teaching_context)
-    if key_points:
-        covered = sum(1 for point in key_points if point.casefold() in text.casefold())
-        required = max(1, math.ceil(len(key_points) * 0.6))
-        if covered < required:
-            errors.append(f"关键知识点覆盖不足（{covered}/{len(key_points)}）")
     return errors
+
+
+def _coverage_terms(key_point: str) -> list[str]:
+    """Split one key point into independently matchable terms."""
+    text = str(key_point or "").strip()
+    if not text:
+        return []
+
+    candidates: list[str] = []
+    for group in _PARENTHETICAL_RE.findall(text):
+        candidates.extend(_TERM_SPLIT_RE.split(group))
+    candidates.extend(_TERM_SPLIT_RE.split(_PARENTHETICAL_RE.sub("", text)))
+
+    terms: list[str] = []
+    for candidate in candidates:
+        term = candidate.strip()
+        if not term:
+            continue
+        # 关键点常写成「概念 + 泛指后缀」（如「虚拟环境作用」），正文只会写概念本身。
+        # 后缀表以 $ 锚定，所以基词一定是原词的前缀；用基词「替换」而不是「追加」，
+        # 否则分母被撑大（「虚拟环境」命中仍算 1/2）会把覆盖良好的文档误报成未覆盖。
+        base = _GENERIC_SUFFIX_RE.sub("", term)
+        canonical = base if len(base) >= 2 else term
+        if canonical not in terms:
+            terms.append(canonical)
+    return terms
+
+
+def evaluate_key_point_coverage(
+    content: str,
+    teaching_context: dict | None = None,
+) -> list[str]:
+    """Advisory only: key points the document does not appear to cover.
+
+    This must never block generation or reuse.  Whether a key point shows up is
+    a matter of wording, and the generating prompt already carries the same key
+    points, so rejecting a document on this signal makes regeneration repeat
+    forever instead of converging.  ``validate_document_chapter`` keeps the
+    deterministic structural checks; this one only reports.
+    """
+    key_points = _expected_key_points(teaching_context)
+    if not key_points:
+        return []
+
+    haystack = str(content or "").casefold()
+    missed: list[str] = []
+    for point in key_points:
+        terms = _coverage_terms(point)
+        if not terms:
+            continue
+        hits = sum(1 for term in terms if term.casefold() in haystack)
+        if hits < max(1, math.ceil(len(terms) * _COVERAGE_RATIO)):
+            missed.append(f"{point}（{hits}/{len(terms)}）")
+    return missed

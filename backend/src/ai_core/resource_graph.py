@@ -37,6 +37,7 @@ from backend.src.utils.json_parser import parse_llm_json
 from backend.src.utils.slide_schema import PPT_SPEAKER_NOTES_MAX_CHARS, limit_speaker_notes
 from backend.src.service.path.teaching_context import format_teaching_context
 from backend.src.service.resource.document_quality import (
+    evaluate_key_point_coverage,
     validate_document_chapter,
     validate_document_section,
 )
@@ -1504,6 +1505,16 @@ async def generate_document_parallel(
             resource_type="document",
         )
         raise RuntimeError("完整文档未通过质量检查：" + "；".join(chapter_errors))
+
+    # 关键点覆盖是措辞问题，不作为失败条件：生成用的 prompt 里已经带着同一批关键点，
+    # 因为措辞没逐字复现就否决会让同一份文档每次访问都重新生成。这里只留痕，便于排查。
+    coverage_gaps = evaluate_key_point_coverage(combined, teaching_context) if teaching_context else []
+    if coverage_gaps:
+        logger.info(
+            "[Doc-Parallel] 关键点覆盖提示 topic=%s gaps=%s",
+            (teaching_context or {}).get("current", {}).get("topic"),
+            "；".join(coverage_gaps),
+        )
 
     logger.info("[Doc-Parallel] 完成 小节数=%d 全程耗时=%.1fs", len(sections), time.perf_counter() - _t_total)
     _push_agent_event(stream_writer, "executor:document", "文档生成智能体", "executor", "done", "文档内容生成完成", resource_type="document", current=total, total=total, elapsed_ms=int((time.perf_counter() - _t_total) * 1000))
