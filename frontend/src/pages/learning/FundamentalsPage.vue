@@ -197,10 +197,11 @@
                 <p>主讲文档不受影响，材料读取完成后会自动显示。</p>
               </div>
 
-              <PptPreview
+              <PptEditorFrame
                 v-else-if="resourceView === 'ppt'"
                 :content="pptContent"
                 :title="activeNode.title"
+                :theme-id="pptResource?.ppt_theme_id || 'minimal-white'"
               />
 
               <div v-else-if="resourceView === 'mindmap' && isMindmapLoading" class="document-loading surface" aria-live="polite">
@@ -309,7 +310,7 @@ import LearningAssistant from '@/features/fundamentals/LearningAssistant.vue'
 import MarkdownDocument from '@/features/fundamentals/MarkdownDocument.vue'
 import MindmapPreview from '@/features/fundamentals/MindmapPreview.vue'
 import PathPicker from '@/features/fundamentals/PathPicker.vue'
-import PptPreview from '@/features/fundamentals/PptPreview.vue'
+import PptEditorFrame from '@/features/fundamentals/PptEditorFrame.vue'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { readPortrait } from '@/shared/api/portraitApi'
 import { applyWorkflowEvent, applyWorkflowProgress, finishWorkflow, resetWorkflow } from '@/entities/agent/agentWorkflowState'

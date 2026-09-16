@@ -6,8 +6,8 @@
       </template>
     </PageTitle>
 
-    <div class="ppt-workspace__grid">
-      <section class="ppt-request surface" aria-label="PPT 生成设置">
+    <div class="ppt-workspace__grid" :class="{ 'ppt-workspace__grid--editor': resource }">
+      <section v-if="!resource" class="ppt-request surface" aria-label="PPT 生成设置">
         <div class="section-heading"><span class="section-heading__number">01</span><div><p class="eyebrow">CONTENT</p><h2>课程内容</h2></div></div>
         <label class="field"><span>PPT 主题</span><input v-model.trim="topic" type="text" placeholder="例如：线性代数矩阵基础" :disabled="isGenerating" /></label>
         <label class="field"><span>制作要求 <small>可选</small></span><textarea v-model.trim="requirements" rows="5" placeholder="例如：面向大一学生，包含概念图、例题和章节总结。" :disabled="isGenerating"></textarea></label>
@@ -33,10 +33,10 @@
       <section class="ppt-result surface" :class="{ 'ppt-result--ready': resource }" aria-live="polite">
         <template v-if="resource">
           <div class="result-header"><div><p class="eyebrow">READY</p><h2>{{ resource.topic || topic }}</h2><p>{{ selectedTheme.label }} · {{ slidesCount }} 页</p></div><span class="result-theme" :style="{ background: selectedTheme.palette[0] }"></span></div>
-          <PptPreview :content="resource.content" :title="resource.topic || topic" />
+          <PptEditorFrame :content="resource.content" :title="resource.topic || topic" :theme-id="selectedThemeId" />
           <div class="result-actions">
             <button class="button button--quiet" type="button" :disabled="isDownloading" @click="downloadPpt"><Download :size="15" />{{ isDownloading ? '导出中' : '导出 PPTX' }}</button>
-            <button class="button button--primary" type="button" @click="openEditor"><Pencil :size="15" />高级编辑</button>
+            <button class="button button--primary" type="button" @click="resetWorkspace"><Pencil :size="15" />新建演示文稿</button>
           </div>
         </template>
         <template v-else>
@@ -51,9 +51,9 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { Download, LoaderCircle, Pencil, Presentation } from 'lucide-vue-next'
 import PageTitle from '@/shared/ui/PageTitle.vue'
-import PptPreview from '@/features/fundamentals/PptPreview.vue'
+import PptEditorFrame from '@/features/fundamentals/PptEditorFrame.vue'
 import { PPT_THEMES, THEME_CATEGORIES, getThemeById } from '@/data/pptThemes'
-import { openPptistEditor, toPptistPayload } from '@/utils/pptistAdapter'
+import { parsePptResourceSlides } from '@/utils/pptistAdapter'
 import { resourceApi } from '@/shared/api/resourceApi'
 
 const topic = ref('')
@@ -74,14 +74,7 @@ const filteredThemes = computed(() => activeCategory.value === '全部'
 const slidesCount = computed(() => parseSlides(resource.value?.content).length)
 
 function parseSlides(content) {
-  if (!content) return []
-  if (typeof content === 'object') return content.slides || content.pages || content.items || []
-  try {
-    const parsed = JSON.parse(String(content))
-    return parsed.slides || parsed.pages || parsed.items || []
-  } catch {
-    return String(content).split(/\n\s*---+\s*\n/).filter((block) => block.trim())
-  }
+  return parsePptResourceSlides(content)
 }
 
 async function generatePpt() {
@@ -145,13 +138,9 @@ async function downloadPpt() {
   }
 }
 
-function openEditor() {
-  const slides = parseSlides(resource.value?.content)
-  if (!slides.length) {
-    errorMessage.value = '当前 PPT 内容为空，无法打开编辑器。'
-    return
-  }
-  openPptistEditor(toPptistPayload({ title: resource.value?.topic || topic.value, slides, themeId: selectedThemeId.value }))
+function resetWorkspace() {
+  resource.value = null
+  errorMessage.value = ''
 }
 
 function clearTaskTimer() {
@@ -163,7 +152,7 @@ onBeforeUnmount(clearTaskTimer)
 </script>
 
 <style scoped>
-.ppt-workspace__grid { display: grid; grid-template-columns: minmax(330px, .86fr) minmax(0, 1.3fr); gap: 18px; align-items: start; }
+.ppt-workspace__grid { display: grid; grid-template-columns: minmax(330px, .86fr) minmax(0, 1.3fr); gap: 18px; align-items: start; }.ppt-workspace__grid--editor { grid-template-columns: minmax(0, 1fr); }
 .ppt-request { padding: 20px; }.section-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }.section-heading--theme { margin-top: 26px; }.section-heading__number { color: var(--accent-deep); font-size: 11px; font-weight: 800; }.eyebrow { margin: 0 0 3px; color: var(--muted); font-size: 10px; font-weight: 800; }.section-heading h2, .result-header h2 { margin: 0; color: var(--ink); font-size: 16px; }
 .field { display: grid; gap: 7px; margin-top: 14px; color: var(--ink); font-size: 12px; font-weight: 750; }.field small { color: var(--muted); font-size: 10px; font-weight: 500; }.field input, .field textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); color: var(--ink); font: inherit; font-weight: 500; outline: 0; }.field input { height: 40px; padding: 0 11px; }.field textarea { padding: 10px 11px; line-height: 1.55; resize: vertical; }.field input:focus, .field textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(112, 146, 96, .14); }
 .theme-filters { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 12px; }.theme-filters button { min-height: 28px; padding: 0 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); color: var(--muted); font-size: 11px; }.theme-filters button:hover, .theme-filters button.is-active { border-color: var(--accent-deep); background: var(--accent-deep); color: #fff; }

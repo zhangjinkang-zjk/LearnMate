@@ -131,8 +131,11 @@ const normalizeSlide = slide => {
   const blockNotes = (Array.isArray(slide?.blocks) ? slide.blocks : [])
     .map(block => splitSpeakerNotes(block?.text || block?.content || block).notes)
     .filter(Boolean)
-  const blocks = Array.isArray(slide?.blocks) && slide.blocks.length
-    ? slide.blocks.map(block => cleanText(stripSpeakerNotes(block?.text || block?.content || block))).filter(Boolean)
+  const sourceBlocks = Array.isArray(slide?.blocks) && slide.blocks.length
+    ? slide.blocks
+    : (Array.isArray(slide?.bullets) ? slide.bullets : [])
+  const blocks = sourceBlocks.length
+    ? sourceBlocks.map(block => cleanText(stripSpeakerNotes(block?.text || block?.content || block))).filter(Boolean)
     : splitBlocks(bodyParts.body)
   const notes = cleanText(mergeSpeakerNotes(slide?.notes, slide?.speaker_notes, bodyParts.notes, ...blockNotes))
   return { title, blocks, notes }
@@ -257,8 +260,36 @@ export const toPptistPayload = ({ title = 'Zhiban PPT', slides = [], themeId = '
   }
 }
 
-export const openPptistEditor = payload => {
+export const parsePptResourceSlides = content => {
+  if (!content) return []
+  if (Array.isArray(content)) return content
+  if (typeof content === 'object') return content.slides || content.pages || content.items || []
+
+  const source = String(content).trim()
+  if (!source) return []
+  try {
+    return parsePptResourceSlides(JSON.parse(source.replace(/^```(?:json|markdown|md)?\s*/i, '').replace(/```$/i, '').trim()))
+  } catch {
+    return source
+      .split(/\n\s*---+\s*\n|(?=\n\s*#{1,3}\s+)/)
+      .map((block, index) => {
+        const lines = block.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+        const titleLine = lines.find(line => /^#{1,3}\s+/.test(line)) || lines[0] || `第 ${index + 1} 页`
+        return {
+          title: titleLine.replace(/^#{1,3}\s+/, '').trim(),
+          blocks: lines.filter(line => line !== titleLine).map(line => line.replace(/^[-*+•]\s+/, '').trim()),
+        }
+      })
+      .filter(slide => slide.title || slide.blocks.length)
+  }
+}
+
+export const createPptistEditorUrl = payload => {
   const key = `${PPTIST_PAYLOAD_KEY}:${Date.now()}`
   localStorage.setItem(key, JSON.stringify(payload))
-  window.open(`/pptist/index.html?source=${encodeURIComponent(key)}`, '_blank', 'noopener,noreferrer')
+  return `/pptist/index.html?source=${encodeURIComponent(key)}`
+}
+
+export const openPptistEditor = payload => {
+  window.location.assign(createPptistEditorUrl(payload))
 }
