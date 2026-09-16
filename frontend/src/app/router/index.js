@@ -11,6 +11,7 @@ import FundamentalsPage from '@/pages/learning/FundamentalsPage.vue'
 import FoundationTestPage from '@/pages/learning/FoundationTestPage.vue'
 import AdvancedLearningPage from '@/pages/learning/AdvancedLearningPage.vue'
 import ResourceLibraryPage from '@/pages/resources/ResourceLibraryPage.vue'
+import PptWorkspacePage from '@/pages/resources/PptWorkspacePage.vue'
 import SettingsPage from '@/pages/settings/SettingsPage.vue'
 import ProfilePage from '@/pages/profile/ProfilePage.vue'
 import NotificationsPage from '@/pages/notifications/NotificationsPage.vue'
@@ -42,6 +43,7 @@ const router = createRouter({
     { path: '/learning/navigation', name: 'learningNavigation', redirect: '/learning/overview' },
     { path: '/learning/workspace', name: 'learningWorkspace', redirect: (to) => ({ path: '/learning/advanced', query: to.query }) },
     { path: '/resources', name: 'resourceLibrary', component: ResourceLibraryPage, meta: { requiresAuth: true } },
+    { path: '/ppt', name: 'pptWorkspace', component: PptWorkspacePage, meta: { requiresAuth: true } },
     { path: '/settings', name: 'settings', component: SettingsPage, meta: { requiresAuth: true } },
     { path: '/profile', name: 'profile', component: ProfilePage, meta: { requiresAuth: true } },
     { path: '/notifications', name: 'notifications', component: NotificationsPage, meta: { requiresAuth: true } },

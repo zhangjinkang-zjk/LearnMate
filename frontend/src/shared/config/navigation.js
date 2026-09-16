@@ -1,4 +1,4 @@
-import { BookOpen, Gauge, Library, Settings, Sparkles, SquareCheck } from 'lucide-vue-next'
+import { BookOpen, Gauge, Library, Presentation, Settings, Sparkles, SquareCheck } from 'lucide-vue-next'
 
 export const primaryNavigation = [
   { label: '学习概览', to: '/learning/overview', icon: Gauge },
@@ -21,6 +21,7 @@ export const learningNavigationGroups = [
 ]
 
 export const secondaryNavigation = [
+  { label: 'PPT 工作台', to: '/ppt', icon: Presentation },
   { label: '资料库', to: '/resources', icon: Library },
 ]
 
