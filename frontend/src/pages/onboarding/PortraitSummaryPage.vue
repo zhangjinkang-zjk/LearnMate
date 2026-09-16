@@ -16,17 +16,20 @@
       <p class="summary-intro">我已经把刚才的对话整理成了一份画像，请确认内容是否准确。</p>
 
       <div class="summary-output" aria-live="polite">
-        <span>{{ streamedText }}</span><span v-if="!isComplete" class="summary-caret" aria-hidden="true"></span>
+        <span v-if="isGeneratingPortrait">正在结合访谈与基础测评生成综合画像...</span>
+        <span v-else>{{ streamedText }}</span><span v-if="!isGeneratingPortrait && !isComplete" class="summary-caret" aria-hidden="true"></span>
       </div>
 
       <div class="summary-actions">
         <button class="summary-edit" type="button" @click="router.push('/learnmate-chat')">修改回答</button>
-        <button class="summary-confirm" type="button" :disabled="!isComplete || isPreparing" @click="confirmProfile">
+        <button v-if="portraitError" class="summary-edit" type="button" @click="generatePortrait">重新生成画像</button>
+        <button class="summary-confirm" type="button" :disabled="!isComplete || isPreparing || isGeneratingPortrait" @click="confirmProfile">
           <span>{{ isPreparing ? '生成学习概览…' : '确认画像' }}</span>
           <span aria-hidden="true">↗</span>
         </button>
       </div>
       <p v-if="isPreparing" class="summary-status">正在根据你的方向拆分科目并准备学习路径，完成后会自动进入学习概览。</p>
+      <p v-if="portraitError" class="summary-error" role="alert">{{ portraitError }}</p>
       <p v-if="generationError" class="summary-error" role="alert">{{ generationError }}</p>
     </section>
   </main>
@@ -37,11 +40,14 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { learningState, persistLearningProfile } from '@/entities/learning/learningState'
 import { learningApi } from '@/shared/api/learningApi'
+import { initPortraitFromDialogue } from '@/shared/api/portraitApi'
 
 const router = useRouter()
 const streamedText = ref('')
 const isComplete = ref(false)
 const isPreparing = ref(false)
+const isGeneratingPortrait = ref(false)
+const portraitError = ref('')
 const generationError = ref('')
 let streamTimer
 
@@ -64,6 +70,15 @@ const readPortraitSummary = () => {
     return saved && typeof saved === 'object' ? saved : {}
   } catch {
     return {}
+  }
+}
+
+const readAssessment = () => {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem('learnmate_diagnosis_result') || '{}')
+    return saved && typeof saved === 'object' ? saved : null
+  } catch {
+    return null
   }
 }
 
@@ -112,6 +127,33 @@ const startStreaming = () => {
   tick()
 }
 
+const generatePortrait = async () => {
+  const assessment = readAssessment()
+  if (!dialogue.length || !assessment) {
+    portraitError.value = '缺少访谈或基础测评结果，请返回后重新完成。'
+    return
+  }
+
+  isGeneratingPortrait.value = true
+  portraitError.value = ''
+  try {
+    const result = await initPortraitFromDialogue({
+      dialogue,
+      identity,
+      direction: localStorage.getItem('learnmate_direction') || '',
+      goal: localStorage.getItem('learnmate_goal') || '',
+      assessment,
+    })
+    if (!result || typeof result !== 'object') throw new Error('未返回有效画像结果')
+    sessionStorage.setItem('learnmate_portrait_summary', JSON.stringify(result))
+    window.location.reload()
+  } catch (error) {
+    portraitError.value = error?.response?.data?.detail || error?.message || '综合画像生成失败，请重试。'
+  } finally {
+    isGeneratingPortrait.value = false
+  }
+}
+
 const unwrap = response => response?.data?.data ?? response?.data ?? response
 const hasOverviewContent = overview => Boolean(
   overview?.path?.id ||
@@ -119,7 +161,7 @@ const hasOverviewContent = overview => Boolean(
 )
 
 const confirmProfile = async () => {
-  if (!isComplete.value || isPreparing.value) return
+  if (!isComplete.value || isPreparing.value || isGeneratingPortrait.value) return
   isPreparing.value = true
   generationError.value = ''
 
@@ -143,6 +185,7 @@ const confirmProfile = async () => {
     const profile = { identity, direction, goal, dialogue }
     sessionStorage.removeItem('learnmate_portrait_dialogue')
     sessionStorage.removeItem('learnmate_portrait_summary')
+    sessionStorage.removeItem('learnmate_diagnosis_result')
     window.dispatchEvent(new CustomEvent('learnmate:learning-profile-ready', { detail: profile }))
     await router.push('/learning/overview')
   } catch (error) {
@@ -152,7 +195,10 @@ const confirmProfile = async () => {
   }
 }
 
-onMounted(startStreaming)
+onMounted(() => {
+  if (Object.keys(portraitSummary).length) startStreaming()
+  else void generatePortrait()
+})
 
 onBeforeUnmount(() => {
   if (streamTimer) window.clearTimeout(streamTimer)

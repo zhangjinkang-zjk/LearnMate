@@ -116,9 +116,9 @@ async function submitAnswer() {
     answerDraft.value = ''
     if (result.finished) {
       isFinished.value = true
-      localStorage.setItem('learnmate_diagnosis_result', JSON.stringify(result.result || {}))
+      sessionStorage.setItem('learnmate_diagnosis_result', JSON.stringify(result.result || {}))
       messages.value.push({ role: 'assistant', text: result.result?.message || '正在生成诊断结果…' })
-      window.setTimeout(() => router.push('/onboarding/diagnosis/result'), 500)
+      window.setTimeout(() => router.push('/learnmate-summary'), 500)
     } else {
       currentQuestion.value = result.question
       messages.value.push({ role: 'assistant', text: questionText(result.question) })
