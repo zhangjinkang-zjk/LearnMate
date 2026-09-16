@@ -36,7 +36,7 @@
         :chapter-title="activeNode.title"
         :quiz-config="nodeDetail?.quiz_config || {}"
         @close="returnToTest"
-        @passed="returnToTest"
+        @passed="openNextLesson"
       />
     </template>
   </div>
@@ -89,6 +89,29 @@ async function loadQuizPage() {
 
 function returnToTest() {
   router.replace(backToTest.value)
+}
+
+async function openNextLesson() {
+  const pathId = learningPath.value?.path_id
+  const completedNodeId = activeNode.value?.id
+  if (!pathId || !completedNodeId) {
+    returnToTest()
+    return
+  }
+
+  try {
+    const refreshedPath = await fundamentalsApi.getCurrentPath(pathId)
+    const nodes = refreshedPath?.nodes || []
+    const completedIndex = nodes.findIndex((node) => String(node.id) === String(completedNodeId))
+    const nextNode = completedIndex >= 0 ? nodes.slice(completedIndex + 1).find((node) => node.status !== 'locked') : null
+    if (nextNode) {
+      await router.replace({ path: '/learning/fundamentals', query: { pathId, node: nextNode.id } })
+      return
+    }
+  } catch {
+    // Keep the completed test reachable even if the refreshed path is unavailable.
+  }
+  returnToTest()
 }
 
 onMounted(loadQuizPage)

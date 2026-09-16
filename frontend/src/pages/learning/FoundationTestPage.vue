@@ -41,7 +41,7 @@
         <label class="test-select">
           <span>选择章节</span>
           <select v-model="activeNodeId" @change="selectNode(activeNodeId)">
-            <option v-for="node in testableNodes" :key="node.id" :value="node.id">第 {{ node.order_index || 1 }} 章 · {{ node.title }}</option>
+            <option v-for="(node, index) in testableNodes" :key="node.id" :value="node.id">第 {{ index + 1 }} 章 · {{ node.title }}</option>
           </select>
         </label>
       </section>
@@ -257,6 +257,14 @@ async function loadPage() {
     if (learningPath.value) {
       chooseNode(learningPath.value)
       await loadNode()
+      if (route.query.autoStart === '1' && canStartTest.value && activeNode.value) {
+        await router.replace({
+          name: 'foundationQuiz',
+          query: { pathId: learningPath.value.path_id, node: activeNode.value.id },
+        })
+        return
+      }
+      await refreshInsights()
     }
 
     // 目录加载失败不影响当前节点测试；成功后再补齐科目切换列表。

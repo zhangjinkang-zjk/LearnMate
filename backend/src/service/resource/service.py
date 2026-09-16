@@ -689,6 +689,9 @@ async def _run_generation_task(db_id: int, task_id: str, answers: dict | None = 
                 ppt_theme_id=ppt_theme_id,
             ))
 
+        if not saved:
+            raise RuntimeError("生成流程未产出可保存的学习资料")
+
         for item in saved:
             await GeneratedResource.filter(id=item["resource_id"]).update(
                 review_passed=final_passed,

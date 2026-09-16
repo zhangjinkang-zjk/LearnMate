@@ -1207,7 +1207,7 @@ async function openChapterCheck() {
   const pathId = learningPath.value?.path_id
   const nodeId = activeNode.value?.id
   if (pathId && nodeId) {
-    await router.push({ path: '/learning/foundation-test', query: { pathId, node: nodeId } })
+    await router.push({ path: '/learning/foundation-test', query: { pathId, node: nodeId, autoStart: '1' } })
     return
   }
 

@@ -32,7 +32,7 @@ SRC_DIR = Path(__file__).resolve().parents[2]
 TEMPLATE_PATH = SRC_DIR / "ai_core" / "prompts" / "presentation" / "template.html"
 TEMPLATE_VIDEO_PATH = SRC_DIR / "ai_core" / "prompts" / "presentation" / "template_video.html"
 PRESENTATION_TEMPLATE_VERSION = "visual-v6"
-VIDEO_TEMPLATE_VERSION = "video-v4"
+VIDEO_TEMPLATE_VERSION = "video-v5"
 DEFAULT_VIDEO_VOICE = "zh-CN-XiaoxiaoNeural"
 
 

@@ -2,6 +2,7 @@ import httpClient from './httpClient'
 import { streamJsonEvents } from './sseClient'
 
 const unwrap = (response) => response?.data?.data ?? response?.data ?? response
+const GENERATION_REQUEST_TIMEOUT = 300000
 
 function parseDownloadFilename(contentDisposition, fallback) {
   const header = String(contentDisposition || '')
@@ -32,7 +33,7 @@ export const resourceApi = {
       resource_types: types,
       ...(pptThemeId ? { ppt_theme_id: pptThemeId } : {}),
       save_to_chat_history: false,
-    }))
+    }, { timeout: GENERATION_REQUEST_TIMEOUT }))
   },
 
   async createPptTask({ topic, requirements = '', pptThemeId = 'minimal-white' }) {
@@ -46,7 +47,7 @@ export const resourceApi = {
       resource_types: ['ppt'],
       ppt_theme_id: pptThemeId,
       save_to_chat_history: false,
-    }))
+    }, { timeout: GENERATION_REQUEST_TIMEOUT }))
   },
 
   async getGenerationTask(taskId) {
