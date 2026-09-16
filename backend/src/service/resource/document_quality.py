@@ -175,6 +175,32 @@ def _expected_key_points(teaching_context: dict | None) -> list[str]:
     return [str(value).strip() for value in values if str(value).strip()][:8]
 
 
+def document_meaningful_length(content: str) -> int:
+    """公开的有效字数口径，供生成侧挑"最短小节"用，避免复制正则。"""
+    return _meaningful_length(content)
+
+
+def validate_document_safety(content: str) -> list[str]:
+    """入库/复用级检查：只拦确定不能给学生看的内容。
+
+    与 ``validate_document_chapter`` 分开，是因为两者的失败后果不同：
+    这里的每一条（空文档、失败占位、待补充占位、未闭合代码块）都意味着这份
+    内容本身是坏的，必须重做；而下面的结构目标（字数、小节数）只是"写得更完整
+    会更好"，达不到也应该发出去，而不是让节点永远重新生成。
+    """
+    text = str(content or "").strip()
+    if not text:
+        return ["文档内容为空"]
+    errors: list[str] = []
+    if _FAILURE_LINE_RE.search(text):
+        errors.append("文档包含生成失败占位正文")
+    if _contains_placeholder_text(text):
+        errors.append("文档包含省略或待补充占位语")
+    if text.count("```") % 2:
+        errors.append("文档代码块未闭合")
+    return errors
+
+
 def validate_document_chapter(
     content: str,
     teaching_context: dict | None = None,
@@ -184,17 +210,16 @@ def validate_document_chapter(
     Only deterministic defects belong here.  Key-point coverage is wording
     dependent and lives in ``evaluate_key_point_coverage`` as an advisory
     signal, because a hard failure on it never converges.
+
+    调用方注意：这是**生成质量目标**，不是"该死就死"的门禁。生成侧拿它当
+    修复触发条件（不达标就带着意见重修一轮），修不动就保留尽力稿并留痕；
+    复用侧要的是 ``validate_document_safety``，否则一份"只有两节"的文档
+    每次进章节都会因为复用校验被解绑又重新生成一遍。
     """
+    errors = validate_document_safety(content)
     text = str(content or "").strip()
-    errors: list[str] = []
     if not text:
-        return ["文档内容为空"]
-    if _FAILURE_LINE_RE.search(text):
-        errors.append("文档包含生成失败占位正文")
-    if _contains_placeholder_text(text):
-        errors.append("文档包含省略或待补充占位语")
-    if text.count("```") % 2:
-        errors.append("文档代码块未闭合")
+        return errors
 
     is_path_chapter = bool(teaching_context)
     minimum_length = 900 if is_path_chapter else 500

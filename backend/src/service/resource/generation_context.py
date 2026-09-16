@@ -35,17 +35,29 @@ def split_internal_generation_notes(topic: str | None, user_notes: str = "") -> 
 
 
 def infer_rag_mode(answers: dict | None = None, user_notes: str = "") -> str:
-    answers = answers or {}
-    raw_mode = str(answers.get("rag_mode") or answers.get("knowledge_mode") or "").strip().lower()
-    if raw_mode in {"strict", "source_only", "knowledge_only"}:
-        return "strict"
-    if raw_mode in {"reference", "assist", "auto"}:
+    """知识库使用模式 —— 固定为 reference（智能参考模式）。
+
+    strict（严格资料模式）**一律不启用**：产品上决定知识库只作参考、不作唯一依据；
+    而且知识库目前为空，strict 的提示词是「只根据下方知识库资料组织内容」，实际喂进去的
+    是「暂无可靠知识库资料。」，模型只会输出"待补充"，生成质量反而更差。
+
+    参数保留是为了不改调用方签名 —— 现在不再参与判定，因此不要再拿它当开关。
+
+    若将来知识库有了内容、要恢复 strict，把下面这段放回即可（原先的判定逻辑）：
+        answers = answers or {}
+        raw_mode = str(answers.get("rag_mode") or answers.get("knowledge_mode") or "").strip().lower()
+        if raw_mode in {"strict", "source_only", "knowledge_only"}:
+            return "strict"
+        if raw_mode in {"reference", "assist", "auto"}:
+            return "reference"
+        note = str(user_notes or "")
+        strict_markers = ("只根据", "仅根据", "不要扩展", "不扩展", "严格按照资料", "只用上传资料", "按这份资料")
+        if any(marker in note for marker in strict_markers):
+            return "strict"
         return "reference"
 
-    note = str(user_notes or "")
-    strict_markers = ("只根据", "仅根据", "不要扩展", "不扩展", "严格按照资料", "只用上传资料", "按这份资料")
-    if any(marker in note for marker in strict_markers):
-        return "strict"
+    `_format_kb_context` 里的 strict 提示词分支刻意保留未删，恢复时不用重写。
+    """
     return "reference"
 
 

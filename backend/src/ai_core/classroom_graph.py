@@ -255,8 +255,11 @@ async def _generate_segments(state: ClassroomState, outline: dict) -> dict:
         if isinstance(issue, dict) and str(issue.get("segment_id")) in _SEGMENT_IDS
     }
     is_targeted_retry = retry_count > 0 and len(previous_by_id) == len(_SEGMENT_IDS) and bool(targeted_ids)
+    # 上一轮连完整课堂都没产出（例如写手那一轮整体失败）时，退回 previous_raw 等于什么都不做，
+    # 所以这种情况必须整课重生成 —— 审核说的"需要重来"才有落点。
+    needs_full_rebuild = len(previous_by_id) < len(_SEGMENT_IDS)
 
-    if retry_count > 0 and not is_targeted_retry:
+    if retry_count > 0 and not is_targeted_retry and not needs_full_rebuild:
         logger.warning(
             "[ClassroomWriter] 审核未给出可定位模块，不重写整课 path=%s node=%s retry=%s",
             state.get("path_id"), state.get("node_id"), retry_count,
@@ -268,7 +271,7 @@ async def _generate_segments(state: ClassroomState, outline: dict) -> dict:
         "[ClassroomWriter] 并行幕开始 trace=%s path=%s node=%s scenes=%s mode=%s",
         state.get("trace_id", "-"),
         state.get("path_id"), state.get("node_id"), ",".join(parallel_ids),
-        "targeted" if is_targeted_retry else "initial",
+        "targeted" if is_targeted_retry else ("rebuild" if needs_full_rebuild else "initial"),
     )
     parallel_jobs = [
         _gen_segment(state, outline, sid, index, sem, issues, global_feedback)
@@ -487,8 +490,28 @@ async def reviewer_node(state: ClassroomState) -> dict:
     trace_id = state.get("trace_id", "-")
     raw_lesson = state.get("raw_lesson") or state.get("lesson")
     if not raw_lesson or not isinstance(raw_lesson.get("segments"), list):
-        logger.warning("[ClassroomReviewer] 审核跳过：课堂为空 trace=%s path=%s node=%s", trace_id, state.get("path_id"), state.get("node_id"))
-        return {"review_passed": False, "review_score": 0, "review_feedback": "课堂结构为空", "review_issues": [], "retry_count": state.get("retry_count", 0)}
+        # 课堂为空是"上一轮整个写砸了"，要整课重来，不能只记一句"结构为空"就结束 ——
+        # 那样审核发现问题之后任务直接被中断，用户拿到空课堂或上一版旧课堂。
+        # 这里和下面的"模块缺失"一样走可修复路径，重试用尽才收手。
+        retry_count = state.get("retry_count", 0)
+        can_retry = retry_count < state.get("max_retries", _MAX_REVIEW_RETRIES)
+        logger.warning(
+            "[ClassroomReviewer] 课堂为空 trace=%s path=%s node=%s retry=%s can_retry=%s",
+            trace_id, state.get("path_id"), state.get("node_id"), retry_count, can_retry,
+        )
+        return {
+            "review_passed": False,
+            "review_score": 0,
+            "review_feedback": "上一轮没有产出课堂内容，请完整重写全部四幕。",
+            "review_issues": (
+                [
+                    {"segment_id": scene_id, "category": "structure", "message": "这一幕没有产出内容，需要重新生成"}
+                    for scene_id in _SEGMENT_IDS
+                ]
+                if can_retry else []
+            ),
+            "retry_count": retry_count + 1 if can_retry else retry_count,
+        }
 
     segments_by_id = {
         str(segment.get("id")): segment

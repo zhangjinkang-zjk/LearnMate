@@ -203,3 +203,71 @@ async def test_invalid_lesson_stops_without_retry(monkeypatch):
     assert final.get("retry_count") == 1
     assert final.get("review_passed") is False
     assert len(fake.calls) == 1, f"只应调用规划, got {len(fake.calls)}"
+
+
+# ── 写手整轮失败：审核发现问题后必须重来，而不是就此结束 ──────────
+
+@pytest.mark.asyncio
+async def test_empty_classroom_triggers_a_rebuild_instead_of_ending(monkeypatch):
+    """首轮四幕全没产出 → 审核要求整课重来 → 写手真的重生成一遍。
+
+    改之前这里是"审核发现课堂为空 → 直接结束"：用户拿到空课堂（或上一版旧课堂），
+    表现就是"审查到了错误，任务被直接中断而不是优化改进"。
+    """
+    fake = FakeLLM([])
+    monkeypatch.setattr(cg, "llm", fake)
+
+    state = make_state()
+    builds = []
+    real_generate = cg._generate_segments
+
+    async def empty_first_then_real(_state, outline):
+        builds.append(_state.get("retry_count", 0))
+        if len(builds) == 1:
+            return {}
+        return await real_generate(_state, outline)
+
+    monkeypatch.setattr(cg, "_generate_segments", empty_first_then_real)
+
+    final = await cg.classroom_graph.ainvoke(state)
+
+    assert builds == [0, 1], "空课堂应触发第二轮完整生成"
+    assert final.get("review_passed") is True
+    assert_lesson_contract(final.get("lesson"))
+
+
+@pytest.mark.asyncio
+async def test_classroom_rebuild_gives_up_after_the_retry_budget(monkeypatch):
+    """重来一轮还是空：收手，不再无限重试。"""
+    fake = FakeLLM([])
+    monkeypatch.setattr(cg, "llm", fake)
+
+    builds = []
+
+    async def always_empty(_state, _outline):
+        builds.append(_state.get("retry_count", 0))
+        return {}
+
+    monkeypatch.setattr(cg, "_generate_segments", always_empty)
+
+    final = await cg.classroom_graph.ainvoke(make_state())
+
+    assert builds == [0, 1], f"最多重来一轮，实际重来 {len(builds)} 次"
+    assert final.get("review_passed") is False
+
+
+@pytest.mark.asyncio
+async def test_empty_lesson_is_reported_as_a_fixable_issue():
+    """空课堂必须走"可修复"分支，否则路由器只能结束。"""
+    state = cg.ClassroomState(
+        path_id=1, node_id=1, user_id=1, subject="微机原理",
+        topic="BCD与ASCII编码", summary="", knowledge_tags=[], quiz_config={},
+        quiz_snapshot={}, resources=[], portrait_context="暂无画像数据",
+        fallback_lesson={}, llm_priority="high",
+    )
+    result = await cg.reviewer_node(state)
+
+    assert result["review_passed"] is False
+    assert result["retry_count"] == 1
+    assert {issue["segment_id"] for issue in result["review_issues"]} == set(cg._SEGMENT_IDS)
+    assert cg.should_continue({**state, **result}) == "writer"

@@ -82,23 +82,31 @@ const readAssessment = () => {
   }
 }
 
+// 每次 tick 出 2 个字，约 22ms 一轮 —— 十几秒的等待压到 3 秒左右。
+const STREAM_INTERVAL_MS = 22
+
+// 这些是一次性读的快照（不是 ref）：generatePortrait 重新生成画像后走
+// window.location.reload() 重新读，所以这里不需要响应式。
 const portraitSummary = readPortraitSummary()
 const aiSummary = String(portraitSummary.profile_summary || '').trim()
 const cognition = String(portraitSummary.cognition || '').trim()
 const learningGoal = String(portraitSummary.learning_goal || '').trim()
 const traits = portraitSummary.traits && typeof portraitSummary.traits === 'object' ? portraitSummary.traits : {}
 const onboarding = traits.onboarding && typeof traits.onboarding === 'object' ? traits.onboarding : {}
+const introText = aiSummary
+  ? '我已经把刚才的对话整理成了一份画像，请确认内容是否准确。'
+  : '画像分析这次没有完成，以下是你在访谈中的原始回答。'
 const traitText = key => {
-  const value = traits.value[key]
+  const value = traits[key]
   if (!value) return ''
   if (typeof value === 'string') return value
   return String(value.value || value.text || '').trim()
 }
-const direction = computed(() => String(onboarding.value.direction || cognition.value || answerAt(0)).trim())
-const goal = computed(() => String(onboarding.value.goal || learningGoal.value || answerAt(1)).trim())
+const direction = computed(() => String(onboarding.direction || cognition || answerAt(0)).trim())
+const goal = computed(() => String(onboarding.goal || learningGoal || answerAt(1)).trim())
 
 const fullSummary = computed(() => [
-  aiSummary.value || '画像分析没有完成，以下是你在访谈中的原始回答：',
+  aiSummary || '画像分析没有完成，以下是你在访谈中的原始回答：',
   '',
   `身份：${identity}`,
   `学习方向：${direction.value}`,
@@ -175,7 +183,7 @@ const confirmProfile = async () => {
   persistLearningProfile()
 
   try {
-    const response = await learningApi.generatePathsFromDirection(direction, goal)
+    const response = await learningApi.generatePathsFromDirection(direction.value, goal.value)
     const generated = unwrap(response)
     const paths = Array.isArray(generated?.paths) ? generated.paths : []
     const readyPath = paths.find(path => path && path.path_id)
@@ -186,7 +194,7 @@ const confirmProfile = async () => {
     if (!hasOverviewContent(overview)) throw new Error('学习概览暂未准备完成，请稍后重试')
 
     localStorage.setItem('learnmate_onboarding_complete', '1')
-    const profile = { identity, direction, goal, dialogue }
+    const profile = { identity, direction: direction.value, goal: goal.value, dialogue }
     sessionStorage.removeItem('learnmate_portrait_dialogue')
     sessionStorage.removeItem('learnmate_portrait_summary')
     sessionStorage.removeItem('learnmate_diagnosis_result')

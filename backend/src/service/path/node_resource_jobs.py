@@ -30,7 +30,8 @@ from backend.src.utils.constants import SSE_POLL_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
-JobKey = tuple[int, int, int]
+# 作业身份。约定 key[0] 必须是 user_id —— 并发闸门按用户分。
+JobKey = tuple
 
 # 迟到订阅者的进程内回放窗口。超出就只丢最老的，终端事件永远在最后一条。
 _BACKLOG_LIMIT = 200
