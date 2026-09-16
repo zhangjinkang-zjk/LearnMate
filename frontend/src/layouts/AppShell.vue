@@ -75,8 +75,9 @@
           <span>{{ currentTitle }}</span>
         </div>
         <div class="header-actions">
-          <RouterLink class="header-icon-button" to="/notifications" title="通知" aria-label="通知">
+          <RouterLink class="header-icon-button" to="/notifications" :title="notificationTitle" :aria-label="notificationTitle">
             <Bell :size="17" stroke-width="1.8" />
+            <i v-if="unreadNotifications > 0" class="header-unread-badge" aria-hidden="true">{{ unreadNotifications > 99 ? '99+' : unreadNotifications }}</i>
           </RouterLink>
           <button class="header-icon-button" type="button" :title="isDarkMode ? '开启亮色模式' : '开启深色模式'" :aria-label="isDarkMode ? '开启亮色模式' : '开启深色模式'" :aria-pressed="isDarkMode" @click="toggleTheme">
             <Moon v-if="!isDarkMode" :size="17" stroke-width="1.8" />
@@ -101,16 +102,36 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Bell, ClipboardList, LogOut, Moon, Sun, Workflow } from 'lucide-vue-next'
 import { allNavigation, learningNavigationGroups, primaryNavigation, secondaryNavigation, utilityNavigation } from '@/shared/config/navigation'
 import { clearAuthSession } from '@/shared/auth/session'
 import { setWorkflowOpen, workflowState } from '@/entities/agent/agentWorkflowState'
+import { notificationApi } from '@/shared/api/notificationApi'
 
 const route = useRoute()
 const router = useRouter()
 const sidebarOpen = ref(false)
+const unreadNotifications = ref(0)
+const notificationTitle = computed(() => (
+  unreadNotifications.value > 0 ? `通知（${unreadNotifications.value} 条未读）` : '通知'
+))
+
+// 通知由后端在学习路径解锁、资源生成完成时写入。铃铛这里只读一个计数，
+// 每次路由跳转刷新一次，成本是一次 count 查询，避免让红点长期停在过期状态。
+async function refreshUnreadNotifications() {
+  if (!localStorage.getItem('token')) {
+    unreadNotifications.value = 0
+    return
+  }
+  try {
+    unreadNotifications.value = await notificationApi.unreadCount()
+  } catch {
+    // 计数读不到不该影响页面本身，保持上一次的值即可。
+  }
+}
+watch(() => route.fullPath, refreshUnreadNotifications, { immediate: true })
 const currentTitle = computed(() => allNavigation.find((item) => route.path.startsWith(item.to))?.label || '学习概览')
 const displayName = computed(() => localStorage.getItem('learnmate_username') || '我的学习者')
 const avatarLetter = computed(() => displayName.value.trim().slice(0, 1).toUpperCase() || '学')

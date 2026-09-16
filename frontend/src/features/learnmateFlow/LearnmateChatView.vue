@@ -117,10 +117,46 @@ const fallbackQuestionForStep = currentStep => {
   return typeof selected === 'function' ? selected(first) : selected
 }
 
+const INTERVIEW_KEY = 'learnmate_portrait_dialogue'
+
 const buildDialogue = () => portraitQuestions.value.map((question, index) => ({
   question,
   answer: portraitAnswers.value[index] || ''
 })).filter(turn => turn.question || turn.answer)
+
+// 每答一轮就落一次盘。原先只在答完第 5 题那一刻才写 sessionStorage，
+// 于是中途刷新或切走会把前面几轮回答全部丢掉，回来只能从第 0 题重来。
+const persistInterview = () => {
+  try {
+    sessionStorage.setItem(INTERVIEW_KEY, JSON.stringify(buildDialogue()))
+  } catch { /* 隐私模式等写不进去的情况退化成原来的行为，不打断访谈 */ }
+}
+
+// 只接续"答到一半"的访谈：已答完的那次是用户主动回来改答案，
+// 继续保持原来的从头重来语义，不动它。
+const restoreInterview = () => {
+  let saved
+  try {
+    saved = JSON.parse(sessionStorage.getItem(INTERVIEW_KEY) || '[]')
+  } catch {
+    return false
+  }
+  if (!Array.isArray(saved) || !saved.length) return false
+  const questions = saved.map(turn => String(turn?.question || ''))
+  const answers = saved.map(turn => String(turn?.answer || ''))
+  const answered = answers.filter(answer => answer.trim()).length
+  // 0 轮没有可接续的内容；答满了说明这份访谈已经用过，交给上面的"重来"语义。
+  if (!answered || answered >= PORTRAIT_MAX_STEPS) return false
+  portraitQuestions.value = questions
+  portraitAnswers.value = answers
+  step.value = answered
+  messages.value = []
+  for (let index = 0; index < answered; index += 1) {
+    if (questions[index]) messages.value.push({ role: 'assistant', text: questions[index] })
+    if (answers[index]) messages.value.push({ role: 'user', text: answers[index] })
+  }
+  return true
+}
 
 const getResponseData = result => result?.data?.data ?? result?.data ?? result
 
@@ -143,6 +179,7 @@ const askNextQuestion = async () => {
   portraitQuestions.value[currentStep] = question
   messages.value.push({ role: 'assistant', text: question })
   isLoading.value = false
+  persistInterview()
 }
 
 const sendMessage = async () => {
@@ -154,10 +191,10 @@ const sendMessage = async () => {
   if (step.value < PORTRAIT_MAX_STEPS) {
     portraitAnswers.value[step.value] = value
     step.value += 1
+    persistInterview()
     if (step.value < PORTRAIT_MAX_STEPS) {
       await askNextQuestion()
     } else {
-      sessionStorage.setItem('learnmate_portrait_dialogue', JSON.stringify(buildDialogue()))
       sessionStorage.removeItem('learnmate_portrait_summary')
       sessionStorage.removeItem('learnmate_diagnosis_result')
       router.push('/onboarding/diagnosis')
@@ -171,6 +208,15 @@ const sendMessage = async () => {
 
 onMounted(() => {
   void scrollToLatest()
+  // 答到一半就切走/刷新：接着那一轮问下去，而不是把前面几轮回答一起清空重来。
+  if (restoreInterview()) {
+    const pending = portraitQuestions.value[step.value]
+    if (pending) {
+      messages.value.push({ role: 'assistant', text: pending })
+      void scrollToLatest()
+      return
+    }
+  }
   void askNextQuestion()
 })
 </script>
