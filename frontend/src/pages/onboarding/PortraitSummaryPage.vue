@@ -26,7 +26,7 @@
           <span aria-hidden="true">↗</span>
         </button>
       </div>
-      <p v-if="isPreparing" class="summary-status">正在根据你的方向拆分科目并准备学习路径，完成后会自动进入学习概览。</p>
+      <p v-if="isPreparing" class="summary-status">正在根据你的方向拆分科目并准备学习路径，完成后进入能力诊断。</p>
       <p v-if="generationError" class="summary-error" role="alert">{{ generationError }}</p>
     </section>
   </main>
@@ -144,7 +144,9 @@ const confirmProfile = async () => {
     sessionStorage.removeItem('learnmate_portrait_dialogue')
     sessionStorage.removeItem('learnmate_portrait_summary')
     window.dispatchEvent(new CustomEvent('learnmate:learning-profile-ready', { detail: profile }))
-    await router.push('/learning/overview')
+    // 画像确认后先做能力诊断，再进学习概览。诊断结果页的「进入学习概览」是这一步的出口，
+    // 所以两条路都通；此前这里直接跳概览，导致 /onboarding/diagnosis 没有任何入口。
+    await router.push('/onboarding/diagnosis')
   } catch (error) {
     generationError.value = error?.response?.data?.detail || error?.message || '学习路径生成失败，请重试。'
   } finally {
