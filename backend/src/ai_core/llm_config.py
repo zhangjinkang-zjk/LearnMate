@@ -14,13 +14,80 @@ load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 logger = logging.getLogger(__name__)
 
-# 通用生成使用独立的 AI_API_KEY；通用模型与视觉模型现在同为 MiMo，
-# 所以中间回退到 MiMo 的 VISION_API_KEY，最后才用项目原有的 api_key（DeepSeek），
-# 避免只配了 MiMo 密钥的机器把 DeepSeek 密钥发到 MiMo 端点。
-api_key = (
-    os.getenv("AI_API_KEY")
-    or os.getenv("VISION_API_KEY")
-    or os.getenv("api_key")
+# 文本模型的端点和模型名，这里只是没配时的兜底；`.env` 里配了就以 `.env` 为准。
+_TEXT_BASE_URL = os.getenv("AI_BASE_URL") or "https://api.xiaomimimo.com/v1"
+_TEXT_MODEL = os.getenv("AI_MODEL") or "mimo-v2.5"
+
+# 视觉模型的端点/模型名（PPT 截图审查等），默认留在 MiMo
+_VISION_BASE_URL = os.getenv("VISION_BASE_URL") or "https://api.xiaomimimo.com/v1"
+_VISION_MODEL = os.getenv("VISION_MODEL") or "mimo-v2.5"
+
+
+def _is_deepseek_endpoint(base_url: str | None) -> bool:
+    return "deepseek" in (base_url or "").lower()
+
+
+def _model_line(kind: str, model: str, base_url: str, key_source: str) -> str:
+    """拼一行启动日志。**只带 key 的来源变量名，不带 key 本身。**"""
+    return f"LLM {kind}模型: {model} @ {base_url}（key 来源: {key_source}）"
+
+
+def _first_set(*named: tuple[str, str | None]) -> tuple[str | None, str]:
+    """按给定顺序取第一个非空的 key，同时返回它的来源环境变量名。
+
+    只回来源名，**不回 key 的值** —— 日志里能看见的值就有可能被贴进工单和截图。
+    """
+    for name, value in named:
+        if value:
+            return value, name
+    return None, "(未配置)"
+
+
+def _pick_text_api_key(
+    base_url: str | None,
+    ai_api_key: str | None,
+    vision_api_key: str | None,
+    legacy_api_key: str | None,
+) -> tuple[str | None, str]:
+    """挑文本模型的 key，并说明它来自哪个环境变量。
+
+    **key 必须和端点同源。** 端点和 key 配错时，服务商不会回"你的 key 配错了"，
+    只会回 401 / invalid api_key —— 和"key 过期""余额不足"长得一模一样，
+    排查时很容易往别处想。所以这里不按固定顺序取，先看端点是哪一家：
+
+    - 端点在 DeepSeek（`AI_BASE_URL` 里带 deepseek）→ 优先项目原有的 `api_key`
+      （就是那个 DeepSeek key）。`AI_API_KEY` 里通常还放着 MiMo 的 key，
+      换端点时最容易只换端点不换 key，于是 MiMo 的 key 被发到 DeepSeek。
+    - 其他端点（默认还是 MiMo）→ 先用 `AI_API_KEY`，再退到视觉 key，
+      最后才用 `api_key`，避免只配了 MiMo 密钥的机器把 DeepSeek key 发到 MiMo。
+    """
+    if _is_deepseek_endpoint(base_url):
+        return _first_set(
+            ("api_key", legacy_api_key),
+            ("AI_API_KEY", ai_api_key),
+            ("VISION_API_KEY", vision_api_key),
+        )
+    return _first_set(
+        ("AI_API_KEY", ai_api_key),
+        ("VISION_API_KEY", vision_api_key),
+        ("api_key", legacy_api_key),
+    )
+
+
+api_key, _TEXT_KEY_SOURCE = _pick_text_api_key(
+    _TEXT_BASE_URL,
+    os.getenv("AI_API_KEY"),
+    os.getenv("VISION_API_KEY"),
+    os.getenv("api_key"),
+)
+
+# 视觉模型的 key：优先 VISION_API_KEY，其次 AI_API_KEY（同为 MiMo 时是同一个 key），
+# 最后才是 api_key。旧写法直接退到 api_key，在文本端点换成 DeepSeek 之后，
+# 会把 DeepSeek 的 key 发到 MiMo 端点。
+_vision_api_key, _VISION_KEY_SOURCE = _first_set(
+    ("VISION_API_KEY", os.getenv("VISION_API_KEY")),
+    ("AI_API_KEY", os.getenv("AI_API_KEY")),
+    ("api_key", os.getenv("api_key")),
 )
 
 def _build_chat_model(**kwargs) -> ChatOpenAI | None:
@@ -41,24 +108,20 @@ CREATIVE_TEMPERATURE = float(os.getenv("AI_CREATIVE_TEMPERATURE", "0.7"))
 
 def _build_text_model(temperature: float) -> ChatOpenAI | None:
     return _build_chat_model(
-        model=os.getenv("AI_MODEL", "mimo-v2.5"),
+        model=_TEXT_MODEL,
         api_key=api_key,
-        base_url=os.getenv("AI_BASE_URL", "https://api.xiaomimimo.com/v1"),
+        base_url=_TEXT_BASE_URL,
         temperature=temperature,
         streaming=True,
         request_timeout=120,  # 单次请求超时 120 秒，避免断连后无限等待
     )
 
 
-# 启动作业时把"这次跑的是哪个模型、打到哪个端点"写进日志。
+# 启动作业时把"这次跑的是哪个模型、打到哪个端点、key 从哪个变量取的"写进日志。
 # 换模型只改 .env，代码里看不出来 —— 出问题时第一件要确认的就是"到底换成功了没有"，
-# 而这件事以前只能靠猜。**只打模型名和端点，不打 key。**
-logger.info(
-    "LLM 文本模型: %s @ %s（视觉模型: %s）",
-    os.getenv("AI_MODEL", "mimo-v2.5"),
-    os.getenv("AI_BASE_URL", "https://api.xiaomimimo.com/v1"),
-    os.getenv("VISION_MODEL", "mimo-v2.5"),
-)
+# 而这件事以前只能靠猜。**只打模型名、端点和变量名，不打 key。**
+logger.info("%s", _model_line("文本", _TEXT_MODEL, _TEXT_BASE_URL, _TEXT_KEY_SOURCE))
+logger.info("%s", _model_line("视觉", _VISION_MODEL, _VISION_BASE_URL, _VISION_KEY_SOURCE))
 
 
 _raw_llm = _build_text_model(_BASE_TEMPERATURE)
@@ -75,11 +138,11 @@ def _profile_llm(temperature: float) -> ChatOpenAI | None:
         _temp_models[temperature] = _build_text_model(temperature)
     return _temp_models[temperature]
 
-# 多模态 LLM（MiMo，用于视觉审查 PPT 截图等）
+# 多模态 LLM（默认 MiMo，用于视觉审查 PPT 截图等）
 _vision_llm = _build_chat_model(
-    model=os.getenv("VISION_MODEL", "mimo-v2.5"),
-    api_key=os.getenv("VISION_API_KEY", api_key),
-    base_url=os.getenv("VISION_BASE_URL", "https://api.xiaomimimo.com/v1"),
+    model=_VISION_MODEL,
+    api_key=_vision_api_key,
+    base_url=_VISION_BASE_URL,
     temperature=0.3,
     streaming=False,
 )

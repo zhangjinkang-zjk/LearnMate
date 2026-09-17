@@ -178,9 +178,9 @@
                 wide
                 :paginate="true"
                 :show-title="false"
-                :title="activeNode.title"
+                :title="activeNode?.title"
                 :content="documentContent"
-                :tags="activeNode.knowledge_tags || []"
+                :tags="activeNode?.knowledge_tags || []"
                 :chapter-number="activeNodeIndex + 1"
                 annotatable
                 :annotations="documentAnnotations"
@@ -212,7 +212,7 @@
               <PptEditorFrame
                 v-else-if="resourceView === 'ppt'"
                 :content="pptContent"
-                :title="activeNode.title"
+                :title="activeNode?.title"
                 :theme-id="pptResource?.ppt_theme_id || 'minimal-white'"
               />
 
@@ -225,7 +225,7 @@
               <MindmapPreview
                 v-else-if="resourceView === 'mindmap'"
                 :content="mindmapContent"
-                :title="activeNode.title"
+                :title="activeNode?.title"
               />
 
               <div v-else-if="resourceView === 'video' && isVideoLoading" class="document-loading surface" aria-live="polite">
@@ -254,7 +254,7 @@
                 </button>
                 <div class="chapter-footer__copy">
                   <strong>{{ chapterFooterTitle }}</strong>
-                  <span>{{ documentContent ? `${estimatedReadMinutes} 分钟阅读 · ${activeNode.knowledge_tags?.length || 0} 个知识点` : '正在准备学习材料' }}</span>
+                  <span>{{ documentContent ? `${estimatedReadMinutes} 分钟阅读 · ${activeNode?.knowledge_tags?.length || 0} 个知识点` : '正在准备学习材料' }}</span>
                 </div>
                 <RouterLink v-if="pathCompleted && !nextNode" class="button button--primary" to="/learning/advanced">
                   去做实战任务
@@ -399,6 +399,14 @@ let videoPollTimer = null
 let videoPollWake = null
 const VIDEO_POLL_INTERVAL_MS = 3000
 const VIDEO_POLL_MAX_MS = 12 * 60 * 1000
+// 作业在中途消失时，接口只会回一句"从没生成过"（idle/missing/stale）——后端重启会带走
+// 内存里的作业，失败作业过了 10 分钟 TTL 也会被回收（path_video_jobs 的 _TERMINAL_TTL_SECONDS），
+// 这时候失败原因早就没了。以前轮询循环里只 GET 不重发，碰上这种情况就一直空转到 12 分钟
+// 上限才报"耗时过长"，学生看到的就是一直转圈。现在遇到这几种状态就重新发起一次生成，
+// 但给一个重试预算：后端每次都立刻失败时不至于打成死循环。
+const VIDEO_RESTART_STATUSES = ['idle', 'missing', 'stale']
+const VIDEO_RESTART_LIMIT = 3
+const VIDEO_RESTART_BACKOFF_MS = 5000
 
 const activeNodeIndex = computed(() => learningPath.value?.nodes.findIndex((node) => node.id === activeNodeId.value) ?? -1)
 const activeNode = computed(() => learningPath.value?.nodes[activeNodeIndex.value] || null)
@@ -1198,6 +1206,13 @@ function waitNextVideoPoll(ms) {
 function invalidateVideoPoll() {
   videoPollToken += 1
   stopVideoPoll()
+  // isVideoLoading 属于被作废的那一轮轮询，必须在这里清掉：
+  // pollPathVideo 的 finally 里那句复位带着 token 守卫（token 不等就直接 return），
+  // 所以作废之后它永远不会执行 —— 而 showVideo() 开头就是
+  // `if (isVideoLoading.value) { 只切视图; return }`。
+  // 不清的后果是：换过一次路径之后，学生再点「视频讲解」既不发起请求也不报错，
+  // 界面上一直转圈，后端日志一行都没有。
+  isVideoLoading.value = false
 }
 
 // 后端把生成甩到后台作业里，POST 只回状态，产物要轮询 GET 取。
@@ -1210,16 +1225,27 @@ async function pollPathVideo() {
   isVideoLoading.value = true
   videoError.value = ''
   stopVideoPoll()
+  let restarts = 0
   try {
     let video = await fundamentalsApi.getPathVideo(pathId)
     if (video?.status === 'failed') throw new Error(video.error || '视频生成失败，请稍后重试。')
     if (!video?.file_url && video?.status !== 'generating') {
       video = await fundamentalsApi.generatePathVideo(pathId)
+      restarts += 1
       if (video?.status === 'failed') throw new Error(video.error || '视频生成失败，请稍后重试。')
     }
     while (!video?.file_url) {
       if (token !== videoPollToken) return
       if (Date.now() > deadline) throw new Error('视频生成耗时过长，请稍后重试。')
+      if (VIDEO_RESTART_STATUSES.includes(video?.status)) {
+        if (restarts >= VIDEO_RESTART_LIMIT) throw new Error('视频生成任务中断了，请重新点击视频讲解。')
+        await waitNextVideoPoll(VIDEO_RESTART_BACKOFF_MS)
+        if (token !== videoPollToken) return
+        restarts += 1
+        video = await fundamentalsApi.generatePathVideo(pathId)
+        if (video?.status === 'failed') throw new Error(video.error || '视频生成失败，请稍后重试。')
+        continue
+      }
       await waitNextVideoPoll(VIDEO_POLL_INTERVAL_MS)
       if (token !== videoPollToken) return
       video = await fundamentalsApi.getPathVideo(pathId)
