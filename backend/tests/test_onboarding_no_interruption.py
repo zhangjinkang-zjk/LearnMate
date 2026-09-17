@@ -11,6 +11,7 @@
 """
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -189,19 +190,27 @@ async def test_disconnecting_does_not_cancel_the_running_operation():
 
 @pytest.mark.asyncio
 async def test_closing_the_generator_does_not_cancel_the_running_operation():
-    """aclose() 是老版本 Starlette 断连的形态，同样不能带走业务。"""
+    """aclose() 是老版本 Starlette 断连的形态，同样不能带走业务。
+
+    业务任务是在进入 ``drain_stream`` 那一刻才建出来的（前两帧只是"开始了"的公告），
+    所以要推到第三帧、确认业务真的跑起来了，再关生成器 —— 否则关掉的是一个还没开始
+    的流，"没被取消"就是句空话。
+    """
     started = asyncio.Event()
     finished = []
 
     async def operation(writer):
         started.set()
+        writer("第一段", "reply")
         await asyncio.sleep(0.05)
         finished.append(True)
 
     agen = diagnosis_router._stream_diagnosis(operation, "正在出题")
-    frame = await agen.__anext__()
-    assert "status" in frame
-    await asyncio.wait_for(started.wait(), 1)
+    await agen.__anext__()   # agent_event：诊断作为角色出现
+    await agen.__anext__()   # status
+    frame = await agen.__anext__()   # 到这一帧才真的进了 drain_stream
+    assert "reply_delta" in frame
+    assert started.is_set(), "业务没有被启动，这条测试就没测到点子上"
 
     await agen.aclose()
     await asyncio.sleep(0.12)
@@ -358,3 +367,52 @@ async def test_portrait_regenerate_keeps_the_existing_summary_on_failure(monkeyp
 
     assert result["profile_summary"] == "上一次生成的摘要"
     assert picture.saved == 0, "失败时不该写回任何东西"
+
+
+# ── 5. 重做诊断不能把画像里别的东西抹掉 ─────────────────────
+
+@pytest.mark.asyncio
+async def test_resaving_the_onboarding_context_keeps_the_stored_assessment(monkeypatch):
+    """诊断 /start 每次都会重写 onboarding，但它只能改自己那几个键。
+
+    整份替换会把 init_from_dialogue 存在那里的 onboarding["assessment"]（访谈之后
+    那次测评的结果）一起抹掉。首次流程撞不上这件事 —— 诊断跑在画像生成之前 ——
+    但**重做一次诊断**就会，而那条记录正是"这个起点是怎么来的"的答案。
+    """
+    picture = FakePicture()
+    picture.traits = json.dumps({
+        "onboarding": {
+            "direction": "旧方向",
+            "assessment": {"percentage": 62.5, "total_questions": 3},
+        },
+        "interest": {"value": "机械制图", "source": "user_stated"},
+    }, ensure_ascii=False)
+    user = SimpleNamespace(picture=_AsyncValue(picture))
+    monkeypatch.setattr(diagnosis_service.User, "filter", lambda **_filters: FakeQuery(first_value=user))
+
+    await diagnosis_service._save_onboarding_context(9, "学生", "智能体应用开发", "为就业准备")
+
+    traits = json.loads(picture.traits)
+    onboarding = traits["onboarding"]
+    assert onboarding["identity"] == "学生"
+    assert onboarding["direction"] == "智能体应用开发"
+    assert onboarding["goal"] == "为就业准备"
+    assert onboarding["assessment"] == {"percentage": 62.5, "total_questions": 3}, \
+        "重写 onboarding 把上一次的测评结果抹掉了"
+    # 画像的其它维度本来就不该被这一步碰到
+    assert traits["interest"] == {"value": "机械制图", "source": "user_stated"}
+    assert picture.learning_goal == "job"
+    assert picture.saved == 1
+
+
+@pytest.mark.asyncio
+async def test_the_onboarding_context_survives_a_broken_traits_payload(monkeypatch):
+    """traits 是脏数据（不是 dict 的 onboarding）时不能炸在 .update 上。"""
+    picture = FakePicture()
+    picture.traits = json.dumps({"onboarding": "手写坏掉的字符串"}, ensure_ascii=False)
+    user = SimpleNamespace(picture=_AsyncValue(picture))
+    monkeypatch.setattr(diagnosis_service.User, "filter", lambda **_filters: FakeQuery(first_value=user))
+
+    await diagnosis_service._save_onboarding_context(9, "学生", "智能体应用开发", "为就业准备")
+
+    assert json.loads(picture.traits)["onboarding"]["direction"] == "智能体应用开发"

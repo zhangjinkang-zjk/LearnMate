@@ -41,9 +41,9 @@ async def _on_profile_changed(user_id: int, major: str, grade: str):
             logger.info("_on_profile_changed 跳过（1小时内已生成过路径） user=%s", user_id)
             return
 
-        # 1. 同步课程到画像
+        # 1. 同步课程到画像（课程表按"方向/专业"建，没有年级这一维）
         from backend.src.service.curriculum.service import sync_to_portrait
-        courses = await sync_to_portrait(user_id, major, grade)
+        courses = await sync_to_portrait(user_id, major)
 
         if not courses:
             return

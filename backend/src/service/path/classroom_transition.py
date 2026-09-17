@@ -109,7 +109,6 @@ async def _review_transition_content(
     candidates: list[dict[str, str]],
     user_id: int,
     major: str,
-    grade: str,
     learning_goal: str,
     cognition: str,
     interest: str,
@@ -130,7 +129,6 @@ async def _review_transition_content(
             topic=topic,
             profile_focus=profile_focus or "未提供，优先判断与当前知识点的直接关系",
             major=major or "未提供",
-            grade=grade or "未提供",
             learning_goal=learning_goal or "未提供",
             cognition=cognition or "未提供",
             interest=interest or "未提供",
@@ -230,7 +228,6 @@ async def _build_transition_context(path_id: int, node_id: int, user_id: int) ->
     interest = _clip(trait_display(traits, "interest"), 48)
     cognition = _clip(getattr(picture, "cognition", ""), 24) if picture else ""
     learning_goal = _clip(getattr(picture, "learning_goal", ""), 32) if picture else ""
-    grade = _clip(getattr(user, "grade", ""), 24)
     search_focus = interest or major or subject or topic
     return {
         "path_id": path_id,
@@ -238,7 +235,6 @@ async def _build_transition_context(path_id: int, node_id: int, user_id: int) ->
         "user_id": user_id,
         "topic": topic,
         "major": major,
-        "grade": grade,
         "interest": interest,
         "cognition": cognition,
         "learning_goal": learning_goal,
@@ -297,7 +293,6 @@ async def _refresh_transition_cache(cache_key: tuple[int, int], context: dict[st
             candidates,
             context["user_id"],
             context["major"],
-            context["grade"],
             context["learning_goal"],
             context["cognition"],
             context["interest"],

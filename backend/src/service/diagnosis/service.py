@@ -12,7 +12,8 @@ from backend.src.models.exam_model import ExamQuestion, ExamRecord
 from backend.src.models.portraitmodel import User_picture
 from backend.src.models.usermodel import User
 from backend.src.service.exam.service import ExamService
-from backend.src.service.portrait.service import dump_traits, parse_traits, record_learning_event
+from backend.src.service.portrait.service import dump_traits, is_usable_direction, parse_traits, record_learning_event
+from backend.src.utils import llm_stream
 from backend.src.utils.database import init_db
 from backend.src.utils.json_parser import parse_llm_json
 from backend.src.utils.prompt_loader import fill_prompt, load_prompt
@@ -45,89 +46,13 @@ def _spawn_background(coro) -> None:
     task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
-# 模型这两处（出题、判分）的输出都分两段：**先一行直接显示给学生看的正文**，独占一行的
-# `---`，然后是程序要用的 JSON。这样正文一生成就能推给学生，不用等整段 JSON 拼完 ——
-# 等 40 秒看"正在生成回复…"和看着字一个个出来，是完全不同的两件事。
-#
-# 分开之后还有个副作用是好的：正文不经过 JSON 转义，页面也不用再猜字段名。
-_VISIBLE_MARKER = "\n---"
-
-
-def _channel_writer(on_delta, channel: str):
-    """把"这是哪个气泡的字"绑在回调上。
-
-    一轮里有两段正文先后流出来：先判分那句（回复气泡），再下一题（题目气泡）。页面必须
-    知道往哪个气泡里追加，否则两句话会挤在一起。
-    """
-    if not on_delta:
-        return None
-    return lambda text: on_delta(text, channel)
-
-
-def _split_visible(raw: str) -> tuple[str, str]:
-    """把模型输出切成 (给学生看的正文, 剩下的尾巴)。
-
-    没写分隔行时**正文为空**，不是"整段都算正文"：那种情况下整段是 JSON（老格式），
-    把它当正文就等于把 `{"question": ...}` 原样画到学生眼前。
-    """
-    head, sep, tail = raw.partition(_VISIBLE_MARKER)
-    return (head.strip(), tail) if sep else ("", raw)
-
-
-def _releasable(buffer: str) -> str:
-    """流式过程中"现在就可以给学生看"的那一段。
-
-    两条底线：分隔行（或它的半截，比如刚收到一个 `\\n-`）不能露出去；模型没按两段式写、
-    直接吐 JSON 时，一个字都不能当正文推 —— 那比不流式更糟。
-    """
-    cut = len(buffer)
-    for stop in (_VISIBLE_MARKER, "{", "["):
-        pos = buffer.find(stop)
-        if pos >= 0:
-            cut = min(cut, pos)
-    if cut == len(buffer) and _VISIBLE_MARKER not in buffer:
-        # 扣住结尾那几个字符：它可能就是分隔行的开头，等下一个块到了再决定
-        for size in range(min(len(_VISIBLE_MARKER) - 1, len(buffer)), 0, -1):
-            if buffer.endswith(_VISIBLE_MARKER[:size]):
-                cut -= size
-                break
-    return buffer[:cut]
-
-
-async def _consume_stream(chunks, on_delta=None, timeout: float | None = None) -> dict:
-    """消费模型流，边收边把"可以安全展示"的那部分推出去。
-
-    返回 {"raw": 完整输出, "visible": 已展示的正文, "done": 是否正常收完}。
-
-    超时不丢已经展示出去的内容：正文已经到学生眼前了，再撤回换成兜底题只会更糟。所以
-    超时/中断都只影响"程序字段拿不拿得到"，不影响学生看到的那句话。
-    """
-    state = {"raw": "", "visible": "", "done": False}
-    try:
-        async with asyncio.timeout(timeout):
-            async for delta in chunks:
-                state["raw"] += delta
-                visible = _releasable(state["raw"])
-                if on_delta and len(visible) > len(state["visible"]):
-                    on_delta(visible[len(state["visible"]):])
-                    state["visible"] = visible
-            state["done"] = True
-    except TimeoutError:
-        logger.warning("诊断模型流超时，用已经拿到的部分继续 timeout=%s", timeout)
-    except Exception:
-        logger.warning("诊断模型流中断，用已经拿到的部分继续", exc_info=True)
-    # 收尾以完整输出切出来的那段为准：流式期间为了不泄露，可能扣住了结尾几个字符。
-    head = _split_visible(state["raw"])[0]
-    if head:
-        state["visible"] = head
-    return state
-
-
-def _tail_payload(raw: str) -> dict:
-    """取分隔行之后那段 JSON；模型没按格式写就整段当 JSON 试一次（兼容老格式）。"""
-    _, tail = _split_visible(raw)
-    parsed = parse_llm_json((tail or raw).strip())
-    return parsed if isinstance(parsed, dict) else {}
+# 两段式输出的处理放在 utils/llm_stream（画像访谈也用同一套）。这里保留这几个别名，
+# 免得改一处就要动一片调用点。
+_VISIBLE_MARKER = llm_stream.VISIBLE_MARKER
+_channel_writer = llm_stream.bind_channel
+_split_visible = llm_stream.split_visible
+_consume_stream = llm_stream.consume_stream
+_tail_payload = llm_stream.tail_payload
 
 
 def _goal_code(goal: str) -> str:
@@ -154,13 +79,29 @@ async def _save_onboarding_context(user_id: int, identity: str, direction: str, 
         await user.save()
 
     traits = parse_traits(picture.traits)
-    traits["onboarding"] = {
+    # 只覆盖这几个键，不整份替换 onboarding：整份替换会把 init_from_dialogue 存在那里的
+    # onboarding["assessment"]（访谈之后那次测评的结果）一起抹掉。首次流程撞不上这件事
+    # —— 诊断跑在画像生成之前 —— 但**重做一次诊断**就会，而那条记录正是"这个起点是
+    # 怎么来的"的答案。新测评的结果由收尾时的 init_from_dialogue 覆盖，这里不动它。
+    onboarding = traits.get("onboarding")
+    if not isinstance(onboarding, dict):
+        onboarding = {}
+    onboarding.update({
         "identity": identity[:80],
-        "direction": direction[:120],
         "goal": goal[:160],
         "source": "user_stated",
-    }
+    })
+    # 学习方向要是一个真的方向才能写。学生第 1 问答「不知道」时，这个字符串以前照样被
+    # 存下来，然后一路被拿去拆科目、生成路径 —— 最后长出一整套跟他的方向毫无关系的课。
+    # 拿不到就保留画像里已有的（可能是定向页填的，也可能是上一次真的方向），不覆盖。
+    if is_usable_direction(direction):
+        onboarding["direction"] = direction[:120]
+    else:
+        logger.warning("诊断收到的学习方向不可用，不写进画像 direction=%r", direction)
+    traits["onboarding"] = onboarding
     # 保留后端既有枚举字段供画像/路径逻辑使用，原始中文目标放在 traits 中。
+    # 这个枚举描述的是**目标**（考试/竞赛/考证/兴趣/求职），所以只从 goal 推 ——
+    # 从方向推会得到"interest"，把"为就业准备"这类目标丢掉。
     picture.learning_goal = _goal_code(goal)
     picture.traits = dump_traits(traits)
     await picture.save()
@@ -364,6 +305,11 @@ async def start(user_id: int, identity: str, direction: str, goal: str, max_step
     identity, direction, goal = str(identity or "").strip(), str(direction or "").strip(), str(goal or "").strip()
     if not identity or not direction or not goal:
         raise ValueError("身份、学习方向和学习目标不能为空")
+    # 有值但不等于有方向：提示词里出现"学习方向：不知道"时，模型会照着"一个不知道该学
+    # 什么的人"出一整套题，这次诊断就白做了。当成未填写处理，让它按身份和目标问。
+    if not is_usable_direction(direction):
+        logger.warning("诊断启动时学习方向不可用，按未填写处理 direction=%r", direction)
+        direction = ""
     max_steps = max(_MIN_QUESTIONS, min(int(max_steps or _MIN_QUESTIONS), _MAX_QUESTIONS))
     await _save_onboarding_context(user_id, identity, direction, goal)
     try:

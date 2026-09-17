@@ -129,6 +129,48 @@ async def _ensure_advanced_practice_deliverable_state_column():
         raise
 
 
+async def _ensure_curriculum_by_direction_table():
+    """课程缓存表从「专业×年级」改成「按学习方向」—— 结构对不上就整张重建。
+
+    `generate_schemas()` 只建缺失的**表**，不会改已存在的表。所以模型上把
+    `major` + `grade` 换成 `direction` 之后，没跑迁移的库会一直带着旧结构，方向拆解
+    一查就撞 MySQL 1054 `Unknown column 'direction'`，把 `/path/generate-from-direction`
+    直接打成 500。
+
+    为什么这里敢 DROP：这张表是**纯派生缓存** —— 内容是模型按方向现生成再写回来的，
+    随时可以重建；而它的旧形态（专业×年级）从来没有被调用过（`sys_user.major`/`grade`
+    一直是 NULL，表里一行都没有）。丢掉的只有"下次多花一次模型调用"。
+
+    只在"确实缺 direction 列"或"表不存在"时重建：其他异常（连不上库等）原样抛出去，
+    不能因为一个连不通就把表删了。
+    """
+    import logging
+
+    _log = logging.getLogger(__name__)
+    conn = Tortoise.get_connection("default")
+    try:
+        await conn.execute_query("SELECT direction FROM curriculum_courses LIMIT 1")
+        return
+    except Exception as exc:
+        error_text = str(exc)
+        # 1054 = Unknown column（旧结构），1146 = Table doesn't exist（新库，交给
+        # generate_schemas 建即可，这里不用管）
+        if "1054" not in error_text and "1146" not in error_text:
+            _log.exception("课程缓存表结构检查失败（不是结构问题，不重建）")
+            raise
+        if "1146" in error_text:
+            return
+
+    try:
+        await conn.execute_query("DROP TABLE IF EXISTS curriculum_courses")
+        # 上面那次 generate_schemas() 已经跑过了，删完要再跑一次才会按新模型建出来。
+        await Tortoise.generate_schemas()
+        _log.warning("课程缓存表结构已过期（缺 direction 列），已按「学习方向」重建")
+    except Exception:
+        _log.exception("课程缓存表重建失败")
+        raise
+
+
 async def init_db():
     global _DB_INITIALIZED
     if _DB_INITIALIZED :
@@ -146,6 +188,7 @@ async def init_db():
         await _ensure_path_node_teaching_spec_column()
         await _ensure_path_node_difficulty_score_column()
         await _ensure_advanced_practice_deliverable_state_column()
+        await _ensure_curriculum_by_direction_table()
         _DB_INITIALIZED = True
 
 async def close_db():

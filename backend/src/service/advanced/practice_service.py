@@ -443,7 +443,9 @@ async def run_grading(user_id: int, session_key: str) -> None:
 
         prompt = build_grading_prompt(task, messages, completed, submission, phases)
         response = await asyncio.wait_for(
-            llm.ainvoke(prompt, priority="low", user_id=user_id, pool="advanced"),
+            # 高优先级：学生提交之后正等这个分数，和上面生成任务那条同理 —— `wait_for` 把排队
+            # 时间也算进预算，low 排久了就降级成确定性基线，学生看到的是"系统没读懂我的回答"。
+            llm.ainvoke(prompt, priority="high", user_id=user_id, pool="advanced"),
             timeout=GRADING_TIMEOUT_SECONDS,
         )
         graded = parse_grading_payload(parse_llm_json(response.content))

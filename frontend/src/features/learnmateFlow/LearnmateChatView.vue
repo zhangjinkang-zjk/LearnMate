@@ -17,9 +17,42 @@
           <div v-for="(message, index) in messages" :key="`${message.role}-${index}`" class="chat-message" :class="`chat-message--${message.role}`">
             {{ message.text }}
           </div>
+          <!-- 正在生成的题面：字是一个一个上来的，还没出一个字时先占住位置，
+               免得看上去像没反应。 -->
+          <div
+            v-if="liveQuestionStep >= 0"
+            class="chat-message chat-message--assistant"
+            :class="{ 'chat-message--typing': !liveQuestion }"
+            aria-live="polite"
+          >{{ liveQuestion || '···' }}</div>
         </div>
 
-        <form class="conversation-input" @submit.prevent="sendMessage">
+        <!-- 五问答完还没拿到方向或目标：换成补填，而不是继续假装在聊天。
+             诊断的 /learning/diagnosis/start 要求两者非空，缺一个就是必然 422 的请求；
+             而"没有方向"这件事本来也不该由兜底文案替学生编一个出来。 -->
+        <form v-if="needsSlots" class="conversation-input conversation-input--slots" @submit.prevent="submitSlots">
+          <p class="slots-hint">{{ slotsHint }}</p>
+          <input
+            v-model="slotsDraft.direction"
+            type="text"
+            autocomplete="off"
+            placeholder="想学什么？一个词也行，比如机械制图"
+            aria-label="学习方向"
+          />
+          <input
+            v-model="slotsDraft.goal"
+            type="text"
+            autocomplete="off"
+            placeholder="想拿它做成什么？比如做出一个零件图"
+            aria-label="学习目标"
+          />
+          <button type="submit" :disabled="!slotsReady" aria-label="继续">
+            <span aria-hidden="true">↗</span>
+          </button>
+          <p v-if="slotsError" class="slots-error" role="alert">{{ slotsError }}</p>
+        </form>
+
+        <form v-else class="conversation-input" @submit.prevent="sendMessage">
           <input
             v-model="messageDraft"
             type="text"
@@ -39,7 +72,7 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { getNextPortraitInterviewQuestion } from '../../shared/api/portraitApi'
+import { streamNextPortraitInterviewQuestion } from '../../shared/api/portraitApi'
 import { learningState, persistLearningProfile } from '@/entities/learning/learningState'
 
 const router = useRouter()
@@ -53,6 +86,12 @@ const portraitAnswers = ref([])
 const isSaving = ref(false)
 const messages = ref([])
 const conversationList = ref(null)
+// 访谈问不出方向/目标时启用的补填入口（见 finishInterview）
+const needsSlots = ref(false)
+const slotsDraft = ref({ direction: '', goal: '' })
+const slotsHint = ref('')
+const slotsError = ref('')
+const slotsReady = computed(() => Boolean(slotsDraft.value.direction.trim() && slotsDraft.value.goal.trim()))
 
 // 第 5 题答完后 step 就满了，此时 sendMessage 会直接跳到能力诊断，
 // 原来的文案「Type start to enter your path...」会诱导用户继续输入，看起来像卡死。
@@ -79,10 +118,12 @@ watch(
 )
 
 const fallbackQuestionVariants = [
+  // 第 1 问的题面是写死的，不走模型（后端 _DIRECTION_QUESTION）：它前面没有对话可依据，
+  // 模型加不了东西，却要学生先等一次首字延迟。这里放的是**同一句话**，有跨语言字面量
+  // 测试钉着两边一字不差 —— 后端现在也会把这句当流式分片推过来，所以这一份只在
+  // 整个请求都没打通（网络断了）时才会显示，措辞分叉等于给学生两个不同的第一问。
   [
-    '你现在最想系统学哪一个方向或主题？可以说一门学科、一个技术领域或一项工作技能，比如 Python 数据分析、智能体应用开发、机械制图。',
-    '如果先选一个方向开始学，你会选什么？说关键词就可以，比如前端开发、产品设计、数据分析；还没想好也可以直接说。',
-    '最近最想弄懂哪一类知识或技能？不用想得很完整，先告诉我一个方向，例如编程、项目管理或知识库应用。'
+    '你现在最想系统学哪一个方向或主题？可以说一门学科、一个技术领域或一项工作技能，比如 Python 数据分析、智能体应用开发、机械制图。'
   ],
   [
     first => `如果把「${first}」做好了，你最想拿它解决什么？可以说会用到的人、场景，或你希望看到的结果。`,
@@ -119,12 +160,47 @@ const NON_DIRECTION_ANSWERS = new Set([
   '1', '2', '3', '4', '5', '0', '。', '？', '?', '.', '无。', '不知道。', '还没想好。',
 ])
 
+// 一句话能不能当学习方向用。判定要和后端 is_usable_direction 逐字对齐（两份表有
+// 一致性测试钉着）——判定只服务"这一问怎么问"是旧写法，现在落盘那条路也要过它。
+const isUsableDirection = value => {
+  const answer = String(value || '').replace(/\s+/g, ' ').trim()
+  // 比对去空白：把「不 知道」「还没 想好」敲进来时，和连着写是同一句废话（后端同此）。
+  const compact = answer.replace(/\s+/g, '')
+  if (!compact || NON_DIRECTION_ANSWERS.has(compact.toLowerCase())) return false
+  // 单个数字或符号（"1"、"？"）不是方向；单个汉字或字母（"学"、"a"）可能是。
+  if (compact.length < 2 && !/^[a-zA-Z一-龥]$/.test(compact)) return false
+  return true
+}
+
 const usableDirection = () => {
   const answer = String(portraitAnswers.value[0] || '').replace(/\s+/g, ' ').trim()
-  if (!answer || NON_DIRECTION_ANSWERS.has(answer.toLowerCase())) return ''
-  // 单个数字或符号（"1"、"？"）不是方向；单个汉字或字母（"学"、"a"）可能是。
-  if (answer.length < 2 && !/^[a-zA-Z一-龥]$/.test(answer)) return ''
-  return answer.slice(0, 24)
+  return isUsableDirection(answer) ? answer.slice(0, 24) : ''
+}
+
+// 从整场访谈里抽出方向和目标。
+//
+// 两个值各自对应访谈的哪一问是**写死的**：第 1 问问方向，第 2 问问用途；只有第 1 问答不出
+// 方向时，后端才会把第 2 问换成"换一种问法再问一次方向"（`_stage_instruction_for`），用途
+// 顺延到第 3 问。所以：
+//   方向 = 前两问里第一个可用的回答（后端 DIRECTION_SLOTS 是同一个数字）
+//   目标 = **用途那一问**的回答，不看别的题
+//
+// 绝不能写成"两个值都扫全部回答取第一个可用的"：学生第 1 问答「机械制图」、第 2 问答
+// 「用来就业」时，那样写会把两者对调 —— 而它们一个决定学什么、一个只影响怎么问，
+// 对调的后果是整套课程按"用来就业"生成。同理，第 2 问答不出用途时也不能顺手拿第 3 问
+// （起点）的回答顶上：那不是目标。拿不到就留空，由补填入口收（finishInterview）。
+const DIRECTION_SLOTS = 2
+const resolveInterviewSlots = answers => {
+  const values = (answers || []).map(answer => String(answer || '').replace(/\s+/g, ' ').trim())
+  let directionAt = -1
+  for (let index = 0; index < Math.min(values.length, DIRECTION_SLOTS); index += 1) {
+    if (isUsableDirection(values[index])) { directionAt = index; break }
+  }
+  // 第 1 问给出了方向 → 用途在第 2 问；第 1 问没给出 → 第 2 问是追问，用途顺延到第 3 问。
+  const goalAt = directionAt === 0 ? 1 : 2
+  const goal = isUsableDirection(values[goalAt]) ? values[goalAt].slice(0, 160) : ''
+  if (directionAt < 0) return { direction: '', goal }
+  return { direction: values[directionAt].slice(0, 120), goal }
 }
 
 // 拿不到可用的方向时改问这些：不引用用户的回答，也就不会把一句无意义的话放大。
@@ -204,61 +280,124 @@ const restoreInterview = () => {
   return true
 }
 
-const getResponseData = result => result?.data?.data ?? result?.data ?? result
+// 正在边写边显示的题面，以及它属于哪一问（-1 表示当前没有在生成的题面）。
+const liveQuestion = ref('')
+const liveQuestionStep = ref(-1)
 
-// 题面先由本地兜底表立刻给出，不等模型：这一问实测要 ~50 秒（提示词 1662 字、
-// 输出只有一行 JSON，慢在模型本身），让访谈卡在 "..." 上一分钟比模板题更难看。
-// 模型那一版如果赶在用户动笔之前回来，再由 upgradeQuestion 替换掉屏幕上的题面。
-const askNextQuestion = () => {
-  if (step.value >= PORTRAIT_MAX_STEPS) return
-  const currentStep = step.value
-  const question = fallbackQuestionForStep(currentStep)
-  portraitQuestions.value[currentStep] = question
-  messages.value.push({ role: 'assistant', text: question })
+// 把"正在生成"的那一问定稿：题面取屏幕上已经显示出来的那段 —— 用户看到的就是它，
+// 事后再换成别的等于在他眼皮底下改题。一个字都没流出来（模型报错/超时）时
+// 才退回本地兜底题，访谈本身不中断。
+const settleLiveQuestion = text => {
+  const at = liveQuestionStep.value
+  liveQuestionStep.value = -1
+  liveQuestion.value = ''
+  if (at < 0) return
+  const question = String(text || '').trim() || fallbackQuestionForStep(at)
+  portraitQuestions.value[at] = question
+  // 用户在这一问还没写完时就作答了（step 已经往前走）：消息流里已经有他的回答，
+  // 这时候再补一条问题会变成"答在问前"，所以只记进对话、不补气泡。
+  if (step.value === at) messages.value.push({ role: 'assistant', text: question })
   persistInterview()
-  void upgradeQuestion(currentStep, question)
 }
 
-const upgradeQuestion = async (currentStep, shown) => {
+// 题面由模型边写边推。以前是"本地兜底题先上屏、模型那版回来再替换"，而模型要几十秒
+// 才回来，学生通常已经动笔 —— 替换的前提（step 没变、输入框还是空的）判不成立，
+// 屏幕上留下的就永远是那句本地模板，看起来就是"题目是写死的"。
+const askNextQuestion = async () => {
+  if (step.value >= PORTRAIT_MAX_STEPS) return
+  const currentStep = step.value
+  let streamed = ''
+  liveQuestion.value = ''
+  liveQuestionStep.value = currentStep
   try {
-    const result = await getNextPortraitInterviewQuestion({
-      dialogue: buildDialogue(currentStep),
-      step: currentStep,
-      max_steps: PORTRAIT_MAX_STEPS
-    })
-    const data = getResponseData(result)
-    const question = String(data?.question || '').trim()
-    // 只认模型写的那一版：后端拿不到模型时也会回一句兜底题，直接替换等于把一句
-    // 模板换成另一句模板，题面会在用户眼皮底下改样。
-    if (data?.source !== 'agent' || !question || question === shown) return
-    // 用户已经动笔、或者这一轮已经答完：不再改题面。
-    if (step.value !== currentStep || messageDraft.value.trim()) return
-    const index = messages.value.findIndex(message => message.role === 'assistant' && message.text === shown)
-    if (index < 0) return
-    messages.value[index] = { role: 'assistant', text: question }
-    portraitQuestions.value[currentStep] = question
-    persistInterview()
+    await streamNextPortraitInterviewQuestion(
+      {
+        dialogue: buildDialogue(currentStep),
+        step: currentStep,
+        max_steps: PORTRAIT_MAX_STEPS
+      },
+      event => {
+        // 用户已经作答（这一问定稿了）之后到的分段不再改屏幕。
+        if (event?.type !== 'reply_delta' || liveQuestionStep.value !== currentStep) return
+        streamed += String(event.text || '')
+        liveQuestion.value = streamed
+        void scrollToLatest()
+      }
+    )
   } catch (error) {
-    // 拿不到就用手上这句兜底题，访谈本身不中断。
-    console.warn('[LearnMate] portrait question unavailable, keeping the local question:', error)
+    // 流断了也把已经显示出来的那段留下，实在一个字都没有才用兜底题。
+    console.warn('[LearnMate] portrait question stream failed:', error)
   }
+  if (liveQuestionStep.value === currentStep) settleLiveQuestion(streamed)
 }
 
 // 方向/目标现在由访谈问出来（DirectionSetupPage 那一步只强制身份，方向和目标允许
 // 留空并注明"交给访谈补齐"），必须在跳诊断页之前落盘：诊断的 /learning/diagnosis/start
 // 要求两者非空，否则就是一个必然 422 的请求。
-// 第 1 问固定问方向、第 2 问固定问用途 —— prompts/portrait/interview_next.yaml 把
-// 这条顺序写成了"必须遵守"的硬规则，所以按下标取是稳的。
+//
+// **拿不到就一个都不写。** 以前这里是 `if (answers[0])`，等于不管答的是什么照单全收：
+// 第 1 问答了「不知道」，它就变成学习方向，一路传到科目拆解和路径生成。
+// 不写还顺带保住了定向页填过的值（context 的兜底顺序是 learningState → localStorage）。
 const persistInterviewDirection = () => {
-  const answers = portraitAnswers.value.map(answer => String(answer || '').trim())
-  if (answers[0]) learningState.direction = answers[0].slice(0, 120)
-  if (answers[1]) learningState.goal = answers[1].slice(0, 160)
+  const { direction, goal } = resolveInterviewSlots(portraitAnswers.value)
+  if (direction) learningState.direction = direction
+  if (goal) learningState.goal = goal
   persistLearningProfile()
+}
+
+// 诊断要用的那两个值，取的是"最终生效"的那一份：访谈问出来的优先，其次定向页填过的。
+// 只认可用的值——上一轮跑坏留下的 localStorage（比如 direction='不知道'）不算数，
+// 否则补填入口永远不会出现。
+const effectiveSlots = () => {
+  const stored = key => String(localStorage.getItem(key) || '').replace(/\s+/g, ' ').trim()
+  const direction = String(learningState.direction || stored('learnmate_direction') || '').trim()
+  const goal = String(learningState.goal || stored('learnmate_goal') || '').trim()
+  return {
+    direction: isUsableDirection(direction) ? direction : '',
+    goal: isUsableDirection(goal) ? goal : '',
+  }
+}
+
+// 访谈走完了。两个值都齐就直接进诊断；缺哪个就把输入换成补填入口。
+const finishInterview = () => {
+  persistInterviewDirection()
+  const { direction, goal } = effectiveSlots()
+  if (direction && goal) return true
+  slotsDraft.value = { direction, goal }
+  slotsHint.value = !direction
+    ? '就差一个学习方向：想学什么？给我一个词也行。'
+    : '再补一句想拿它做成什么，就可以开始基础检测了。'
+  needsSlots.value = true
+  return false
+}
+
+const submitSlots = () => {
+  const direction = slotsDraft.value.direction.trim()
+  const goal = slotsDraft.value.goal.trim()
+  if (!isUsableDirection(direction)) {
+    slotsError.value = '这一句还看不出你想学什么，换一个说法：一门课、一个工具、一类问题都可以。'
+    return
+  }
+  if (!isUsableDirection(goal)) {
+    slotsError.value = '再说一句你想拿它做成什么就行，哪怕只是"做出一个小作品"。'
+    return
+  }
+  slotsError.value = ''
+  learningState.direction = direction.slice(0, 120)
+  learningState.goal = goal.slice(0, 160)
+  persistLearningProfile()
+  messages.value.push({ role: 'user', text: direction })
+  needsSlots.value = false
+  sessionStorage.removeItem('learnmate_portrait_summary')
+  sessionStorage.removeItem('learnmate_diagnosis_result')
+  router.push('/onboarding/diagnosis')
 }
 
 const sendMessage = async () => {
   const value = messageDraft.value.trim()
   if (!value) return
+  // 题面还在生成时就作答了：先把屏幕上当时那段定稿，保证消息流里"问在前、答在后"。
+  if (liveQuestionStep.value === step.value) settleLiveQuestion(liveQuestion.value)
   messages.value.push({ role: 'user', text: value })
   messageDraft.value = ''
 
@@ -267,12 +406,14 @@ const sendMessage = async () => {
     step.value += 1
     persistInterview()
     if (step.value < PORTRAIT_MAX_STEPS) {
-      askNextQuestion()
-    } else {
-      persistInterviewDirection()
+      void askNextQuestion()
+    } else if (finishInterview()) {
       sessionStorage.removeItem('learnmate_portrait_summary')
       sessionStorage.removeItem('learnmate_diagnosis_result')
       router.push('/onboarding/diagnosis')
+    } else {
+      // 五问答完还是没拿到方向/目标：上面已经换成补填入口，填完再走。
+      void scrollToLatest()
     }
     return
   }
@@ -503,6 +644,50 @@ onMounted(() => {
 
 .conversation-input input:disabled {
   cursor: wait;
+}
+
+/* 补填方向/目标：同一套输入语言，但要点填两行，所以胶囊形改成圆角块，
+   按钮挪到右下角。 */
+.conversation-input--slots {
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  padding: 18px 18px 14px;
+  border-radius: 20px;
+}
+
+.slots-hint {
+  flex: 1 0 100%;
+  margin: 0;
+  color: rgba(243, 240, 231, 0.82);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.conversation-input--slots input {
+  flex: 1 1 44%;
+  min-width: 180px;
+  padding: 10px 14px;
+  border: 1px solid rgba(243, 240, 231, 0.22);
+  border-radius: 999px;
+  background: rgba(243, 240, 231, 0.06);
+}
+
+.conversation-input--slots input:focus {
+  border-color: rgba(226, 244, 82, 0.6);
+}
+
+.conversation-input--slots button {
+  align-self: flex-end;
+  margin-left: auto;
+}
+
+.slots-error {
+  flex: 1 0 100%;
+  margin: 0;
+  color: #f2c49b;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .learn-dialog {

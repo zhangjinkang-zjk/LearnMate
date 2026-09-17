@@ -102,8 +102,16 @@ const traitText = key => {
   if (typeof value === 'string') return value
   return String(value.value || value.text || '').trim()
 }
-const direction = computed(() => String(onboarding.direction || cognition || answerAt(0)).trim())
-const goal = computed(() => String(onboarding.goal || learningGoal || answerAt(1)).trim())
+// 方向/目标的来源只有两处：服务端从访谈里抽出来的 onboarding（后端已经挡过"不算数的
+// 回答"），以及访谈页落盘的 localStorage。**不要**回落到 cognition / answerAt()：
+// cognition 是认知风格（"视觉型"是描述怎么学，不是学什么），answerAt(0) 是访谈的原始
+// 回答 —— 正是「不知道」这类值待的地方，用它等于把上游刚挡掉的东西再放回来。
+// 拿不到就留空，由"未填写"照实显示；别拿别的字段顶上，那会造出一个假方向。
+const storedSlot = key => String(localStorage.getItem(key) || '').trim()
+const directionValue = computed(() => String(onboarding.direction || storedSlot('learnmate_direction')).trim())
+const goalValue = computed(() => String(onboarding.goal || storedSlot('learnmate_goal')).trim())
+const direction = computed(() => directionValue.value || '未填写')
+const goal = computed(() => goalValue.value || '未填写')
 
 const fullSummary = computed(() => [
   aiSummary || '画像分析没有完成，以下是你在访谈中的原始回答：',
@@ -152,8 +160,8 @@ const generatePortrait = async () => {
     const result = await initPortraitFromDialogue({
       dialogue,
       identity,
-      direction: localStorage.getItem('learnmate_direction') || '',
-      goal: localStorage.getItem('learnmate_goal') || '',
+      direction: directionValue.value,
+      goal: goalValue.value,
       assessment,
     })
     if (!result || typeof result !== 'object') throw new Error('未返回有效画像结果')
@@ -178,12 +186,14 @@ const confirmProfile = async () => {
   generationError.value = ''
 
   learningState.identity = identity
-  learningState.direction = direction.value
-  learningState.goal = goal.value
+  // 只在有值时才写：空值不该覆盖已有的（可能是定向页填过的），"未填写"这种展示文案
+  // 更不能落盘 —— 那会造出一个看起来像方向的值。
+  if (directionValue.value) learningState.direction = directionValue.value
+  if (goalValue.value) learningState.goal = goalValue.value
   persistLearningProfile()
 
   try {
-    const response = await learningApi.generatePathsFromDirection(direction.value, goal.value)
+    const response = await learningApi.generatePathsFromDirection(directionValue.value, goalValue.value)
     const generated = unwrap(response)
     const paths = Array.isArray(generated?.paths) ? generated.paths : []
     const readyPath = paths.find(path => path && path.path_id)

@@ -50,6 +50,17 @@ def _build_text_model(temperature: float) -> ChatOpenAI | None:
     )
 
 
+# 启动作业时把"这次跑的是哪个模型、打到哪个端点"写进日志。
+# 换模型只改 .env，代码里看不出来 —— 出问题时第一件要确认的就是"到底换成功了没有"，
+# 而这件事以前只能靠猜。**只打模型名和端点，不打 key。**
+logger.info(
+    "LLM 文本模型: %s @ %s（视觉模型: %s）",
+    os.getenv("AI_MODEL", "mimo-v2.5"),
+    os.getenv("AI_BASE_URL", "https://api.xiaomimimo.com/v1"),
+    os.getenv("VISION_MODEL", "mimo-v2.5"),
+)
+
+
 _raw_llm = _build_text_model(_BASE_TEMPERATURE)
 
 # 非默认温度档的模型按需惰性构建，避免为没人用的档位白建连接池。

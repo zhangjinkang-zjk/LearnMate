@@ -21,6 +21,26 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
         return default
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+# 访谈的题面默认**全部走模板**（`_fallback_interview_question` 那张表，每个阶段 4 个变体、
+# 按学生已经说过的回答做种子挑一个，并且会引用方向原话），一个模型调用都不发。
+#
+# 为什么：这个模型光首字延迟就要二十几到三十几秒，一句三行的题面也一样等 —— 整场访谈
+# 4 分钟里有 3 分半是在等"换一种措辞"，而那点措辞变化对画像没有任何信息增量。模板里
+# 引用的方向、门槛（一个词也行）、一次只问一件事，都是照 `_INTERVIEW_STAGES` 的规格写的。
+#
+# 设 INTERVIEW_LLM_QUESTIONS=1 可以切回"让模型写题面"的老路径 —— 那条路上的机制（阶段锁、
+# 题面闸门、流式分片、兜底表）都原样留着，随时能切回去对比。`portrait/interview_next.yaml`
+# 也留着给它用。
+_USE_MODEL_QUESTIONS = _env_flag("INTERVIEW_LLM_QUESTIONS", False)
+
+
 _last_extraction: dict[int, float] = {}
 
 # ═══════════════════════════════════════
@@ -30,14 +50,19 @@ _last_extraction: dict[int, float] = {}
 _EXTRACTION_INTERVAL = _env_int("PORTRAIT_EXTRACTION_INTERVAL_SECONDS", 20, minimum=5)
 
 # 画像分析（访谈成稿、画像总结）的模型调用上限。超了就降级，不把用户卡在 500 上。
-_PORTRAIT_LLM_TIMEOUT = _env_int("PORTRAIT_LLM_TIMEOUT_SECONDS", 40, minimum=5)
+# 原来写 40 秒，比同一个模型、同一类活儿的访谈下一问（实测 ~50 秒）还紧，而这一步的输出
+# **更长**（一段摘要 + 认知风格 + 目标 + 若干标签），于是经常在模型刚写到一半时被掐断 ——
+# 库里最近 4 条画像有 2 条是降级的空摘要。抬到和访谈同一档：没有理由给它更少的预算。
+# 前端那一档是 90 秒（PORTRAIT_TIMEOUT_MS，有测试钉着必须宽于这里）：最坏情况下模型在
+# 75 秒超时、走下面的降级分支，仍然落在 90 秒之内，用户拿到的是"访谈原始回答"而不是报错。
+_PORTRAIT_LLM_TIMEOUT = _env_int("PORTRAIT_LLM_TIMEOUT_SECONDS", 75, minimum=5)
 
 # 访谈下一问单独一档，比 _PORTRAIT_LLM_TIMEOUT 宽松：这一问实测要 ~50 秒
 # （提示词 1662 字、输出只有一行 JSON，慢在模型本身，不是提示词长度）。
 # 原来这里写死 10 秒，等于每一问都必然超时、全部落到兜底模板上，而失败只记在
 # debug 级别，所以"五个问题过于生硬"看了很久都没人发现是超时。
-# 前端不等这一问（先显示本地兜底题，模型赶在用户动笔前回来才替换），
-# 所以这里的宽限不会让用户干等，只决定"能不能拿到模型那一版"。
+# 前端现在按流式拿这一问（题面边写边显示），所以这里的宽限只决定"题面能不能写完"，
+# 不再决定"用户要不要干等" —— 第一个字出来就有东西看了。
 _INTERVIEW_LLM_TIMEOUT = _env_int("INTERVIEW_LLM_TIMEOUT_SECONDS", 75, minimum=10)
 
 TRAIT_KEYS = [
@@ -386,7 +411,9 @@ _NON_DIRECTION_ANSWERS = {
 
 # 拿不到可用的方向时改问这些：不引用用户的回答，也就不会把一句无意义的话放大。
 _GENERIC_QUESTION_VARIANTS = [
-    [],  # 第 1 问本来就不引用回答
+    # 0 号格（第 1 问）用不上：那一问的题面是写死的（_DIRECTION_QUESTION），本来也不引用
+    # 回答。追问映射回这一格时会先被 _DIRECTION_PROBE_QUESTIONS 顶上。
+    [],
     [
         "你希望把想学的这件事用在什么地方？可以是课程作业、实习任务、竞赛项目，或者工作里的某件事。",
         "你打算先拿它做成点什么？说一个你希望看到的结果就够了。",
@@ -407,11 +434,13 @@ _GENERIC_QUESTION_VARIANTS = [
 # 交给模型 —— 模型看不到后面要问什么，也就跳不了阶段、跑不了题。这是换更快（更弱）
 # 的模型之后仍然能守住"问题不偏"的关键：约束在服务端，不在提示词的说服力上。
 _INTERVIEW_STAGES = (
+    # 第 1 问已经不交给模型了（题面就是 _DIRECTION_QUESTION，见那里的说明）。这一段留着
+    # 当那份题面的规格说明：改题面时照着它对齐，也就保证了"改完还是同一类问题"。
     "确认学习方向或主题：一门学科、一个技术领域、一项工作技能，或一个想系统弄懂的主题。"
-    "允许用户只说关键词或回答「还没想好」，用 1 到 3 个具体例子告诉他可以怎么答。"
+    "用 1 到 3 个具体例子告诉他可以怎么答，并说明给一个词就够。"
     "举例要写成陈述，不要把例子也写成一问 —— 整句只能有一个问号，"
     "两个问号会被当成「一次问了多件事」拦掉，那一问就白出了。"
-    "这一问不要追问项目、交付物、工作场景或学习方式。",
+    "这一问不要追问项目、交付物、工作场景或学习方式，也不要邀请他回答「还没想好」。",
     "接住第 1 问问到的方向，问用户准备怎么用它、希望达成什么结果：可以问会用到的人、"
     "场景、作品或时间节点，也可以问为什么现在值得学。必须引用用户说过的方向原话。"
     "不要问起点，不要问技能缺口，不要问练习条件。",
@@ -423,6 +452,85 @@ _INTERVIEW_STAGES = (
     "了解练习条件：什么时候必须用上、每周能稳定投入多少时间、有没有现成的材料或设备限制、"
     "希望先练一个多大的最小任务。只问一个条件，不要再回到前面几段问过的内容。",
 )
+
+# 第 1 问的题面是**写死的**，不经过模型。
+#
+# 它前面没有任何对话可依据，模型在这句话上能加的只有措辞；而代价是学生点开访谈之后，
+# 要先对着气泡里的 `···` 干等二十几到三十几秒（这个模型的首字延迟）才看到第一个问题
+# —— 整个访谈里最不该等的就是这一问（他也是刚点完定向页，正处在"想赶紧开始"的时刻）。
+#
+# 这一句同时也是前端 `fallbackQuestionForStep(0)` 的那一句，有跨语言字面量测试钉着
+# 两边一字不差：题面是前端记进对话、之后再送回来的那一份，措辞分叉等于两个题面。
+# 改这句话就要两边一起改（对齐检查会挂）。
+_DIRECTION_QUESTION = (
+    "你现在最想系统学哪一个方向或主题？可以说一门学科、一个技术领域或一项工作技能，"
+    "比如 Python 数据分析、智能体应用开发、机械制图。"
+)
+
+# 方向还没问出来时用的那一段：接着问方向，但换一个更好答的入口。
+# 第 0 段的问法是"你想学哪个方向"——学生答「不知道」时，说明这个入口对他太难了，
+# 再把同一句话问一遍只会再拿一个「不知道」。这里换成从他已经有的东西往里收：
+# 在上的课、在做的事、想解决的问题。举的例子必须是**陈述句**，整句只能有一个问号
+# （`_question_rejection_reason` 会把两个问号判成"一次问了多件事"）。
+_DIRECTION_PROBE_STAGE = (
+    "追问学习方向：上一轮没有拿到具体的方向，换一个更好回答的入口接着问同一件事。"
+    "不要再问一遍「你想学什么方向」，改成从他已经有的东西往里收 —— 在上的课、在做的作业或项目、"
+    "工作中要解决的一类问题、最近想弄明白的一件具体的事。"
+    "用 1 到 3 个具体的例子告诉他可以怎么答，并说明给一个词就够。"
+    "举例要写成陈述，不要把例子也写成一问 —— 整句只能有一个问号。"
+    "这一问不要追问目标、交付物或学习方式。"
+)
+
+# 方向只可能落在前两问里（第 1 问 + 第 1 问答不出时的追问）。第 3 问起问的是用途、起点、
+# 缺口和练习条件，那些回答不是方向。前端 resolveInterviewSlots 用的是同一个数字。
+_DIRECTION_SLOTS = 2
+
+# 追问那一问的兜底题面（模型不可用时用）。和第 0 段一样不引用用户的回答 ——
+# 现在手上那句回答正是"没有信息量"的那句，引用它等于把它再放大一遍。
+_DIRECTION_PROBE_QUESTIONS = [
+    "换个角度问：你最近在上什么课、在做什么作业或项目，或者工作里想解决哪一类问题？说一个词就够了，比如机械制图、数据分析、客服系统。",
+    "那我们往回退一步：有没有哪件事是你最近想弄明白、或者非解决不可的？给我一个词就行，比如制图、剪辑、报表。",
+    "说一个你手边正在接触的东西也可以：在学的科目、在做的东西、别人找你帮忙的那件事。比如画零件图、做表格、调试代码。",
+]
+
+
+def _probe_was_needed(dialogue: list[dict]) -> bool:
+    """第 1 问有没有答出方向 —— 也就是第 2 问是不是那个"换问法再问一次"。
+
+    只看第 1 问：追问有没有问出东西，不改变"第 2 问是追问"这个事实。
+    """
+    return not is_usable_direction(_answer_excerpt(dialogue, 0, ""))
+
+
+def _slot_index(step: int, dialogue: list[dict]) -> int:
+    """把"第几问"映射到"第几段"。
+
+    追问占掉一格时，后面的段要依次顺延：第 3 问问用途、第 4 问问起点…… 不顺延的话整场
+    访谈会**跳过"用途"那一段**（`_INTERVIEW_STAGES[1]`），而诊断要求学习目标非空 ——
+    前端又是按问次去读目标的，两边就对不上了。
+
+    代价是最后一段"练习条件"被挤出访谈（一共只有 5 问）。那是几段里最不关键的一段。
+    """
+    if step <= 0:
+        return 0
+    return step - 1 if _probe_was_needed(dialogue) else step
+
+
+def _stage_instruction_for(step: int, dialogue: list[dict]) -> str:
+    """这一问属于哪一段。
+
+    第 2 问（step=1）如果还没拿到方向，就**换一种问法再问一次方向**，而不是按原计划进
+    第 2 段去问"你打算怎么用它"——后面每一段的指令都写着"必须引用用户说过的方向原话"，
+    硬往下走等于让整场访谈都建在一句「不知道」上。
+
+    只重问一次：第二次还是拿不到，说明这个人现在确实说不上来，剩下的阶段本来就不依赖
+    方向，继续问下去比反复追问更有用；方向最后由访谈页那个补填入口收。
+    """
+    if step == 1 and _probe_was_needed(dialogue):
+        return _DIRECTION_PROBE_STAGE
+    index = _slot_index(step, dialogue)
+    return _INTERVIEW_STAGES[min(index, len(_INTERVIEW_STAGES) - 1)]
+
 
 # 长度闸门比提示词里的要求（20 到 90 字）宽一圈：提示词负责引导，这里只拦真异常，
 # 免得把一句好问题因为差几个字丢掉。
@@ -464,29 +572,54 @@ def _question_rejection_reason(question, dialogue: list[dict], step: int) -> str
     return ""
 
 
-def _usable_direction(dialogue: list[dict]) -> str:
-    """第 1 题的答案能不能当成"想学的方向"引用进后面的问题；不能就返回空串。"""
-    answer = _answer_excerpt(dialogue, 0, "")
-    if not answer or answer.lower() in _NON_DIRECTION_ANSWERS:
-        return ""
+def is_usable_direction(text) -> bool:
+    """一句话能不能当"想学的方向"用。
+
+    这份判定以前只服务于"下一句问什么"，**没有拦过落库**：学生第 1 问答「不知道」，
+    这个字符串照样被写进 learningState、traits.onboarding 和 localStorage，然后被拿去
+    拆科目、生成路径 —— 最后长出来的是一整套"副业赚钱"的营销课。
+    所以判定要收成一个入口，凡是"这个值要当方向用"的地方都过它。
+    """
+    answer = " ".join(str(text or "").split())
+    # 比对去空白：学生把「不 知道」「还没 想好」敲进来时，和连着写是同一句废话。
+    compact = "".join(answer.split())
+    if not compact or compact.lower() in _NON_DIRECTION_ANSWERS:
+        return False
     # 单个数字或符号（"1"、"？"）不是方向；单个汉字或字母（"学"、"a"）可能是。
-    if len(answer) < 2 and not answer.isalpha():
-        return ""
-    return answer
+    if len(compact) < 2 and not compact.isalpha():
+        return False
+    return True
+
+
+def _usable_direction(dialogue: list[dict]) -> str:
+    """访谈到目前为止问出来的方向；没有就返回空串。
+
+    **只看前两问。** 第 1 问固定问方向；第 1 问答不出时后端把第 2 问换成"换一种问法再问
+    一次方向"（见 `_stage_instruction_for`），所以方向也只可能落在这两问里。
+    第 3 问起问的是用途、起点、缺口和练习条件 —— 那些回答不是方向，把其中一个当方向用
+    正是"「用来就业」变成了学习方向"这类事故的来源（方向决定学什么，用途只影响怎么问）。
+    """
+    for index in range(min(len(dialogue or []), _DIRECTION_SLOTS)):
+        answer = _answer_excerpt(dialogue, index, "")
+        if is_usable_direction(answer):
+            return answer
+    return ""
 
 
 def _fallback_interview_question(step: int, dialogue: list[dict], max_steps: int = 5) -> dict:
+    if step <= 0:
+        # 第 1 问没有"兜底"一说：题面本来就是写死的（_DIRECTION_QUESTION），
+        # 不存在"模型那版不可用"的情形。
+        return {"question": _DIRECTION_QUESTION, "finish": False}
     first = _usable_direction(dialogue)
     # Keep the learning progression stable, while varying the conversational angle
     # so a fallback response does not sound like a repeated questionnaire.
     seed_text = " ".join(str(item.get("answer", "") or "") for item in (dialogue or []))
     seed = sum(ord(char) for char in seed_text)
     question_variants = [
-        [
-            "你现在最想系统学哪一个方向或主题？可以说一门学科、一个技术领域或一项工作技能，比如 Python 数据分析、智能体应用开发、机械制图。",
-            "如果先选一个方向开始学，你会选什么？说关键词就可以，比如前端开发、产品设计、数据分析；还没想好也可以直接说。",
-            "最近最想弄懂哪一类知识或技能？不用想得很完整，先告诉我一个方向，例如编程、项目管理或知识库应用。",
-        ],
+        # 第 1 问不走这里（上面已经早退）；留一条是为了 `_slot_index` 把追问映射回 0 号格时
+        # 索引不越界 —— 那种情形紧接着会被下面的 _DIRECTION_PROBE_QUESTIONS 覆盖掉。
+        [_DIRECTION_QUESTION],
         [
             f"如果把「{first}」做好了，你最想拿它解决什么？可以说会用到的人、场景，或你希望看到的结果。",
             f"你为什么现在想把「{first}」学会？是要交付一个东西、应对一项工作，还是想先做出自己的作品？",
@@ -510,9 +643,15 @@ def _fallback_interview_question(step: int, dialogue: list[dict], max_steps: int
             "你想先练一个多大的小任务？比如先做一个最小版本，再逐步加功能。",
         ],
     ]
-    idx = max(0, min(step, len(question_variants) - 1))
+    # 段号要跟着 _stage_instruction_for 一起顺延：追问占了第 2 问，兜底题面也得往后退一格，
+    # 否则模型一挂，兜底就把「用途」那一段整段跳过去，方向补出来了、目标却是空的。
+    idx = max(0, min(_slot_index(step, dialogue), len(question_variants) - 1))
     # 方向不可用时换成不引用回答的那一套，而不是把「1」嵌进模板
     variants = question_variants[idx] if first else (_GENERIC_QUESTION_VARIANTS[idx] or question_variants[idx])
+    if step == 1 and _probe_was_needed(dialogue):
+        # 和 _stage_instruction_for 对齐：这一问在追问方向，兜底题面也得追问方向。
+        # 否则模型一挂，兜底就把访谈悄悄带回"你打算怎么用它"，而方向还是个空。
+        variants = _DIRECTION_PROBE_QUESTIONS
     question = variants[(seed + step) % len(variants)]
     return {"question": question, "finish": step >= max_steps - 1}
 
@@ -662,32 +801,46 @@ class PortraitChatHistory_Service:
         dialogue: list[dict],
         step: int = 0,
         max_steps: int = 5,
+        on_delta=None,
     ) -> dict:
-        """Generate the next student-profile onboarding question."""
+        """Generate the next student-profile onboarding question.
+
+        题面默认从模板表直出（见 `_USE_MODEL_QUESTIONS`），走模型时是流式的；两条路都通过
+        on_delta 把题面交给页面，页面据此边写边显示 —— 以前是整段生成完才返回，前端只能先
+        垫一句本地模板，学生一动笔模板就留在屏幕上了。
+        """
         step = max(0, int(step or 0))
         max_steps = max(3, min(int(max_steps or 5), 5))
         if step >= max_steps:
             return {"question": "", "finish": True}
 
         dialogue_text = _format_dialogue(dialogue)
-        # 第 1 问以前在这里直接返回兜底题，理由是"没有对话可依据，不值得等一次 ~50 秒的
-        # 调用"。代价是**每个学生的第一问都是同一句模板**：前端靠 source === 'agent'
-        # 决定要不要把屏幕上的题面换成模型那一版（LearnmateChatView 的 upgradeQuestion），
-        # 而兜底题的 source 是 'fallback' —— 于是模型版永远换不上去，它写得再好也轮不到它。
-        # 现在照常交给模型，"第一问不能干等"改由前端负责：它本来就先显示本地题面、等
-        # 模型版本回来再替换，第 2 到第 5 问走的一直是这条路。
-        # 提示词那边早就准备好了这种情形（{dialogue_text} 会填成"暂无，准备提出第一问"，
-        # {stage_instruction} 是第 1 段的"确认学习方向"）。
+        if not _USE_MODEL_QUESTIONS:
+            # 模板路径（默认）：五问全部直出，一个模型调用都不发，整场访谈瞬间问完。
+            # 题面照样当**流式分片**推给页面 —— 页面不需要知道这一问是哪个来源，
+            # 屏幕上"边写边显示"的那段就是这句。
+            result = _fallback_interview_question(step, dialogue, max_steps)
+            if on_delta:
+                on_delta(result["question"])
+            return {**result, "source": "fixed"}
+
+        if step == 0:
+            # 第 1 问直出（见 _DIRECTION_QUESTION）：没有对话可依据，模型加不了东西，却要学生
+            # 先等一次首字延迟。题面仍然照模型那条路推给页面（on_delta），页面因此不需要知道
+            # 这一问是哪个来源 —— 屏幕上"边写边显示"的那段就是这句。
+            if on_delta:
+                on_delta(_DIRECTION_QUESTION)
+            return {"question": _DIRECTION_QUESTION, "finish": False, "source": "fixed"}
 
         try:
             from backend.src.ai_core.llm_config import llm
+            from backend.src.utils import llm_stream
             from backend.src.utils.prompt_loader import load_prompt, fill_prompt
-            from backend.src.utils.json_parser import parse_llm_json
 
             template = load_prompt("portrait/interview_next")
             # 只把"这一问属于哪一段"的要求交给模型。它看不到后面的阶段，
             # 所以跳阶段/跑题在提示词层面就没有落点。
-            stage_instruction = _INTERVIEW_STAGES[min(step, len(_INTERVIEW_STAGES) - 1)]
+            stage_instruction = _stage_instruction_for(step, dialogue)
             prompt = fill_prompt(
                 template,
                 step=str(step + 1),
@@ -695,22 +848,45 @@ class PortraitChatHistory_Service:
                 stage_instruction=stage_instruction,
                 dialogue_text=dialogue_text or "暂无，准备提出第一问",
             )
-            response = await asyncio.wait_for(
-                llm.ainvoke(prompt, priority="low", user_id=int(user_id), pool="portrait"),
+            state = await llm_stream.consume_stream(
+                # 高优先级：这一问是学生正盯着等的那一次调用（题面就在他屏幕上边写边显示）。
+                # 标成 low 会让它给后台让路 —— 而低优先级那条通道是和"整条路径的资源预生成、
+                # 课堂过渡摘要、记忆抽取、进阶任务"共用的全局 10 路，只要后台有高优先级调用在
+                # 跑（每分钟的定时智能体、资源生成）它就得先排队。于是"问一句"比"生成一整章
+                # 文档"还慢：不是字多字少，是它排在别人后面。
+                llm.astream(prompt, priority="high", user_id=int(user_id), pool="portrait"),
+                on_delta,
                 timeout=_INTERVIEW_LLM_TIMEOUT,
             )
-            result = parse_llm_json(response.content.strip())
-            question = str(result.get("question", "") if isinstance(result, dict) else "").strip()
-            finish = bool(result.get("finish", False)) if isinstance(result, dict) else False
-            reason = _question_rejection_reason(question, dialogue, step)
-            if not reason:
-                # source 是给前端用的：它先显示本地兜底题、只在模型版本回来时替换，
-                # 必须能区分"这是模型写的"和"这是兜底"，否则会把一句模板题换成另一句。
-                return {"question": question, "finish": finish or step >= max_steps - 1, "source": "agent"}
-            logger.warning(
-                "画像访谈下一问不合用（%s），使用兜底问题 user_id=%s step=%s 内容=%r",
-                reason, user_id, step, question[:60],
-            )
+            if state["raw"]:
+                result = llm_stream.tail_payload(state["raw"])
+                # 题面以流出来的那句为准（它就是用户屏幕上已经看到的东西）；JSON 里若还
+                # 带了 question（老格式），只在流式那段为空时兜一下。
+                question = state["visible"].strip() or str(result.get("question") or "").strip()
+                reason = _question_rejection_reason(question, dialogue, step)
+                if not reason:
+                    return {
+                        "question": question,
+                        "finish": bool(result.get("finish", False)) or step >= max_steps - 1,
+                        "source": "agent",
+                    }
+                # 已经边写边显示给用户看过了：这时候再把它换成兜底模板，等于在用户眼皮
+                # 底下把一句正在读的问题改样。所以这里只记日志，题面照旧用流出去的那句
+                # —— 拦截规则退回成"事后告警"（真重复/真超长的题会留在日志里）。
+                if state["visible"].strip():
+                    logger.warning(
+                        "画像访谈下一问不合用（%s），但已经展示给用户，沿用 user_id=%s step=%s 内容=%r",
+                        reason, user_id, step, question[:60],
+                    )
+                    return {
+                        "question": question,
+                        "finish": bool(result.get("finish", False)) or step >= max_steps - 1,
+                        "source": "agent",
+                    }
+                logger.warning(
+                    "画像访谈下一问不合用（%s），使用兜底问题 user_id=%s step=%s 内容=%r",
+                    reason, user_id, step, question[:60],
+                )
         except Exception:
             logger.warning("画像访谈下一问生成失败，使用兜底问题 user_id=%s step=%s", user_id, step, exc_info=True)
 
@@ -790,8 +966,18 @@ class PortraitChatHistory_Service:
         selected_identity = str(onboarding_context.get("identity") or "").strip()
         selected_direction = str(onboarding_context.get("direction") or "").strip()
         selected_goal = str(onboarding_context.get("goal") or "").strip()
+        # 请求里带的方向不是方向时（"不知道"这类），别让它压掉模型从整段访谈里抽出来的
+        # 那一版 —— 这一句 `or` 的顺序就是"请求值优先"，请求值是垃圾时优先权要收回。
+        if not is_usable_direction(selected_direction):
+            if selected_direction:
+                logger.warning("访谈收尾收到的方向不可用，改用模型从对话里抽的那一版 direction=%r", selected_direction)
+            selected_direction = ""
         learning_direction = selected_direction or learning_direction
         learning_goal_text = selected_goal or learning_goal_text
+        # 模型那边也可能把"整场访谈没问出方向"原样填回来（比如把第 1 问那句「不知道」
+        # 抄成 learning_direction），落库前统一再过一道。
+        if not is_usable_direction(learning_direction):
+            learning_direction = ""
         cognition = result.get("cognition", "") or ""
         learning_goal = result.get("learning_goal", "") or ""
         tags = result.get("personality_tags") or []

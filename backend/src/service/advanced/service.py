@@ -529,7 +529,10 @@ async def generate_agent_task_set(
 
         prompt = _build_agent_prompt(context)
         response = await asyncio.wait_for(
-            llm.ainvoke(prompt, priority="low", user_id=user_id, pool="advanced"),
+            # 高优先级：这份任务就是学生打开进阶页要看的东西，不是后台任务。标成 low 时它得和
+            # 资源预生成、课堂过渡摘要、记忆抽取抢同一条全局 10 路通道，而 `wait_for` 把**排队
+            # 时间也算进这 120 秒**里 —— 排队久了直接超时降级，页面上就是兜底模板。
+            llm.ainvoke(prompt, priority="high", user_id=user_id, pool="advanced"),
             timeout=ADVANCED_AGENT_TIMEOUT_SECONDS,
         )
         parsed = parse_llm_json(response.content)

@@ -1,10 +1,13 @@
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, Depends, Body
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import List
 from backend.src.service.portrait.service import PortraitChatHistory_Service, PortraitRadarService
 from backend.src.schemas.portrait import Init_Portrait
+from backend.src.utils import sse
 from backend.src.utils.jwt import create_access_token, get_user_id_from_token
 
 router = APIRouter(prefix="/ai_portrait", tags=["AI人设（仅初始化/读取）"])
@@ -122,6 +125,50 @@ async def next_interview_question(
         logger = logging.getLogger(__name__)
         logger.exception("画像访谈下一问生成失败 user_id=%s", user_id)
         raise HTTPException(500, "服务器错误")
+
+
+@router.post("/interview/next/stream")
+async def stream_next_interview_question(
+    user_id: int = Depends(get_user_id_from_token),
+    data: NextInterviewQuestionRequest = Body(...),
+):
+    """访谈下一问的流式版：题面边写边推。
+
+    以前是整段返回，前端只能先垫一句本地模板 —— 模型要几十秒才回来，学生一动笔，
+    屏幕上留下的就永远是那句模板，看起来就是"题目是写死的"。
+    """
+    dialogue = [{"question": t.question, "answer": t.answer} for t in data.dialogue]
+
+    async def operation(writer):
+        # 访谈这一轮只有一段正文（题面），固定归"question"这个气泡。
+        return await PortraitChatHistory_Service.next_interview_question(
+            user_id,
+            dialogue,
+            step=data.step,
+            max_steps=data.max_steps,
+            on_delta=lambda text: writer(text, "question"),
+        )
+
+    async def frames():
+        yield sse.sse_frame({"type": "status", "message": "正在准备下一个问题…"})
+        try:
+            async for frame in sse.drain_stream(operation, keepalive_event={"type": "keepalive"}):
+                if frame.get("type") == sse.RESULT_FRAME:
+                    yield sse.sse_frame({"type": "result", "data": frame["data"]})
+                    continue
+                yield sse.sse_frame(frame)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger(__name__).exception("画像访谈下一问流式生成失败 user_id=%s", user_id)
+            yield sse.sse_frame({"type": "error", "message": "问题生成失败，请重试"})
+        yield sse.DONE_FRAME
+
+    return StreamingResponse(
+        frames(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
 
 
 @router.post("/init_from_dialogue")

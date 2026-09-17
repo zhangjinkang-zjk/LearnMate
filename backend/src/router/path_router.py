@@ -26,20 +26,61 @@ from backend.src.schemas.path import (
 
 router = APIRouter(prefix="/path", tags=["学习路径"])
 logger = logging.getLogger(__name__)
-_BACKGROUND_PATH_TASKS: dict[int, asyncio.Task] = {}
+# 每个用户**正在跑的全部**后台路径生成任务（不是"最近一条"）：只留最近一条的话，被挤掉
+# 的那条就没有强引用了 —— asyncio 对任务只持弱引用，它会被垃圾回收，跑到一半消失。
+_BACKGROUND_PATH_TASKS: dict[int, set[asyncio.Task]] = {}
+
+# 学生确认画像之后**同步等待**的那一条路径，节点数封顶到这个数。
+#
+# 等待时间几乎全在模型调用上：每 4 个节点一组、一组一次调用（`_GROUP_SIZE`），而一次调用
+# 光首字延迟就是二十几到三十几秒。节点数从 20 降到 12 就是 5 组变 3 组、少一整波。实测
+# 20 个节点的首条路径要 5 分钟上下 —— 正好压在前端那 5 分钟超时上，于是"迟迟进不去、
+# 还超时"。封顶之后这条路径落在正常长度（_compute_node_count 给的是 8-30）的低段，够用，
+# 其余科目仍按各自应有的长度在后台生成。
+_ENTRY_PATH_NODE_CAP = 12
+
+
+def _entry_node_count(node_cap: int, requested: int) -> int:
+    """入口路径实际用几个节点。
+
+    封顶只**往下压**，不往上抬：调用方明确要得更少（比如 6）就照他说的，别拿上限把
+    他要的长度顶回去。node_cap 为 0 表示这条路径不在同步等待里（后台生成），照原样。
+    """
+    if node_cap <= 0:
+        return requested
+    if requested <= 0:
+        return node_cap
+    return min(node_cap, requested)
 
 
 def _track_background_path_task(user_id: int, task: asyncio.Task) -> None:
-    """保留后台任务引用并统一记录异常，避免任务被回收或静默失败。"""
-    previous = _BACKGROUND_PATH_TASKS.get(user_id)
-    if previous and not previous.done():
-        task.cancel()
-        return
-    _BACKGROUND_PATH_TASKS[user_id] = task
+    """保留后台任务引用并统一记录异常，避免任务被回收或静默失败。
+
+    **不取消上一条，而且新的这条也必须登记。** 这两件事原来都是反的：
+
+    - 上一条跑的是同一批"其余科目"，取消它等于把已经跑了几分钟的东西整条扔掉 ——
+      一条路径要跑完整张 graph（Leader 实测 105-185 秒）才落库，中途被杀不留任何痕迹。
+      两条并联最坏是同一科目算两遍，而 `generate_path` 自己对已存在的科目会复用
+      （撞 unique 约束也会退化成复用），代价远小于"一条都没有"。
+    - 原来"取消旧的然后 return"，新的这条就没进 `_BACKGROUND_PATH_TASKS`，而 asyncio 对
+      任务只持弱引用 —— 连点两次或超时重试一次，**两条尾巴一起消失**，用户永远只有一条
+      路径。所以这里是 `setdefault`，同一用户的在跑任务都留着强引用。
+    """
+    inflight = _BACKGROUND_PATH_TASKS.setdefault(user_id, set())
+    if any(not item.done() for item in inflight):
+        logger.info(
+            "上一条后台路径生成还在跑，这次并联而不是取消 user_id=%s 在跑=%d",
+            user_id,
+            sum(1 for item in inflight if not item.done()),
+        )
+    inflight.add(task)
 
     def _finish(completed: asyncio.Task) -> None:
-        if _BACKGROUND_PATH_TASKS.get(user_id) is completed:
-            _BACKGROUND_PATH_TASKS.pop(user_id, None)
+        current = _BACKGROUND_PATH_TASKS.get(user_id)
+        if current is not None:
+            current.discard(completed)
+            if not current:
+                _BACKGROUND_PATH_TASKS.pop(user_id, None)
         if completed.cancelled():
             return
         error = completed.exception()
@@ -89,18 +130,23 @@ async def generate_path_stream(data: GeneratePathRequest, user_id: int = Depends
 async def generate_paths_from_direction(data: GenerateFromDirectionRequest, user_id: int = Depends(get_user_id_from_token)):
     """拆解学习方向，先生成一条可进入的路径，其余路径在后台继续生成。"""
     from backend.src.service.curriculum.service import sync_direction_subjects
+    from backend.src.service.portrait.service import is_usable_direction
     direction = data.direction.strip()
     goal = data.goal.strip()
-    if not direction:
+    # "有值"不等于"有方向"：学生第 1 问答「不知道」时，这个字符串以前会被当成方向收下，
+    # 然后拆出一整套跟他的方向毫无关系的科目（"用来当副业挣钱" → 一整套营销课）。
+    # 拿不到能用的方向就回落到画像里存的那一份，两边都没有就明确让他回去补一个。
+    if not is_usable_direction(direction):
         from backend.src.models.usermodel import User
         from backend.src.service.portrait.service import parse_traits
         user = await User.filter(id=user_id).first()
         picture = await user.picture if user else None
         onboarding = parse_traits(picture.traits if picture else None).get("onboarding") or {}
-        direction = str(onboarding.get("direction") or "").strip()
+        stored = str(onboarding.get("direction") or "").strip()
+        direction = stored if is_usable_direction(stored) else ""
         goal = goal or str(onboarding.get("goal") or "").strip()
     if not direction:
-        raise HTTPException(status_code=400, detail="请先完成学习定向")
+        raise HTTPException(status_code=400, detail="还没有确定的学习方向，请先完成学习访谈或补填一个方向")
     subjects = await sync_direction_subjects(
         user_id,
         direction,
@@ -110,15 +156,19 @@ async def generate_paths_from_direction(data: GenerateFromDirectionRequest, user
     )
     from backend.src.models.path_model import LearningPath
 
-    async def generate_or_reuse(subject: str):
+    async def generate_or_reuse(subject: str, node_cap: int = 0):
+        # node_cap 只给"学生正在同步等待的那一条"用：等待时间主要由节点数决定（每 4 个节点
+        # 一组、一组一次模型调用，一次调用首字就是二十几到三十几秒）。入口这条封顶之后，
+        # 其余科目仍按各自的正常长度在后台生成，学生不必站在这里等。
+        node_count = _entry_node_count(node_cap, data.node_count)
         if data.force_regenerate:
             existing = await LearningPath.filter(user_id=user_id, subject=subject).first()
             if existing:
                 result = await PathService.regenerate_path(existing.id, user_id)
             else:
-                result = await PathService.generate_path(subject, user_id, data.difficulty, data.node_count)
+                result = await PathService.generate_path(subject, user_id, data.difficulty, node_count)
         else:
-            result = await PathService.generate_path(subject, user_id, data.difficulty, data.node_count)
+            result = await PathService.generate_path(subject, user_id, data.difficulty, node_count)
 
         # 生成接口也负责把路径接入当前学习进度。新路径在 generate_path
         # 内已经完成初始化；缓存路径则需要在这里补齐，否则概览接口无法读取。
@@ -133,7 +183,7 @@ async def generate_paths_from_direction(data: GenerateFromDirectionRequest, user
     # 按课程架构师返回的依赖顺序尝试，确保至少有一条路径可进入学习空间。
     for index, subject in enumerate(subjects):
         try:
-            first_result = await generate_or_reuse(subject)
+            first_result = await generate_or_reuse(subject, _ENTRY_PATH_NODE_CAP)
             first_subject_index = index
             break
         except Exception as error:
@@ -458,7 +508,7 @@ async def generate_paths_from_profile(data: GenerateFromProfileRequest, user_id:
     if recent:
         return {"code": 200, "msg": "1小时内已生成过路径，请稍后再试", "data": {"major": user.major, "grade": user.grade, "courses": [], "paths": []}}
 
-    courses = await get_courses(user.major, user.grade or "")
+    courses = await get_courses(user.major)
     courses = courses[:max(1, data.course_limit)]
 
     import asyncio

@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from backend.src.service.diagnosis.service import answer as answer_diagnosis
 from backend.src.service.diagnosis.service import start as start_diagnosis
+from backend.src.utils import sse
 from backend.src.utils.jwt import get_user_id_from_token
 
 logger = logging.getLogger(__name__)
@@ -116,38 +117,21 @@ def _describe_result(result) -> str:
 
 
 async def _stream_diagnosis(operation, status_message: str):
-    """Keep the diagnosis connection alive while the LLM generates a question.
+    """诊断的两条流：出题和判分都边写边推。
 
-    operation 收一个 writer，模型边写边把正文交出来（出题的那句、判分的那句），这里立刻
-    转成 SSE 推给页面。以前是等整段生成完一次性返回，学生对着"正在生成回复…"干等
-    几十秒；现在字是长出来的。
-
-    keepalive 仍然照发：模型也可能一段时间一个字都不出（超时上限是 60 秒）。
+    抽在 utils/sse 里的 drain_stream 负责"边跑边推"；这里只管诊断特有的帧（智能体事件、
+    结果帧）和异常文案。
     """
-    queue: asyncio.Queue = asyncio.Queue()
-
-    def writer(text: str, channel: str) -> None:
-        queue.put_nowait({"type": "reply_delta", "channel": channel, "text": text})
-
-    task = asyncio.create_task(operation(writer))
     try:
         yield _sse(_diagnosis_event("running", status_message))
         yield _sse({"type": "status", "message": status_message})
-        while True:
-            if task.done() and queue.empty():
-                break
-            try:
-                item = await asyncio.wait_for(queue.get(), timeout=3)
-            except asyncio.TimeoutError:
-                # 一个字都没出来的时候才发 keepalive，免得把正在长的正文打断成心跳
-                if task.done():
-                    break
-                yield _sse({"type": "keepalive"})
+        async for frame in sse.drain_stream(operation, keepalive_event={"type": "keepalive"}, on_task=_detach):
+            if frame.get("type") == "_result":
+                result = frame["data"]
+                yield _sse(_diagnosis_event("done", _describe_result(result)))
+                yield _sse({"type": "result", "data": result})
                 continue
-            yield _sse(item)
-        result = task.result()
-        yield _sse(_diagnosis_event("done", _describe_result(result)))
-        yield _sse({"type": "result", "data": result})
+            yield _sse(frame)
     except asyncio.CancelledError:
         raise
     except ValueError as exc:
@@ -157,9 +141,8 @@ async def _stream_diagnosis(operation, status_message: str):
         logger.exception("诊断流处理失败")
         yield _sse(_diagnosis_event("failed", "诊断服务暂时不可用"))
         yield _sse({"type": "error", "message": "诊断服务暂时不可用，请稍后重试"})
-    finally:
-        # 正常跑完时 task 已 done，这里是个空操作；只有被取消退出时才真正接管它。
-        _detach(task)
+    # 断连时接管那个任务的活已经交给 drain_stream 的 on_task=_detach 在创建时就做了
+    # —— 比原来看起来更早，也就没有"任务刚建出来就被取消"的窗口。
     yield _sse(done=True)
 
 

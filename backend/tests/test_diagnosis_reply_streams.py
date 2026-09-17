@@ -14,6 +14,7 @@
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,45 @@ def test_the_tail_payload_parses_either_shape():
     assert diagnosis._tail_payload(QUESTION_RAW)["difficulty"] == "easy"
     # 老格式（整段 JSON）也要能解出来
     assert diagnosis._tail_payload('{"is_correct":true}')["is_correct"] is True
+
+
+def test_an_unparseable_tail_is_empty_not_an_exception():
+    """解不出来要给空字典，不能抛。
+
+    模型写到一半被打断（正文已经显示给学生了）、或者干脆忘了写那段 JSON 时，
+    ``parse_llm_json`` 是抛 JSONDecodeError 的。让它抛出去，外面那层 except 会把
+    **整段**降级成兜底文案 —— 学生眼前那句已经读了一半的话会被换掉，
+    而他看到的原因只是"程序要的那个字段没拿到"。
+    """
+    assert diagnosis._tail_payload("你抓住了要看返回值这一点") == {}
+    assert diagnosis._tail_payload("") == {}
+    assert diagnosis._tail_payload("正文\n---\n{坏掉的 JSON") == {}
+    # 解出来的不是对象（比如模型回了个数组）也算没有可用字段
+    assert diagnosis._tail_payload("正文\n---\n[1, 2]") == {}
+
+
+def test_a_prose_only_answer_is_not_reported_as_a_parse_failure(caplog):
+    """只写正文、不写那段 JSON，是访谈题面的**正常**输出，不该长成一条"解析失败"。
+
+    原来它要经过 parse_llm_json：解析抛错 → json_parser 打一行 WARNING、这里再打一行，
+    两行看着都像出了故障。而访谈每一问几乎都是纯散文，于是画像那一段日志里全是这种
+    告警 —— 读日志的人会去找一个不存在的问题（"画像是不是坏了"）。
+    """
+    prose = "你打算把智能体用在什么地方，比如做一个能帮你整理课堂笔记的小助手，还是开发能处理具体任务的应用？"
+    with caplog.at_level(logging.WARNING):
+        assert diagnosis._tail_payload(prose) == {}
+    assert not caplog.records, f"纯散文的正文不该产生告警：{[r.message for r in caplog.records]}"
+
+
+def test_prose_wrapped_json_still_parses():
+    """老格式（正文和 JSON 混着写）必须继续能解出来。
+
+    所以判据是"整段里有没有花括号"，不能收紧成"是不是以花括号开头" —— 那种写法会把
+    这一路直接丢掉，症状是程序字段莫名其妙拿不到，而正文看起来一切正常。
+    """
+    assert diagnosis._tail_payload('这是给你的题目 {"question": "讲讲你的项目"}') == {
+        "question": "讲讲你的项目"
+    }
 
 
 # ── 推给页面的那条流 ─────────────────────────────────────
