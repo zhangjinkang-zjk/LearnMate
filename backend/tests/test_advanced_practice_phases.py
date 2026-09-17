@@ -19,11 +19,16 @@ import pytest
 
 from backend.src.service.advanced import practice_service
 from backend.src.service.advanced.practice_service import (
+    PHASES,
     PHASE_ORDER,
     PhaseStreamStripper,
     advance_phase_state,
     clamp_current_phase,
 )
+
+# 这个文件里的阶段断言用的都是 **PHASES（通用词汇）** —— 那是"没有 kind 的会话"
+# 那套，也就是本次改动之前建的所有会话。账本函数现在要求显式传词汇：三类新任务各
+# 有自己的 4 阶段（见 test_advanced_practice_phase_sets.py），混用等于把进度清零。
 
 
 # ═══════════════════════════════════════
@@ -163,7 +168,7 @@ def test_a_non_done_value_is_stripped_but_not_trusted():
     assert out == ""
     assert stripper.markers == ["review"]
 
-    completed, current = advance_phase_state([], "understand", stripper.markers)
+    completed, current = advance_phase_state([], "understand", stripper.markers, PHASES)
     assert (completed, current) == ([], "understand")
 
 
@@ -194,19 +199,19 @@ def test_flush_empties_the_held_tail():
 # ═══════════════════════════════════════
 
 def test_chatting_without_a_marker_does_not_advance():
-    assert advance_phase_state([], "understand", []) == ([], "understand")
-    assert advance_phase_state(["understand"], "evidence", ["hypothesis"]) == (["understand"], "evidence")
+    assert advance_phase_state([], "understand", [], PHASES) == ([], "understand")
+    assert advance_phase_state(["understand"], "evidence", ["hypothesis"], PHASES) == (["understand"], "evidence")
 
 
 def test_done_advances_exactly_one_phase():
-    assert advance_phase_state([], "understand", ["done"]) == (["understand"], "evidence")
+    assert advance_phase_state([], "understand", ["done"], PHASES) == (["understand"], "evidence")
 
 
 def test_progress_stays_a_contiguous_prefix():
     """标记不带阶段 id，所以一轮最多推一格，不会出现跳级。"""
     completed, current = [], "understand"
     for _ in range(len(PHASE_ORDER)):
-        completed, current = advance_phase_state(completed, current, ["done"])
+        completed, current = advance_phase_state(completed, current, ["done"], PHASES)
 
     assert completed == list(PHASE_ORDER)
     assert current == PHASE_ORDER[-1], "最后一个阶段完成后再也没有下一格"
@@ -214,14 +219,14 @@ def test_progress_stays_a_contiguous_prefix():
 
 def test_completed_is_normalised_to_phase_order():
     """老会话里可能是客户端乱序写进去的，读出来统一按 PHASES 排。"""
-    completed, current = advance_phase_state(["review", "understand"], "understand", ["done"])
+    completed, current = advance_phase_state(["review", "understand"], "understand", ["done"], PHASES)
 
     assert completed == ["understand", "review"]
     assert current == "evidence"
 
 
 def test_unknown_phase_ids_are_dropped():
-    completed, _ = advance_phase_state(["understand", "随便编的"], "understand", [])
+    completed, _ = advance_phase_state(["understand", "随便编的"], "understand", [], PHASES)
 
     assert completed == ["understand"]
 
@@ -232,20 +237,20 @@ def test_unknown_phase_ids_are_dropped():
 
 def test_a_client_cannot_jump_the_current_phase_ahead():
     """一轮对话就把 current_phase 推到 review，进度条显示的就不是真实进度了。"""
-    assert clamp_current_phase("review", []) == "understand"
-    assert clamp_current_phase("review", ["understand"]) == "evidence"
+    assert clamp_current_phase("review", [], PHASES) == "understand"
+    assert clamp_current_phase("review", ["understand"], PHASES) == "evidence"
 
 
 def test_a_client_can_look_back_at_a_finished_phase():
-    assert clamp_current_phase("understand", ["understand", "evidence"]) == "understand"
+    assert clamp_current_phase("understand", ["understand", "evidence"], PHASES) == "understand"
 
 
 def test_every_phase_is_reachable_once_all_are_done():
-    assert clamp_current_phase("review", list(PHASE_ORDER)) == "review"
+    assert clamp_current_phase("review", list(PHASE_ORDER), PHASES) == "review"
 
 
 def test_an_unknown_phase_falls_back_to_the_first():
-    assert clamp_current_phase("nonsense", ["understand"]) == "understand"
+    assert clamp_current_phase("nonsense", ["understand"], PHASES) == "understand"
 
 
 # ═══════════════════════════════════════

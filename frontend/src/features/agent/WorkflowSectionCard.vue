@@ -19,7 +19,7 @@
       </div>
       <div class="ws-row" :class="`is-${section.reviewStatus}`">
         <dt>审核</dt>
-        <dd>{{ section.reviewMessage }}</dd>
+        <dd>{{ reviewNote }}</dd>
       </div>
     </dl>
 
@@ -51,12 +51,12 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { ChevronDown } from 'lucide-vue-next'
+import { sectionStatus } from '@/entities/agent/agentWorkflowState'
 
 const props = defineProps({
   section: { type: Object, required: true },
 })
 
-const ACTIVE_STATUSES = new Set(['running', 'reviewing', 'retrying', 'saving'])
 const STATUS_TEXT = {
   running: '生成中',
   reviewing: '审核中',
@@ -66,23 +66,23 @@ const STATUS_TEXT = {
   failed: '失败',
 }
 
-// 卡片状态是"生成"和"审核"两个维度的合成。顺序有讲究：
-// 失败优先（任意一维失败就是这张卡有问题），然后是谁正在动，最后才轮到完成。
-// 只生成完、审核还没开始的章节报 pending —— 那确实是"等待审核"，不是"进行中"。
-const cardStatus = computed(() => {
-  const { genStatus, reviewStatus } = props.section
-  if (genStatus === 'failed' || reviewStatus === 'failed') return 'failed'
-  if (ACTIVE_STATUSES.has(reviewStatus)) return reviewStatus
-  if (ACTIVE_STATUSES.has(genStatus)) return genStatus
-  if (reviewStatus === 'done') return 'done'
-  return 'pending'
-})
+// 卡片状态走共享的那条规则（agentWorkflowState.sectionStatus）—— 抽屉里的芯片必须
+// 和这里一致，两边各写一份的话同一节会显示成两种状态（这件事已经发生过一次）。
+const cardStatus = computed(() => sectionStatus(props.section))
 
 const statusText = computed(() => {
   if (cardStatus.value === 'pending') {
     return props.section.genStatus === 'done' ? '待审核' : '等待中'
   }
   return STATUS_TEXT[cardStatus.value] || '等待中'
+})
+
+// 审核那一行的说明。跳过时后端给的那句话优先（它会说清为什么），没有就用兜底文案。
+const reviewNote = computed(() => {
+  if (props.section.reviewStatus === 'skipped') {
+    return props.section.reviewMessage || '本次未做章节审核'
+  }
+  return props.section.reviewMessage
 })
 
 // 折叠语义：进行中或异常自动展开，跑完自动折成一行 —— 15 章全展开会变成一条长不见底的列表，

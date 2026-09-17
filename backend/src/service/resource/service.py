@@ -5,7 +5,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from backend.src.ai_core.resource_graph import resource_graph
-from backend.src.ai_core.agent_names import SAVER_AGENT
+from backend.src.ai_core.agent_names import REVIEWER_AGENT, SAVER_AGENT
 from backend.src.service.resource.task_runtime import (
     cache_task_state as _runtime_cache_task_state,
     notify_task_sse as _runtime_notify_task_sse,
@@ -235,6 +235,10 @@ class ResourceService:
         _t_total = _time.perf_counter()
         chat_group_id = await _ensure_generation_chat_group_id(user_id, chat_group_id, bind_chat_history)
         yield f"data: {json.dumps({'type': 'stream_progress', 'message': '资源生成已开始', 'chat_group_id': chat_group_id}, ensure_ascii=False)}\n\n"
+        # 一开始就说清这次不审核，别让章节看板空等一场不会到来的审核。
+        _skip_payload = _review_skip_payload(skip_review)
+        if _skip_payload:
+            yield f"data: {json.dumps(_skip_payload, ensure_ascii=False)}\n\n"
 
         def _make_file_event(for_topic: str, rt: str, content: str, resource_id: int = 0, download_url: str = "") -> str:
             ext = _FILE_EXT_MAP.get(rt, "md")
@@ -251,7 +255,10 @@ class ResourceService:
             return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
         def _make_agent_event(status: str, message: str) -> str:
-            return f"data: {json.dumps({'type': 'agent_event', 'agent_id': 'saver', 'agent_name': 'ResourceService', 'phase': 'saver', 'status': status, 'message': message}, ensure_ascii=False)}\n\n"
+            # 这里原本硬编码 'ResourceService'（内部类名）。同一个"保存"阶段，任务制那条路
+            # （_run_generation_task）用的是 SAVER_AGENT，于是学习路径这条路的抽屉事件流里
+            # 会露出一个用户看不懂的类名，两条路还叫得不一样。统一走 agent_names。
+            return f"data: {json.dumps({'type': 'agent_event', 'agent_id': 'saver', 'agent_name': SAVER_AGENT, 'phase': 'saver', 'status': status, 'message': message}, ensure_ascii=False)}\n\n"
 
         user = await User.filter(id=user_id).first()
 
@@ -526,6 +533,27 @@ def _collect_review_stat(chunk: dict, stat: dict) -> None:
         stat["scores"].append(int(score))
 
 
+def _review_skip_payload(skip_review: bool) -> dict | None:
+    """整轮跳过审核时，给前端一个明确交代。
+
+    以前什么都不说，于是章节看板上每一节都停在"待审核"—— 而这次流程根本不会有人来
+    审。学习路径的自动生成（`path/service.py` 里 `skip_review=True`）走的就是这条：
+    资源已经生成并抛给前端了，抽屉里却永远写着"未审核"，看起来像是审核环节卡住了。
+
+    措辞必须说清是**跳过**（这次不做），不是"还没轮到"——后者会让学生一直等下去。
+    """
+    if not skip_review:
+        return None
+    return {
+        "type": "agent_event",
+        "agent_id": "reviewer",
+        "agent_name": REVIEWER_AGENT,
+        "phase": "reviewer",
+        "status": "skipped",
+        "message": "本次自动生成已跳过内容审核",
+    }
+
+
 async def _run_generation_task(db_id: int, task_id: str, answers: dict | None = None, skip_review: bool = False, ppt_theme_id: str | None = None, save_to_chat_history: bool = True):
     """后台运行资源生成任务，更新 DB 进度并推送 SSE"""
     import time as _time
@@ -551,6 +579,9 @@ async def _run_generation_task(db_id: int, task_id: str, answers: dict | None = 
         await task.save()
         _t_init = _time.perf_counter()
         await _notify_task_sse(task_id, {"type": "status", "status": "running", "progress": 5, "progress_msg": "正在初始化…"})
+        _skip_payload = _review_skip_payload(skip_review)
+        if _skip_payload:
+            await _notify_task_sse(task_id, _skip_payload)
         asyncio.ensure_future(_cache_task_state(task_id, {"task_id": task_id, "status": "running", "progress": 5, "progress_msg": "正在初始化…", "user_id": user_id}))
 
         # 提前搜索外部视频（仅用户请求了视频资源时才搜索，避免思维导图等也弹出）

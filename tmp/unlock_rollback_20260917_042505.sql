@@ -1,0 +1,45 @@
+-- 回滚脚本，生成于 2026-09-17 04:25:05
+-- 备份 user_path_progress 表 39 行在解锁前的原值
+-- 回滚用法: mysql <此文件>   或   source 此文件;
+
+START TRANSACTION;
+UPDATE user_path_progress SET node_status='in_progress', quiz_passed=0, completed_at=NULL WHERE id=1017;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1018;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1019;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1020;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1021;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1022;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1023;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1024;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1025;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1026;
+UPDATE user_path_progress SET node_status='in_progress', quiz_passed=0, completed_at=NULL WHERE id=1031;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1032;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1033;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1034;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1035;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1036;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1037;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1038;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1039;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1040;
+UPDATE user_path_progress SET node_status='in_progress', quiz_passed=0, completed_at=NULL WHERE id=1042;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1043;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1044;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1045;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1046;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1047;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1048;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1049;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1050;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1051;
+UPDATE user_path_progress SET node_status='in_progress', quiz_passed=0, completed_at=NULL WHERE id=1054;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1055;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1056;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1057;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1058;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1059;
+UPDATE user_path_progress SET node_status='unlocked', quiz_passed=0, completed_at=NULL WHERE id=1060;
+UPDATE user_path_progress SET node_status='unlocked', quiz_passed=0, completed_at=NULL WHERE id=1061;
+UPDATE user_path_progress SET node_status='locked', quiz_passed=0, completed_at=NULL WHERE id=1062;
+COMMIT;

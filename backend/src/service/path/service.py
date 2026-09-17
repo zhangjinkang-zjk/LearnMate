@@ -1128,7 +1128,11 @@ class PathService:
                 if gen_types:
                     from backend.src.service.resource.service import ResourceService
                     async for event_str in ResourceService.generate_stream(
-                        topic=topic, user_id=user_id, resource_types=gen_types, skip_review=True,
+                        # 这里原本是 skip_review=True。关掉审核有两个后果，都不是省一点
+                        # 时间能换的：文档的跨章节交叉验证会整段不跑（那一步发现前后矛盾
+                        # 会真的重修全文，跳过等于把幻觉留在库里给学生看），而章节看板上
+                        # 每一节都停在"待审核"——审核根本没来过，前端不知道。
+                        topic=topic, user_id=user_id, resource_types=gen_types,
                         ppt_prompt_key="ppt",
                         llm_priority=llm_priority,
                         chat_group_id=0,
@@ -1236,11 +1240,12 @@ class PathService:
             if gen_types:
                 try:
                     saved = await ResourceService.generate_and_save(
+                        # 同上：走完整审核。两个入口生成的是同一批节点资源，审核口径
+                        # 必须一致，否则"从哪进来的"决定了学生拿到的是不是审过的版本。
                         topic=topic,
                         user_id=user_id,
                         resource_types=gen_types,
                         ppt_prompt_key="ppt",
-                        skip_review=True,
                         chat_group_id=0,
                         bind_chat_history=False,
                         include_request_in_history=False,

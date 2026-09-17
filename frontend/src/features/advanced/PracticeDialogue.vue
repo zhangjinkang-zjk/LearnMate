@@ -4,7 +4,7 @@
       <div>
         <p class="eyebrow">学习巩固 · {{ task.kind_label || '实践任务' }}</p>
       </div>
-      <div class="phase-progress" aria-label="巩固阶段进度">
+      <div v-if="currentPhase" class="phase-progress" aria-label="巩固阶段进度">
         <span class="phase-progress__count">{{ currentPhaseIndex + 1 }} / {{ phases.length }}</span>
         <strong>{{ currentPhase.label }}</strong>
         <div class="phase-progress__track"><span :style="{ width: `${phaseProgress}%` }"></span></div>
@@ -29,9 +29,18 @@
       <aside class="practice-guide">
         <div class="guide-block"><p class="eyebrow">当前任务</p><strong>{{ task.title }}</strong><p>{{ task.problem }}</p></div>
         <div class="guide-block"><p class="eyebrow">阶段</p>
-          <button v-for="(phase, index) in phases" :key="phase.id" type="button" :disabled="!isPhaseAvailable(index)" :class="{ 'is-active': phase.id === currentPhase.id, 'is-complete': isPhaseComplete(index) }" @click="selectPhase(phase)"><span class="phase-button__title"><span>{{ String(index + 1).padStart(2, '0') }}</span>{{ phase.label }}</span><small>{{ isPhaseComplete(index) ? '已完成' : phase.hint }}</small></button>
+          <button v-for="(phase, index) in phases" :key="phase.id" type="button" :disabled="!isPhaseAvailable(index)" :class="{ 'is-active': phase.id === currentPhase?.id, 'is-complete': isPhaseComplete(index) }" @click="selectPhase(phase)"><span class="phase-button__title"><span>{{ String(index + 1).padStart(2, '0') }}</span>{{ phase.label }}</span><small>{{ isPhaseComplete(index) ? '已完成' : phase.hint }}</small></button>
         </div>
-        <div class="guide-block"><p class="eyebrow">需要留下</p><ul><li v-for="item in task.deliverables || []" :key="item.id">{{ item.label }}</li></ul></div>
+        <div class="guide-block"><p class="eyebrow">需要留下</p>
+          <ul class="deliverable-list">
+            <li v-for="item in task.deliverables || []" :key="item.id">
+              <label class="deliverable-item" :class="{ 'is-selected': isDeliverableDone(item.label) }">
+                <input type="checkbox" :checked="isDeliverableDone(item.label)" :disabled="Boolean(evaluation)" @change="toggleDeliverable(item.label)" />
+                <span>{{ item.label }}</span>
+              </label>
+            </li>
+          </ul>
+        </div>
       </aside>
     </div>
 
@@ -55,13 +64,14 @@
       </div>
     </section>
     <p v-if="errorMessage" class="practice-error" role="status">{{ errorMessage }}</p>
-    <form v-if="!evaluation" class="practice-composer" @submit.prevent="sendMessage()">
+    <form v-if="!evaluation && currentPhase" class="practice-composer" @submit.prevent="sendMessage()">
       <label class="sr-only" for="practice-answer">你的方案思考</label>
       <textarea id="practice-answer" v-model="draft" rows="3" maxlength="1800" :disabled="isStreaming || isLoadingSession || isSubmitting" :placeholder="`围绕“${currentPhase.label}”写下你的判断…`" @keydown.ctrl.enter.prevent="sendMessage()" @keydown.meta.enter.prevent="sendMessage()"></textarea>
       <div class="practice-actions">
         <span>{{ draft.length }} / 1800</span>
         <div>
-          <button class="button button--quiet" type="button" :disabled="isStreaming || isLoadingSession || isSubmitting" @click="requestHint">请求一个提示</button>
+          <!-- support_level=high（迁移练习）把提示摆在明面上：这类任务本来就该有人扶着走 -->
+          <button :class="hintIsProminent ? 'button button--secondary' : 'button button--quiet'" type="button" :disabled="isStreaming || isLoadingSession || isSubmitting" @click="requestHint">{{ hintIsProminent ? '先要一个提示' : '请求一个提示' }}</button>
           <button class="button button--quiet" type="button" :disabled="isStreaming || isLoadingSession || isSubmitting || !sessionId" @click="endSession">结束本次巩固</button>
           <button class="button button--secondary" type="button" :disabled="!canSubmit || isStreaming || isLoadingSession || isSubmitting" @click="submitSolution"><LoaderCircle v-if="isSubmitting" class="spin" :size="16" /><CheckCircle2 v-else :size="16" />提交方案并完成</button>
           <button class="button button--primary" type="submit" :disabled="!draft.trim() || isStreaming || isLoadingSession || isSubmitting"><LoaderCircle v-if="isStreaming" class="spin" :size="16" /><Send v-else :size="16" />发送</button>
@@ -87,16 +97,14 @@ const props = defineProps({
 })
 const emit = defineEmits(['end', 'completed'])
 
-const phases = [
-  { id: 'understand', label: '理解问题', hint: '界定目标与限制' },
-  { id: 'evidence', label: '寻找证据', hint: '从材料提取依据' },
-  { id: 'hypothesis', label: '提出假设', hint: '说明可能原因' },
-  { id: 'compare', label: '比较方案', hint: '解释取舍关系' },
-  { id: 'verify', label: '验证结果', hint: '设计检查方法' },
-  { id: 'review', label: '总结', hint: '留下可复查结论' },
-]
-const currentPhase = ref(phases[0])
+// 阶段列表由**服务端**下发（session.phases）—— 阶段词汇跟着任务类型走（案例诊断 /
+// 迁移练习 / 项目实训各一套 4 阶段），这里以前抄了一份全局 6 阶段，于是三种任务的
+// 操作方式一字不差。词汇只能有一处，所以这里是空的，等会话加载。
+const phases = ref([])
+// 会话还没加载完（或加载失败）时没有当前阶段，读它的地方都要有守卫。
+const currentPhase = ref(null)
 const completedPhaseIds = ref([])
+const deliverableState = ref({})
 const messages = ref([])
 const draft = ref('')
 const errorMessage = ref('')
@@ -109,7 +117,10 @@ const evaluationStatus = ref('none')
 const confirmedFacts = ref([])
 const assumptions = ref([])
 const messageList = ref(null)
+// 服务端说这次会话还在等教练开口（见 practice_service._opening_pending）
+const openingPending = ref(false)
 let requestController = null
+let openingController = null
 let sessionLoadVersion = 0
 // 提交后先拿到一份确定性评价（不用等），智能体的复核在后台跑完会覆盖它 ——
 // 判分实测要几十秒，而 httpClient 超时只有 15 秒，所以同步判分必然失败。
@@ -117,23 +128,31 @@ const EVALUATION_POLL_INTERVAL_MS = 3000
 const EVALUATION_POLL_MAX_TRIES = 40
 let evaluationPoll = 0
 let evaluationTries = 0
-const currentPhaseIndex = computed(() => phases.findIndex((phase) => phase.id === currentPhase.value.id))
+const currentPhaseIndex = computed(() => phases.value.findIndex((phase) => phase.id === currentPhase.value?.id))
 // 四个评分维度的 label 由服务端给（判分器只填 passed），前端不自己拼一份
 const evaluationCriteria = computed(() => (Array.isArray(evaluation.value?.criteria) ? evaluation.value.criteria : []))
-const phaseProgress = computed(() => Math.round((completedPhaseIds.value.length / phases.length) * 100))
+const phaseProgress = computed(() => (
+  phases.value.length ? Math.round((completedPhaseIds.value.length / phases.value.length) * 100) : 0
+))
 const canSubmit = computed(() => messages.value.some((message) => message.role === 'user' && message.text?.trim()))
-
-function createWelcome() {
-  return { role: 'assistant', text: `我们从“${currentPhase.value.label}”开始。先说说这个任务要解决的核心问题，以及你准备依据哪些信息判断。` }
-}
+// 支持强度决定提示的分量：引导练习（high）把提示摆在明面上，开放挑战（low）保持低调 ——
+// 这两种任务本来就该由不同分量的脚手架陪着做。
+const hintIsProminent = computed(() => props.task?.support_level === 'high')
 
 function resetConversation() {
   requestController?.abort()
   requestController = null
+  abortOpening()
   clearEvaluationPoll()
-  currentPhase.value = phases[0]
+  phases.value = []
+  currentPhase.value = null
   completedPhaseIds.value = []
-  messages.value = [createWelcome()]
+  deliverableState.value = {}
+  // 开场那句不在这里造。以前这里抄了一份和后来服务端一样的话，两处各自漂移 ——
+  // 学生看到的第一句和库里存的对不上。现在只有服务端种（见 practice_service
+  // ._welcome_message），前端负责让教练把它换成真的读过任务的那一句。
+  messages.value = []
+  openingPending.value = false
   draft.value = ''
   errorMessage.value = ''
   isStreaming.value = false
@@ -147,6 +166,13 @@ function resetConversation() {
 
 function clearEvaluationPoll() {
   if (evaluationPoll) { window.clearTimeout(evaluationPoll); evaluationPoll = 0 }
+}
+
+// 开场那一轮不占 isStreaming：学生不该为了看教练开口而等 —— 种下的那句开场已经
+// 显示着了，学生随时可以先说话，说话就把这一轮掐掉（见 requestOpening）。
+function abortOpening() {
+  openingController?.abort()
+  openingController = null
 }
 
 // 服务端的评价还在复核时轮询它。取不到就等下一轮 —— 界面上那份基线评价一直是有效的，
@@ -172,15 +198,26 @@ function unwrap(response) {
 
 function hydrateSession(session) {
   sessionId.value = String(session?.session_id || '')
-  const phase = phases.find((item) => item.id === session?.current_phase)
-  currentPhase.value = phase || phases[0]
-  completedPhaseIds.value = Array.isArray(session?.completed_phase_ids)
-    ? session.completed_phase_ids.filter((id) => phases.some((item) => item.id === id))
+  // 阶段词汇由服务端给（跟着任务类型走）。拿不到就保留空数组 —— 宁可少显示一块，
+  // 也不要让前端自己编一套词汇出来，那样进度会落在服务端不认识的 id 上。
+  phases.value = Array.isArray(session?.phases)
+    ? session.phases.filter((phase) => phase && phase.id && phase.label)
     : []
+  const phase = phases.value.find((item) => item.id === session?.current_phase)
+  currentPhase.value = phase || phases.value[0] || null
+  completedPhaseIds.value = Array.isArray(session?.completed_phase_ids)
+    ? session.completed_phase_ids.filter((id) => phases.value.some((item) => item.id === id))
+    : []
+  deliverableState.value = (
+    session?.deliverable_state && typeof session.deliverable_state === 'object'
+      ? { ...session.deliverable_state }
+      : {}
+  )
   const restoredMessages = Array.isArray(session?.messages)
     ? session.messages.filter((message) => message && ['user', 'assistant'].includes(message.role) && String(message.text || '').trim())
     : []
-  messages.value = restoredMessages.length ? restoredMessages : [createWelcome()]
+  messages.value = restoredMessages
+  openingPending.value = Boolean(session?.opening_pending)
   confirmedFacts.value = Array.isArray(session?.confirmed_facts) ? session.confirmed_facts : []
   assumptions.value = Array.isArray(session?.assumptions) ? session.assumptions : []
   evaluation.value = session?.evaluation || null
@@ -202,6 +239,8 @@ async function initializeSession() {
     if (loadVersion !== sessionLoadVersion) return
     hydrateSession(unwrap(response))
     await scrollToLatest()
+    // 新会话（学生还没说过话）才让教练开口；老会话里开场早就生成过了。
+    void requestOpening()
   } catch (error) {
     if (loadVersion === sessionLoadVersion) {
       errorMessage.value = error.response?.data?.detail || error.message || '巩固会话暂时无法打开，请稍后重试。'
@@ -213,11 +252,12 @@ async function initializeSession() {
 
 function sessionPayload() {
   return {
-    current_phase: currentPhase.value.id,
+    current_phase: currentPhase.value?.id || '',
     completed_phase_ids: completedPhaseIds.value,
     messages: messages.value.map((message) => ({ role: message.role, text: message.text })),
     confirmed_facts: confirmedFacts.value,
     assumptions: assumptions.value,
+    deliverable_state: deliverableState.value,
   }
 }
 
@@ -225,10 +265,10 @@ function sessionPayload() {
 // 推进，客户端传的值服务端会忽略。这里只做展示同步。
 function applyPhaseState(state) {
   const ids = Array.isArray(state?.completed_phase_ids)
-    ? state.completed_phase_ids.filter((id) => phases.some((item) => item.id === id))
+    ? state.completed_phase_ids.filter((id) => phases.value.some((item) => item.id === id))
     : null
   if (ids) completedPhaseIds.value = ids
-  const phase = phases.find((item) => item.id === state?.current_phase)
+  const phase = phases.value.find((item) => item.id === state?.current_phase)
   if (phase) currentPhase.value = phase
 }
 
@@ -240,20 +280,43 @@ async function saveSessionState() {
 }
 
 function selectPhase(phase) {
-  const index = phases.findIndex((item) => item.id === phase.id)
+  const index = phases.value.findIndex((item) => item.id === phase.id)
   if (!isPhaseAvailable(index)) return
   currentPhase.value = phase
 }
 
 function isPhaseComplete(index) {
-  return completedPhaseIds.value.includes(phases[index]?.id)
+  return completedPhaseIds.value.includes(phases.value[index]?.id)
 }
 
 function isPhaseAvailable(index) {
   return index >= 0 && (index <= completedPhaseIds.value.length || isPhaseComplete(index))
 }
 
+function isDeliverableDone(label) {
+  return Boolean(deliverableState.value[label])
+}
+
+// 交付物勾选是学生自己的清单状态，不参与判分：它只回答"我产出了什么"，
+// 而"产出得够不够"由服务端的判分器决定。
+function toggleDeliverable(label) {
+  if (!label || evaluation.value) return
+  deliverableState.value = { ...deliverableState.value, [label]: !deliverableState.value[label] }
+  // 勾完立刻落库：只在发送消息时才存的话，学生勾一下再刷新就没了。
+  void persistDeliverables()
+}
+
+async function persistDeliverables() {
+  try {
+    await saveSessionState()
+  } catch {
+    // 静默：本地这一勾仍然在，下一次发送/提交也会把它一起带上。为一个勾选框弹
+    // 一条错误提示，比丢了它更烦人。
+  }
+}
+
 function requestHint() {
+  if (!currentPhase.value) return
   sendMessage(`请围绕“${currentPhase.value.label}”给我一个不直接泄露答案的提示。`, { advancesPhase: false })
 }
 
@@ -262,9 +325,97 @@ async function scrollToLatest() {
   if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight
 }
 
+function practiceSegment(advancesPhase) {
+  // 阶段名一定来自服务端下发的那份（跟着任务类型走），本地不认词汇表。
+  const phaseLabel = currentPhase.value?.label || ''
+  return {
+    id: `practice-${props.task.id}`,
+    type: 'practice',
+    title: props.task.title,
+    phase: phaseLabel,
+    // 请求提示这一轮不该记进度，服务端据此不认这一轮的阶段标记。
+    phase_advance: advancesPhase !== false,
+    script: [props.task.brief, props.task.problem, `当前阶段：${phaseLabel}`, `重点能力：${props.task.focus}`, `验收标准：${(props.task.criteria || []).join('；')}`, props.chapterContent ? `主讲材料摘要：${props.chapterContent.slice(0, 1200)}` : '当前没有可用主讲材料'].filter(Boolean).join('\n'),
+    points: (props.task.constraints || []).slice(0, 6),
+    question: { prompt: `请围绕${phaseLabel}推进任务。` },
+  }
+}
+
+// 学生发言和教练开场走的是同一条流式接口，只有 scenario 和 segment 上的开关不同
+// （服务端按 scenario 拼提示词，见 classroom_chat._compose_user_prompt）。
+function streamCoachReply({ scenario, text, advancesPhase, signal, onChunk }) {
+  return fundamentalsApi.streamAssistantReply({
+    path_id: Number(props.pathId),
+    node_id: Number(props.nodeId),
+    resource_id: props.resourceId ? Number(props.resourceId) : null,
+    practice_session_id: sessionId.value,
+    scenario,
+    text,
+    segment: practiceSegment(advancesPhase),
+  }, (event) => {
+    if (event?.error) throw new Error(event.error)
+    if (event?.type === 'phase') {
+      applyPhaseState(event)
+      return
+    }
+    if ((event?.type === 'chunk' || event?.type === 'content') && event.content) onChunk(String(event.content))
+  }, signal)
+}
+
+// 教练开口那一轮：任务刚打开时服务端只种了一句同步的开场，它读得到任务名但不读
+// 任务内容。真正"读过任务再开口"的是教练，以前要等学生先说一句才会被调用 ——
+// 于是第一问永远是同一句通用话术，学生看完只能回"你在说啥"。现在把它提前到第一轮。
+async function requestOpening() {
+  // 没有当前阶段就没法告诉教练"把他引进哪一步" —— 服务端没给阶段列表时宁可不开口。
+  if (!openingPending.value || !sessionId.value || !currentPhase.value) return
+  if (isStreaming.value || isSubmitting.value || evaluation.value) return
+  openingPending.value = false
+  let bubble = messages.value[messages.value.length - 1]
+  if (!bubble || bubble.role !== 'assistant') {
+    bubble = reactive({ role: 'assistant', text: '' })
+    messages.value.push(bubble)
+  }
+  const seeded = bubble.text
+  let received = false
+  let completed = false
+  openingController = new AbortController()
+  try {
+    await streamCoachReply({
+      scenario: 'practice_opening',
+      text: '',
+      advancesPhase: false,
+      signal: openingController.signal,
+      onChunk: (content) => {
+        // 原地替换那句话而不是新插一条气泡 —— 否则学生会同时看到两个开场问题。
+        bubble.text = received ? bubble.text + content : content
+        received = true
+        scrollToLatest()
+      },
+    })
+    completed = true
+  } catch {
+    // 开场生成失败不该让整个任务看起来是坏的：下面回退到种下的那句，不弹错误。
+  } finally {
+    openingController = null
+  }
+  if (!completed || !received) {
+    // 半句话的开场比那句通用开场更难回答（学生发言时这一轮会被掐掉）。
+    bubble.text = seeded
+    return
+  }
+  try {
+    await saveSessionState()
+  } catch {
+    // 存不上不影响这次使用；下次进这个会话会重新开口一次。
+  }
+}
+
 async function sendMessage(forcedText = '', options = { advancesPhase: true }) {
   const text = String(forcedText || draft.value).trim()
   if (!text || isStreaming.value || isLoadingSession.value || isSubmitting.value || !sessionId.value || evaluation.value) return
+  // 学生先开口就把教练那一轮掐掉：种下的开场已经够他回答，而两路回复会交叉着落到
+  // 同一条气泡上。
+  abortOpening()
   messages.value.push({ role: 'user', text })
   const responseMessage = reactive({ role: 'assistant', text: '' })
   messages.value.push(responseMessage)
@@ -275,35 +426,16 @@ async function sendMessage(forcedText = '', options = { advancesPhase: true }) {
   await scrollToLatest()
   try {
     await saveSessionState()
-    await fundamentalsApi.streamAssistantReply({
-      path_id: Number(props.pathId),
-      node_id: Number(props.nodeId),
-      resource_id: props.resourceId ? Number(props.resourceId) : null,
-      practice_session_id: sessionId.value,
+    await streamCoachReply({
       scenario: 'practice',
       text,
-      segment: {
-        id: `practice-${props.task.id}`,
-        type: 'practice',
-        title: props.task.title,
-        phase: currentPhase.value.label,
-        // 请求提示这一轮不该记进度，服务端据此不认这一轮的阶段标记。
-        phase_advance: options.advancesPhase !== false,
-        script: [props.task.brief, props.task.problem, `当前阶段：${currentPhase.value.label}`, `重点能力：${props.task.focus}`, `验收标准：${(props.task.criteria || []).join('；')}`, props.chapterContent ? `主讲材料摘要：${props.chapterContent.slice(0, 1200)}` : '当前没有可用主讲材料'].filter(Boolean).join('\n'),
-        points: (props.task.constraints || []).slice(0, 6),
-        question: { prompt: `请围绕${currentPhase.value.label}推进任务。` },
-      },
-    }, (event) => {
-      if (event?.error) throw new Error(event.error)
-      if (event?.type === 'phase') {
-        applyPhaseState(event)
-        return
-      }
-      if ((event?.type === 'chunk' || event?.type === 'content') && event.content) {
-        responseMessage.text += String(event.content)
+      advancesPhase: options.advancesPhase,
+      signal: requestController.signal,
+      onChunk: (content) => {
+        responseMessage.text += content
         scrollToLatest()
-      }
-    }, requestController.signal)
+      },
+    })
     if (!responseMessage.text.trim()) throw new Error('LearnMate 暂时没有返回有效追问')
     // 阶段推进交给服务端：它读智能体回复末尾的 [[PHASE:done]] 标记（见 applyPhaseState）。
     // 这里以前会无条件 advancePhase()，等于学生每说一句话就自动过一关。
@@ -322,6 +454,7 @@ async function sendMessage(forcedText = '', options = { advancesPhase: true }) {
 
 async function endSession() {
   if (!sessionId.value || isStreaming.value || isSubmitting.value) return
+  abortOpening()
   errorMessage.value = ''
   try {
     await saveSessionState()
@@ -336,6 +469,7 @@ async function endSession() {
 
 async function submitSolution() {
   if (!sessionId.value || !canSubmit.value || isStreaming.value || isSubmitting.value || evaluation.value) return
+  abortOpening()
   isSubmitting.value = true
   errorMessage.value = ''
   const finalSubmission = draft.value.trim() || [...messages.value].reverse().find((message) => message.role === 'user')?.text || ''
@@ -359,6 +493,7 @@ watch(() => props.task?.id, () => { void initializeSession() }, { immediate: tru
 onBeforeUnmount(() => {
   sessionLoadVersion += 1
   requestController?.abort()
+  abortOpening()
   clearEvaluationPoll()
 })
 </script>
@@ -396,6 +531,14 @@ onBeforeUnmount(() => {
 </style>
 
 <style scoped>
+.practice-agent-note { display: block; margin-top: 7px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+/* 交付物勾选：沿用本仓既定的勾选语言（ChapterCheck 的 option-item / is-selected /
+   accent-color），不另造一套。li::before 那条圆点是给只读清单用的，这里要去掉。 */
+.deliverable-list li::before { content: none; }
+.deliverable-item { display: flex; align-items: flex-start; gap: 7px; padding: 5px 7px; border: 1px solid transparent; border-radius: 5px; cursor: pointer; transition: border-color .2s ease, background .2s ease; }
+.deliverable-item:hover { background: #f1f6eb; }
+.deliverable-item.is-selected { border-color: #c8d9b7; background: #eef5e6; color: var(--accent-deep); }
+.deliverable-item input { flex: 0 0 auto; margin: 1px 0 0; accent-color: var(--accent-deep); }
 .practice-dialogue .button--secondary { border-color: #d5e2c8; background: #eef5e6; color: var(--accent-deep); }
 .practice-dialogue .button--secondary:hover { border-color: #b9c9b2; background: #e3eed9; }
 .practice-session-loading { display: grid; min-height: 280px; place-items: center; color: var(--muted); font-size: 12px; }

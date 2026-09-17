@@ -166,7 +166,7 @@ async def test_disconnecting_does_not_cancel_the_running_operation():
     started = asyncio.Event()
     finished = []
 
-    async def operation():
+    async def operation(writer):
         started.set()
         await asyncio.sleep(0.05)
         finished.append(True)
@@ -193,7 +193,7 @@ async def test_closing_the_generator_does_not_cancel_the_running_operation():
     started = asyncio.Event()
     finished = []
 
-    async def operation():
+    async def operation(writer):
         started.set()
         await asyncio.sleep(0.05)
         finished.append(True)
@@ -212,13 +212,37 @@ async def test_closing_the_generator_does_not_cancel_the_running_operation():
 async def test_normal_completion_still_returns_the_result_frame():
     """接管逻辑只在断连时生效，正常路径的结果帧不能被吞掉。"""
 
-    async def operation():
+    async def operation(writer):
+        writer("前半句", "reply")
+        writer("后半句", "reply")
         return {"session_id": "sess-1"}
 
     frames = [frame async for frame in diagnosis_router._stream_diagnosis(operation, "正在出题")]
 
     assert any('"result"' in frame for frame in frames)
     assert frames[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_the_streamed_text_reaches_the_client_before_the_result():
+    """边写边推：正文那几帧必须排在结果帧**前面**。
+
+    顺序反了（或者攒到最后一起发）就等于没流式 —— 页面还是等整个响应结束才看到字。
+    """
+
+    async def operation(writer):
+        writer("第一段", "reply")
+        await asyncio.sleep(0)
+        writer("第二段", "question")
+        return {"session_id": "sess-1"}
+
+    frames = [frame async for frame in diagnosis_router._stream_diagnosis(operation, "正在出题")]
+    deltas = [f for f in frames if '"reply_delta"' in f]
+
+    assert len(deltas) == 2, "正文没有逐段推出去"
+    assert deltas[0].index("第一段") >= 0 and '"channel": "reply"' in deltas[0]
+    assert '"channel": "question"' in deltas[1], "两段正文没带上各自的气泡"
+    assert frames.index(deltas[-1]) < next(i for i, f in enumerate(frames) if '"result"' in f)
 
 
 # ── 3. 模型挂住要走兜底，而不是无限等待 ───────────────────

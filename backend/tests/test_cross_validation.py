@@ -334,7 +334,11 @@ async def test_single_section_document_never_calls_the_cross_validator(monkeypat
 
 @pytest.mark.asyncio
 async def test_skip_review_bypasses_cross_validation_too(monkeypatch):
-    """路径节点流用 skip_review=True：整段绕过审核，交叉验证也一起绕过。"""
+    """开关本身仍然有效：整段绕过审核时，交叉验证也一起绕过。
+
+    路径节点资源已经不走这条路了（见 test_path_resources_are_never_generated_unreviewed），
+    现在还在用 skip_review 的是视频那条链——它生成的 PPT 是中间产物，学生看不到。
+    """
     llm = _DocLlm(CLEAN)
 
     content = await _generate(llm, monkeypatch, skip_review=True)

@@ -99,6 +99,36 @@ async def _ensure_path_node_difficulty_score_column():
         _log.exception("路径节点难度字段迁移失败")
         raise
 
+
+async def _ensure_advanced_practice_deliverable_state_column():
+    """为存量进阶实践会话补充交付物勾选状态列。
+
+    `generate_schemas()` 只创建缺失的**表**，不会给已存在的表加列，所以模型上新增的
+    字段必须在这里显式补，否则读写会直接撞 MySQL 1054 "Unknown column"。
+
+    这里用可空列而不是模型声明的 NOT NULL：新库由 generate_schemas 直接按模型建出
+    正确结构，本函数只对**存量库**生效，而存量行的语义就是"还没勾过任何交付物"，
+    读侧的 `_serialize` 用 `or {}` 兜底，NULL 与 {} 等价。
+    """
+    import logging
+
+    _log = logging.getLogger(__name__)
+    conn = Tortoise.get_connection("default")
+    try:
+        await conn.execute_query(
+            "ALTER TABLE advanced_practice_sessions "
+            "ADD COLUMN deliverable_state JSON NULL COMMENT '交付物勾选状态'"
+        )
+    except Exception as exc:
+        error_text = str(exc).lower()
+        is_duplicate_column = "1060" in error_text or "duplicate column" in error_text
+        if is_duplicate_column:
+            _log.debug("进阶实践交付物状态字段已存在")
+            return
+        _log.exception("进阶实践交付物状态字段迁移失败")
+        raise
+
+
 async def init_db():
     global _DB_INITIALIZED
     if _DB_INITIALIZED :
@@ -115,6 +145,7 @@ async def init_db():
         await _ensure_classroom_lesson_schema()
         await _ensure_path_node_teaching_spec_column()
         await _ensure_path_node_difficulty_score_column()
+        await _ensure_advanced_practice_deliverable_state_column()
         _DB_INITIALIZED = True
 
 async def close_db():

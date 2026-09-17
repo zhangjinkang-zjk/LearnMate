@@ -452,21 +452,32 @@ async def _build_classroom_path_context(
     return "\n".join(lines)
 
 
+# 实践对话的场景：来回推进任务的那几种。总结不在里面（它只读记录、不推进阶段），
+# 它有自己的集合 —— 见 _PRACTICE_SESSION_SCENARIOS。
+_PRACTICE_DIALOGUE_SCENARIOS = frozenset({"practice", "practice_opening"})
+
+# 需要读同一个实践会话、落进同一个 chat group 的场景。漏掉一个的后果很具体 ——
+# 开场会掉进节点课堂的历史里，跟这次任务的其余对话分家。
+_PRACTICE_SESSION_SCENARIOS = _PRACTICE_DIALOGUE_SCENARIOS | {"practice_summary"}
+
+
 def _practice_session_blocked(scenario: str, session) -> bool:
     """这次实践请求该不该被拒。
 
     总结读的是一份已经暂存的记录 —— 它本来就是给"结束但还没提交"准备的；继续对话
     则不能碰提交过的会话（提交后阶段和评价都定稿了，再聊下去进度和分数就对不上）。
+    开场同理：提交过的会话不需要再开一次头。
     """
     if session is None:
         return True
-    return scenario == "practice" and session.status == "completed"
+    return scenario in _PRACTICE_DIALOGUE_SCENARIOS and session.status == "completed"
 
 
 def _compose_user_prompt(scenario: str, text: str, segment: dict, record: str = "") -> str:
     """把学生的反讲、开放回答或提问翻译成给模型的输入。
 
     `record` 是服务端拼的会话记录（见 `practice_record_text`），目前只有总结场景用得到。
+    `practice_opening` 是唯一没有学生输入的场景：它要模型自己开口提第一问。
     """
     text = str(text or "").strip()
     question = segment.get("question") or {}
@@ -483,6 +494,20 @@ def _compose_user_prompt(scenario: str, text: str, segment: dict, record: str = 
             "【费曼反讲】学生用自己的话把这段讲给你听：\n"
             f"{_clip(text, 800)}\n"
             "请点评：哪里到位、哪里含糊或漏了关键关系，并引导他补一个例子或反例。"
+        )
+    if scenario == "practice_opening":
+        # 开场。不能复用 practice 那条路：那条路的第一句就是"学生的思考是：…"，
+        # 而这一轮学生还没说话 —— 这正是它以前只能发一句写死的通用话术的原因。
+        # 那句话不提任务名，学生看完不知道要回答什么（"你在说啥"），要等第二轮
+        # 模型才把任务讲清楚。所以这里要模型自己开口：先点明任务要产出什么，再提问。
+        phase = _clip(segment.get("phase") or segment.get("current_phase") or "当前阶段", 40)
+        return (
+            "【学习巩固·开场】这是本次实践对话的第一轮，学生还没有任何发言。"
+            "请依据上面给出的任务信息，先用一到两句话点明这个任务要他产出什么、"
+            "解决什么问题（说清目标即可，不要复述整份任务说明，也不要罗列验收标准），"
+            f"然后只问一个问题，把他引进「{phase}」这一步。\n"
+            "这一轮只问一个问题，不要连续追问，不要替他给出答案或方案，不要跳到后续阶段。"
+            "这一轮不输出任何阶段标记。"
         )
     if scenario == "practice":
         phase = _clip(segment.get("phase") or segment.get("current_phase") or "当前阶段", 40)
@@ -519,10 +544,31 @@ _FALLBACK_REPLIES = {
     "open": "你已经说到点子上了。再补一步：这个知识点和它解决的实际问题怎么对应，会更完整。",
     "feynman": "你的表达已经有雏形了。再补一句：它解决了什么问题、和前后知识点什么关系，会更完整。",
     "practice": "你的判断里已经有一个可用线索。先补充：你依据哪条材料得出这个结论？",
+    # 没有任务名时用的开场（有任务名走 _opening_fallback）
+    "practice_opening": "我们从「理解问题」开始。先说说这个任务要解决的核心问题，以及你准备依据哪些信息判断。",
     "practice_summary": "这次对话已经留下过程记录。回看你给出的证据和取舍，再决定下一步要补哪一个点。",
     "feynman_summary": "这次反讲已经留下过程记录。回看刚才的追问，补上那个还不够具体的关系或例子。",
     "free": "可以继续往下想：试着把这个知识点套到一个具体的例子里，理解会更稳。",
 }
+
+
+def _opening_fallback(segment: dict) -> str:
+    """开场那一轮的兜底：其它场景的兜底可以是一句通用话术，开场不行。
+
+    学生看不到任务名就回答不了 —— 这次改动之前，开场恰好就是那句通用话术，于是
+    学生只能回一句"你在说啥"。任务名由前端放在 `segment["title"]` 里（practice 那
+    条路本来就发 `props.task.title`），阶段名同理。拿不到任务名时退回
+    `_FALLBACK_REPLIES["practice_opening"]`，但**不能**拼出「」这种空引用。
+    """
+    segment = segment or {}
+    phase = _clip(segment.get("phase") or segment.get("current_phase"), 40) or "理解问题"
+    title = _clip(segment.get("title"), 120)
+    if not title:
+        return _FALLBACK_REPLIES["practice_opening"]
+    return (
+        f"我们先从「{phase}」开始：这个任务要你产出的是「{title}」。"
+        "先说说它要解决的核心问题，以及你准备依据哪些信息判断。"
+    )
 
 
 # ═══════════════════════════════════════
@@ -540,10 +586,15 @@ async def stream_classroom_chat(
     practice_session_id: str | None = None,
 ):
     """async generator：以普通聊天相同的持久化和流式顺序产出 SSE 事件。"""
-    fallback = _FALLBACK_REPLIES.get(scenario, _FALLBACK_REPLIES["free"])
+    # 开场的兜底要带上任务名，所以不能像其它场景那样从静态表里取一句。
+    fallback = (
+        _opening_fallback(segment)
+        if scenario == "practice_opening"
+        else _FALLBACK_REPLIES.get(scenario, _FALLBACK_REPLIES["free"])
+    )
     practice_session = None
     try:
-        if scenario in {"practice", "practice_summary"} and practice_session_id:
+        if scenario in _PRACTICE_SESSION_SCENARIOS and practice_session_id:
             from backend.src.models.advanced_practice_model import AdvancedPracticeSession
 
             practice_session = await AdvancedPracticeSession.filter(
@@ -574,8 +625,9 @@ async def stream_classroom_chat(
         lock = await get_node_generation_lock(user_id, path_id, node_id, "classroom_chat")
         async with lock:
             # 总结和对话一样属于这次实践会话，不能落到节点课堂那个历史组里 ——
-            # 否则课堂标签页的历史里会冒出一段实践总结。
-            practice_scope = practice_session_id if scenario in {"practice", "practice_summary"} else None
+            # 否则课堂标签页的历史里会冒出一段实践总结。开场同理：它和后面的对话是
+            # 同一段会话，分到两个组里的话，模型复述这次对话时会漏掉开场说过的话。
+            practice_scope = practice_session_id if scenario in _PRACTICE_SESSION_SCENARIOS else None
             brain = _get_classroom_brain(user_id, path_id, node_id, agent_id, practice_scope)
             user_prompt = _compose_user_prompt(
                 scenario,
@@ -603,7 +655,7 @@ async def stream_classroom_chat(
             # 又会跨分片到达。剥掉之后剩下的文本（stripper.text）才是要落库的回复。
             # 按 scenario 而不是按会话是否存在来决定剥不剥：提示词是按 scenario 拼的，
             # 万一哪次调用没带 practice_session_id，标记仍然必须被剥掉（只是不记进度）。
-            stripper = PhaseStreamStripper() if scenario == "practice" else None
+            stripper = PhaseStreamStripper() if scenario in _PRACTICE_DIALOGUE_SCENARIOS else None
             started_at = time.monotonic()
             logger.info(
                 "[ClassroomChat] 流式开始 user=%s path=%s node=%s segment=%s group=%s",
@@ -654,10 +706,10 @@ async def stream_classroom_chat(
             await record.save()
 
             # 阶段进度由这次回复里的标记决定，客户端不再自己往前走。
-            phase_state = await AdvancedPracticeService.record_phase_markers(
-                practice_session,
-                stripper.markers if stripper is not None else [],
-            )
+            # 开场那一轮不记：它是助手在提问，学生还没答，这一轮出现任何标记都是错的。
+            # 标记照剥（别漏给学生看见），只是不交给账本。
+            markers = [] if scenario == "practice_opening" else (stripper.markers if stripper is not None else [])
+            phase_state = await AdvancedPracticeService.record_phase_markers(practice_session, markers)
             if phase_state:
                 yield _sse({"role": "system", "type": "phase", **phase_state})
 

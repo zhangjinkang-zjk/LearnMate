@@ -224,16 +224,46 @@ async def test_a_question_outside_the_length_window_is_not_used(llm):
 
 
 @pytest.mark.asyncio
-async def test_the_first_question_is_served_locally_without_calling_the_model(llm):
-    """第 1 问没有对话可依据，直接本地出题，不必等一次 ~50 秒的调用。"""
+async def test_the_first_question_comes_from_the_model_too(llm):
+    """第 1 问以前是本地直出（源码里那句 `not dialogue_text and step == 0` 早退），
+    结果是每个学生的第一问都是同一句模板 —— 前端的替换条件是 source === 'agent'，
+    兜底题的 source 是 'fallback'，模型那一版永远换不上去。
+
+    这里钉住"第一问也交给模型"，同时钉住调用参数：它拿的是空的已有对话，模型要靠
+    第 1 段的阶段指令（确认学习方向）出题。
+    """
     fake, captured = llm
     result = await portrait_service.PortraitChatHistory_Service.next_interview_question(
         1, [], step=0, max_steps=5,
     )
 
+    assert result["source"] == "agent", "第一问又被本地兜底接走了"
+    assert result["question"].startswith("对于自动处理客服工单")
+    assert fake.calls, "模型没有被调用，第一问还是写死的那句"
+    assert captured["timeout"] == portrait_service._INTERVIEW_LLM_TIMEOUT
+    prompt = fake.calls[0]["prompt"]
+    assert portrait_service._INTERVIEW_STAGES[0] in prompt, "第 1 问没拿到第 1 段的阶段指令"
+    assert "暂无" in prompt, "空对话没有被提示词接住，模型会以为前面已经聊过"
+    assert "{stage_instruction}" not in prompt and "{dialogue_text}" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_a_dead_model_still_gives_a_first_question(monkeypatch):
+    """第一问交给模型之后，模型挂掉不能变成一道开不了的访谈。"""
+    from backend.src.ai_core import llm_config
+
+    class _Boom:
+        async def ainvoke(self, *_args, **_kwargs):
+            raise RuntimeError("upstream 503")
+
+    monkeypatch.setattr(llm_config, "llm", _Boom())
+    result = await portrait_service.PortraitChatHistory_Service.next_interview_question(
+        1, [], step=0, max_steps=5,
+    )
+
     assert result["source"] == "fallback"
-    assert not fake.calls
-    assert "timeout" not in captured
+    assert result["question"].strip()
+    assert "「" not in result["question"], "第一问没有可引用的回答，不该出现空引号"
 
 
 @pytest.mark.asyncio

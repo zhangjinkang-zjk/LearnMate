@@ -77,11 +77,25 @@ class DialogueTurn(BaseModel):
     answer: str = ""
 
 
+class DiagnosisAssessment(BaseModel):
+    """访谈之后那次基础测评的结果，字段与 DiagnosisPage 写进 sessionStorage 的 result 对齐。
+
+    用模型而不是裸 dict：message 会被拼进提示词，长度得有个上限；字段名也得写明白，
+    否则"前端发了、接口没接住"这种静默丢弃还会再发生一次（这已经是第二次）。
+    """
+
+    percentage: float = Field(default=0.0, ge=0, le=100)
+    correct_count: int = Field(default=0, ge=0)
+    total_questions: int = Field(default=0, ge=0)
+    message: str = Field(default="", max_length=200)
+
+
 class InitFromDialogueRequest(BaseModel):
     dialogue: List[DialogueTurn]
     identity: str = Field(default="", max_length=80)
     direction: str = Field(default="", max_length=120)
     goal: str = Field(default="", max_length=160)
+    assessment: DiagnosisAssessment | None = None
 
 
 class NextInterviewQuestionRequest(BaseModel):
@@ -125,6 +139,7 @@ async def init_from_dialogue(
                 "direction": data.direction.strip(),
                 "goal": data.goal.strip(),
             },
+            assessment=data.assessment.model_dump() if data.assessment else None,
         )
         return {"code": 200, "msg": "画像初始化成功", "data": result}
     except ValueError as e:

@@ -183,7 +183,7 @@ function resetAgentStages() {
     { id: 'leader', label: '协同调度智能体', message: '等待需求规划', status: 'pending' },
     { id: 'executor', label: `${selectedKind.value.label}智能体`, message: '等待并行生成', status: 'pending' },
     { id: 'reviewer', label: '内容审核智能体', message: '等待质量审核', status: 'pending' },
-    { id: 'saver', label: '资源入库智能体', message: '等待保存资源', status: 'pending' },
+    { id: 'saver', label: '保存资源', message: '等待保存资源', status: 'pending' },
     { id: 'complete', label: '流程完成', message: '等待任务完成', status: 'pending' },
   ]
 }

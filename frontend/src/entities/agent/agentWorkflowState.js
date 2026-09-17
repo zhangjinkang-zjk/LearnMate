@@ -1,15 +1,16 @@
 import { reactive } from 'vue'
 
-// 角色名对着赛题原文起（榜题 XH-202630 的评分标准点名了"多智能体协同调度（诊断/
-// 生成/审核）"、"领域知识个性化生成"、"交叉验证与辩论"机制，以及"学情Agent、
-// 生成Agent、审核Agent"这些叫法）。同一份字面量在后端
-// backend/src/ai_core/agent_names.py —— 跨语言没法 import，改一边记得同步另一边。
+// 角色名用业务方的说法，不用框架内部术语 —— 面板是给学生和培训管理者看的，
+// 「协同调度 / 学情诊断 / 领域知识生成 / 内容审核 / 交叉验证」能直接说明这一步在
+// 干什么。同一份字面量在后端 backend/src/ai_core/agent_names.py，跨语言没法 import，
+// 改一边记得同步另一边。
 // 这里的 agentName 只在后端没推 agent_name 时兜底，正常情况下以后端推送的为准。
+// 注意 saver：那是一次落库，不是智能体，所以它的名字里不带"智能体"。
 export const workflowPhases = [
   { id: 'leader', label: '需求规划', agentName: '协同调度智能体' },
   { id: 'executor', label: '并行生成', agentName: '领域知识生成智能体' },
   { id: 'reviewer', label: '质量审核', agentName: '内容审核智能体' },
-  { id: 'saver', label: '保存资源', agentName: '资源入库智能体' },
+  { id: 'saver', label: '保存资源', agentName: '保存资源' },
   { id: 'complete', label: '完成', agentName: '流程状态' },
 ]
 
@@ -73,6 +74,13 @@ export const workflowState = reactive({
   // 本会话里真正上报过 agent_event 的 phase。用来区分"跑过并完成"和"压根没跑"——
   // 后端只推当前阶段的链路要靠它来补全前面的阶段，但没上报过的阶段不能补。
   reportedPhases: [],
+  // 后端一开始就说"这一轮不做审核"（现在只有视频那条链还在用 skip_review=True，
+  // 它生成的 PPT 是中间产物；学习路径的节点资源已经改成走完整审核了）。
+  // 它是个会话语义：之后才冒出来的章节也要跟着落成"未审核"，否则每一节都会一直显示
+  // "待审核"，而这一轮根本不会有人来审 —— 学生只看到"资源已生成但一直没审核"。
+  reviewSkipped: false,
+  // 后端给的那句说明（它会说清是哪种情况跳过的），章节出现得比这条信号晚时靠它。
+  reviewSkipMessage: '',
   currentMessage: '',
   progress: 0,
   startedAt: 0,
@@ -123,7 +131,7 @@ function markPreviousPhasesDone(phase) {
   phases.slice(0, phaseIndex).forEach((item) => {
     // 只推进"确实上报过"的阶段。它的本意是补全那些后端只报当前阶段的链路
     // （前面的阶段只报过 running、没报 done，所以要收尾）——但从未上报过的
-    // 阶段不能补：那条链路可能压根没跑它。比如章节资源链路 skip_review=True，
+    // 阶段不能补：那条链路可能压根没跑它。比如视频链的 skip_review=True，
     // 审核从来不执行，补成"已完成"就是假话。
     if (!workflowState.reportedPhases.includes(item.id)) return
     const node = ensurePhaseNode(item.id)
@@ -206,6 +214,8 @@ function updateNode(event) {
 const SECTION_AGENT_PATTERN = /^executor:([a-z_]+):section-(\d+)$/
 const SECTION_TIMELINE_LIMIT = 40
 const SECTION_CONTENT_LIMIT = 2000
+// 审核被整轮跳过时给章节盖的那句话。措辞要让人一眼看出是"这次不做"，而不是"还没轮到"。
+const REVIEW_SKIPPED_MESSAGE = '本次未做章节审核'
 
 function sectionKeyFromEvent(event) {
   const matched = SECTION_AGENT_PATTERN.exec(String(event.agent_id || event.agentId || ''))
@@ -237,8 +247,11 @@ function ensureSection(key) {
       total: 0,
       genStatus: 'pending',
       genMessage: '等待生成',
-      reviewStatus: 'pending',
-      reviewMessage: '等待审核',
+      // 这一轮的审核被跳过时，新冒出来的章节也要直接落"未审核"（见 reviewSkipped）。
+      reviewStatus: workflowState.reviewSkipped ? 'skipped' : 'pending',
+      reviewMessage: workflowState.reviewSkipped
+        ? (workflowState.reviewSkipMessage || REVIEW_SKIPPED_MESSAGE)
+        : '等待审核',
       score: null,
       // PPT 才有"页"的概念。slideIdx 是当前正在写的那一页，slidesSeen 是推送过内容的页数，
       // 都来自 stream_slide_* 的 slide_idx（resource_graph.py:692-699）。文档没有这个字段。
@@ -253,20 +266,9 @@ function ensureSection(key) {
   return workflowState.sections[key]
 }
 
-function recordSectionEvent(event) {
-  const key = sectionKeyFromEvent(event)
-  if (!key) return
-  const section = ensureSection(key)
-  const status = normalizeStatus(event.status)
-  const phase = String(event.phase || '').toLowerCase()
-  const message = String(event.message || '').trim()
-  const agentName = String(event.agent_name || event.agentName || '').trim()
-  const sectionTitle = String(event.section_title || event.sectionTitle || '').trim()
-  if (agentName) section.label = agentName
-  if (sectionTitle) section.title = sectionTitle
-  const reportedTotal = Number(event.total)
-  if (Number.isInteger(reportedTotal) && reportedTotal > 0) section.total = reportedTotal
-
+// 把一条事件落到某一节上。章节级事件和整篇级审核共用这一段，免得两条路的
+// 时间线/分数规则各写一遍、慢慢走偏。
+function writeSection(section, { phase, status, message, event }) {
   if (phase === 'reviewer') {
     section.reviewStatus = status
     if (message) section.reviewMessage = message
@@ -287,6 +289,71 @@ function recordSectionEvent(event) {
     ].slice(-SECTION_TIMELINE_LIMIT)
   }
   section.updatedAt = Date.now()
+}
+
+// 返回是否认领了这条事件（整篇级事件认领不了，交给后面那条路）。
+function recordSectionEvent(event) {
+  const key = sectionKeyFromEvent(event)
+  if (!key) return false
+  const section = ensureSection(key)
+  const agentName = String(event.agent_name || event.agentName || '').trim()
+  const sectionTitle = String(event.section_title || event.sectionTitle || '').trim()
+  if (agentName) section.label = agentName
+  if (sectionTitle) section.title = sectionTitle
+  const reportedTotal = Number(event.total)
+  if (Number.isInteger(reportedTotal) && reportedTotal > 0) section.total = reportedTotal
+  writeSection(section, {
+    phase: String(event.phase || '').toLowerCase(),
+    status: normalizeStatus(event.status),
+    message: String(event.message || '').trim(),
+    event,
+  })
+  return true
+}
+
+// 整篇级的审核事件没有 file_type / section_idx，按章节 id 找不到归属。
+//
+// 目前只有文档走这条路：它的审核是**整篇**的跨章节一致性检查（resource_graph 的
+// 文档生成器内部把 cross_validator 事件推给 stream_writer，不带章节信息），PPT 才
+// 是逐节审核。以前这类事件被直接丢掉，于是文档每一节都永远停在"待审核" —— 生成早就
+// 完成、资源也抛给前端了，抽屉里却写着没审核。
+//
+// 认的是 agent_id 而不是猜资源类型：交叉验证目前只有文档这一条链路在用。哪天别的
+// 类型也接上它，就要让后端在事件里带上 file_type（那一处现在夹着同事未完成的改动，
+// 没有顺手改），这里才能按事件归属。
+function recordWholeResourceReview(event) {
+  if (String(event.agent_id || event.agentId || '').toLowerCase() !== 'cross_validator') return
+  if (String(event.phase || '').toLowerCase() !== 'reviewer') return
+  const keys = Object.keys(workflowState.sections).filter((key) => key.startsWith('document:'))
+  if (!keys.length) return
+  const status = normalizeStatus(event.status)
+  const message = String(event.message || '').trim()
+  keys.forEach((key) => {
+    // 已经逐节审过并落了结论的不覆盖：整篇审核晚到的"通过"不该把逐节的失败翻案。
+    const section = workflowState.sections[key]
+    if (section.reviewStatus === 'failed') return
+    writeSection(section, { phase: 'reviewer', status, message, event })
+  })
+}
+
+// 后端说这一轮不做审核时，把当前所有还没出结论的章节一并落成"未审核"，
+// 并记住这个会话语义（之后才冒出来的章节由 ensureSection 直接落这个状态）。
+function markReviewSkipped(message) {
+  if (workflowState.reviewSkipped) return
+  workflowState.reviewSkipped = true
+  const text = message || REVIEW_SKIPPED_MESSAGE
+  workflowState.reviewSkipMessage = text
+  Object.values(workflowState.sections).forEach((section) => {
+    if (section.reviewStatus !== 'pending') return
+    section.reviewStatus = 'skipped'
+    section.reviewMessage = text
+    section.updatedAt = Date.now()
+  })
+}
+
+function isReviewSkipEvent(event) {
+  return String(event.phase || '').toLowerCase() === 'reviewer'
+    && normalizeStatus(event.status) === 'skipped'
 }
 
 function applySectionStream(event) {
@@ -343,6 +410,8 @@ export function resetWorkflow({ title = '', pathId = null, nodeId = null, resour
   workflowState.sections = {}
   workflowState.events = []
   workflowState.reportedPhases = []
+  workflowState.reviewSkipped = false
+  workflowState.reviewSkipMessage = ''
   workflowState.currentMessage = '等待资源生成服务开始'
   workflowState.progress = 0
   workflowState.startedAt = Date.now()
@@ -353,7 +422,8 @@ export function resetWorkflow({ title = '', pathId = null, nodeId = null, resour
 export function applyWorkflowEvent(event) {
   if (!event || event.type !== 'agent_event') return
   updateNode(event)
-  recordSectionEvent(event)
+  if (isReviewSkipEvent(event)) markReviewSkipped(String(event.message || '').trim())
+  if (!recordSectionEvent(event)) recordWholeResourceReview(event)
 }
 
 export function applyWorkflowProgress(event) {
@@ -418,8 +488,39 @@ export function applyWorkflowResource(resourceType, message = '资源已就绪')
   })
 }
 
+// 章节卡片状态：生成和审核两维的合成。抽屉里的芯片和章节卡片**共用这一处** ——
+// 以前两边各写一份，注释写着"必须一致"，而实际上已经不一致了：抽屉把"生成完成"就算
+// 完成，卡片还要求审核完成，于是同一节在芯片上是已完成、在卡片上是待审核。
+//
+// 判定顺序有讲究：失败优先（任意一维失败就是这张卡有问题），然后是谁正在动，
+// 最后才轮到完成。
+const SECTION_ACTIVE_STATUSES = new Set(['running', 'reviewing', 'retrying', 'saving'])
+
+export function sectionStatus(section) {
+  if (!section) return 'pending'
+  const genStatus = normalizeStatus(section.genStatus)
+  const reviewStatus = normalizeStatus(section.reviewStatus)
+  if (genStatus === 'failed' || reviewStatus === 'failed') return 'failed'
+  const active = [reviewStatus, genStatus].find((status) => SECTION_ACTIVE_STATUSES.has(status))
+  if (active) return active
+  // 审核被跳过（这一轮压根不审）：生成完就算这一节做完了，卡上显示"已完成"，
+  // 审核那一行会写明"本次未做章节审核"。卡在"待审核"才是假的 —— 不会有人来审。
+  if (genStatus === 'done') return 'done'
+  if (reviewStatus === 'done' || reviewStatus === 'skipped') return 'done'
+  return 'pending'
+}
+
 export function finishWorkflow(failed = false) {
   const finalStatus = failed ? 'failed' : 'done'
+  // 收尾时把"没等到审核结论"的章节落成未审核：流程已经结束，审核要么跑完了、
+  // 要么这一轮就没打算跑（单节文档不走跨章节检查、画像引入页不审、skip_review）。
+  // 留一句"待审核"等于告诉学生还有事没做完 —— 那是假的。
+  Object.values(workflowState.sections).forEach((section) => {
+    if (section.reviewStatus !== 'pending') return
+    section.reviewStatus = 'skipped'
+    section.reviewMessage = REVIEW_SKIPPED_MESSAGE
+    section.updatedAt = Date.now()
+  })
   if (workflowState.activeAgentId === 'complete' && workflowState.nodes.complete?.status === finalStatus) {
     // 资源任务收尾时会先发一条 phase='complete' 的 agent_event、紧跟一条 type='done'
     // （backend/src/service/resource/service.py:745/754）。前者已经把 complete 节点置成

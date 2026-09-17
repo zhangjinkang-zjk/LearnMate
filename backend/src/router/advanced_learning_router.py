@@ -20,11 +20,14 @@ class PracticeSessionRequest(BaseModel):
 
 
 class PracticeStateRequest(BaseModel):
+    # 首阶段按任务类型不同（案例诊断是 clues，项目实训是 scope），这里只做长度与
+    # 白名单之外的宽松校验 —— 具体是哪套词汇由会话自己的 kind 决定。
     current_phase: str = Field(default="understand", max_length=32)
     completed_phase_ids: list[str] = Field(default_factory=list, max_length=6)
     messages: list[dict[str, Any]] = Field(default_factory=list, max_length=120)
     confirmed_facts: list[str] = Field(default_factory=list, max_length=20)
     assumptions: list[str] = Field(default_factory=list, max_length=20)
+    deliverable_state: dict[str, Any] = Field(default_factory=dict)
 
 
 class PracticeSubmitRequest(PracticeStateRequest):
@@ -86,6 +89,7 @@ async def save_practice_session(
             messages=data.messages,
             confirmed_facts=data.confirmed_facts,
             assumptions=data.assumptions,
+            deliverable_state=data.deliverable_state,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -119,6 +123,7 @@ async def submit_practice_session(
             messages=data.messages,
             confirmed_facts=data.confirmed_facts,
             assumptions=data.assumptions,
+            deliverable_state=data.deliverable_state,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

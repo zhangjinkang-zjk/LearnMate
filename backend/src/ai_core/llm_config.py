@@ -240,6 +240,68 @@ class _PriorityLLM:
             else:
                 return await _call()
 
+    async def astream(
+        self,
+        prompt,
+        priority: str = "high",
+        user_id: int = 0,
+        pool: str = "default",
+        temperature: float | None = None,
+    ):
+        """逐块产出正文。并发与优先级规则和 ainvoke 保持一致。
+
+        不参与响应缓存：流式的意义就是"马上看到字"，命中缓存等于整段一次性返回，
+        等于没流。缓存只服务 ainvoke。
+        """
+        raw_llm, _ = self._target(temperature)
+
+        user_sem = None
+        if user_id:
+            key = (user_id, pool)
+            if key not in _user_pool_async:
+                async with _user_pool_async_lock:
+                    if key not in _user_pool_async:
+                        _user_pool_async[key] = asyncio.Semaphore(_PER_USER.get(pool, _DEFAULT_PER_USER))
+            user_sem = _user_pool_async[key]
+
+        async def _iter():
+            if raw_llm is None:
+                raise RuntimeError("AI model is not configured. Set api_key in backend/.env.")
+            async for chunk in raw_llm.astream(prompt):
+                text = getattr(chunk, "content", "") or ""
+                if text:
+                    yield text
+
+        async def _call():
+            if user_sem:
+                async with user_sem:
+                    async for text in _iter():
+                        yield text
+            else:
+                async for text in _iter():
+                    yield text
+
+        global _async_high_active
+        if priority == "high":
+            async with _async_high_lock:
+                _async_high_active += 1
+            try:
+                async for text in _call():
+                    yield text
+            finally:
+                async with _async_high_lock:
+                    _async_high_active -= 1
+        else:
+            async with _async_high_lock:
+                throttled = _async_high_active > 0
+            if throttled:
+                async with _async_low:
+                    async for text in _call():
+                        yield text
+            else:
+                async for text in _call():
+                    yield text
+
     def invoke(
         self,
         prompt,

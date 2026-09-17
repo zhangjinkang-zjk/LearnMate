@@ -116,16 +116,35 @@ def _describe_result(result) -> str:
 
 
 async def _stream_diagnosis(operation, status_message: str):
-    """Keep the diagnosis connection alive while the LLM generates a question."""
-    task = asyncio.create_task(operation())
+    """Keep the diagnosis connection alive while the LLM generates a question.
+
+    operation 收一个 writer，模型边写边把正文交出来（出题的那句、判分的那句），这里立刻
+    转成 SSE 推给页面。以前是等整段生成完一次性返回，学生对着"正在生成回复…"干等
+    几十秒；现在字是长出来的。
+
+    keepalive 仍然照发：模型也可能一段时间一个字都不出（超时上限是 60 秒）。
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def writer(text: str, channel: str) -> None:
+        queue.put_nowait({"type": "reply_delta", "channel": channel, "text": text})
+
+    task = asyncio.create_task(operation(writer))
     try:
         yield _sse(_diagnosis_event("running", status_message))
         yield _sse({"type": "status", "message": status_message})
-        while not task.done():
+        while True:
+            if task.done() and queue.empty():
+                break
             try:
-                await asyncio.wait_for(asyncio.shield(task), timeout=5)
+                item = await asyncio.wait_for(queue.get(), timeout=3)
             except asyncio.TimeoutError:
+                # 一个字都没出来的时候才发 keepalive，免得把正在长的正文打断成心跳
+                if task.done():
+                    break
                 yield _sse({"type": "keepalive"})
+                continue
+            yield _sse(item)
         result = task.result()
         yield _sse(_diagnosis_event("done", _describe_result(result)))
         yield _sse({"type": "result", "data": result})
@@ -148,7 +167,7 @@ async def _stream_diagnosis(operation, status_message: str):
 async def stream_start_diagnosis(data: StartDiagnosisRequest, user_id: int = Depends(get_user_id_from_token)):
     return StreamingResponse(
         _stream_diagnosis(
-            lambda: start_diagnosis(user_id, data.identity, data.direction, data.goal, data.max_steps),
+            lambda writer: start_diagnosis(user_id, data.identity, data.direction, data.goal, data.max_steps, on_delta=writer),
             "正在根据你的学习方向生成第一道诊断题…",
         ),
         media_type="text/event-stream",
@@ -160,7 +179,7 @@ async def stream_start_diagnosis(data: StartDiagnosisRequest, user_id: int = Dep
 async def stream_answer_diagnosis(data: AnswerDiagnosisRequest, user_id: int = Depends(get_user_id_from_token)):
     return StreamingResponse(
         _stream_diagnosis(
-            lambda: answer_diagnosis(user_id, data.session_id, data.question_id, data.answer, data.time_spent, data.max_steps),
+            lambda writer: answer_diagnosis(user_id, data.session_id, data.question_id, data.answer, data.time_spent, data.max_steps, on_delta=writer),
             "正在结合你的回答调整下一道题…",
         ),
         media_type="text/event-stream",

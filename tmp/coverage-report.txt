@@ -1,0 +1,230 @@
+LearnMate 单元测试覆盖率报告
+================================================================
+采集时间   : 2026-09-17 04:49:05
+提交版本   : 2bd1b843c4c88e3f23453430b171d0fd92ae3199  (分支 main)
+工作区状态 : 有 21 个未提交改动（含他人并行开发中的文件）
+测试命令   : pytest tests/ --cov=src --cov-report=term-missing
+环境       : conda env zhiban / Python 3.13.13
+================================================================
+
+C:\Users\35808\AppData\Roaming\Python\Python313\site-packages\pytest_asyncio\plugin.py:208: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+........................................................................ [ 13%]
+........................................................................ [ 26%]
+................F....................................................... [ 40%]
+........................................................................ [ 53%]
+........................................................................ [ 66%]
+........................................................................ [ 80%]
+........................................................................ [ 93%]
+....................................                                     [100%]
+================================== FAILURES ===================================
+______ test_compose_user_prompt_practice_opening_asks_the_first_question ______
+
+    def test_compose_user_prompt_practice_opening_asks_the_first_question():
+        prompt = cg_chat._compose_user_prompt("practice_opening", "", {"phase": "理解问题"})
+>       assert "学生还没有任何发言" in prompt
+E       AssertionError: assert '学生还没有任何发言' in '……'
+
+tests\test_classroom_chat.py:119: AssertionError
+============================== warnings summary ===============================
+tests/test_advanced_practice_grading.py::test_the_server_task_is_looked_up_by_task_key
+  C:\Users\35808\AppData\Roaming\Python\Python313\site-packages\pytest_asyncio\plugin.py:783: DeprecationWarning: The event_loop fixture provided by pytest-asyncio has been redefined in
+  C:\Users\35808\Desktop\LearnMate\backend\tests\conftest.py:20
+  Replacing the event_loop fixture with a custom implementation is deprecated
+  and will lead to errors in the future.
+  If you want to request an asyncio event loop with a scope other than function
+  scope, use the "scope" argument to the asyncio mark when marking the tests.
+  If you want to return different types of event loops, use the event_loop_policy
+  fixture.
+  
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=============================== tests coverage ================================
+______________ coverage: platform win32, python 3.13.13-final-0 _______________
+
+Name                                            Stmts   Miss  Cover   Missing
+-----------------------------------------------------------------------------
+src\__init__.py                                     0      0   100%
+src\ai_core\__init__.py                             0      0   100%
+src\ai_core\agent_names.py                         17      1    94%   58
+src\ai_core\brain.py                              291    241    17%   37-38, 46-64, 74-89, 126-135, 176-188, 198-215, 222-252, 261-271, 278-281, 286-301, 304-356, 363-369, 373-387, 390-406, 410-493
+src\ai_core\classroom_graph.py                    315     39    88%   146-148, 188-189, 218, 221, 266-270, 393-394, 412-414, 425-436, 451, 475, 526-538, 614, 622, 635-640, 684, 687-688, 692, 699, 721
+src\ai_core\llm_config.py                         156    102    35%   29-30, 61-65, 111-120, 146-151, 154-156, 161-167, 177-241, 251-279
+src\ai_core\path_graph.py                         300     55    82%   247, 271-272, 298, 303-314, 416-418, 428, 458-459, 530-531, 572, 587-626, 639-644
+src\ai_core\ppt_planner.py                        115     81    30%   51, 53, 55, 57, 59, 78-254, 262-296, 304-335
+src\ai_core\resource_graph.py                    1154    707    39%   65-66, 133-176, 192, 244, 307-1197, 1229, 1281-1282, 1365-1367, 1393-1394, 1397-1403, 1481-1482, 1492-1497, 1540, 1588-1591, 1782-1783, 1848-1879, 1889-1898, 1902, 1921, 1940-1969, 1974-1996, 2020-2025, 2041-2044, 2060, 2066-2070, 2072-2073, 2075-2086, 2102-2124, 2130-2150, 2167-2250, 2265-2291
+src\ai_core\streaming.py                           41     11    73%   53-61, 85-89, 93
+src\ai_core\tools\__init__.py                       0      0   100%
+src\ai_core\tools\animation.py                     48     42    12%   17-95
+src\ai_core\tools\exam.py                          16     12    25%   12-33
+src\ai_core\tools\history.py                       12      8    33%   11-18
+src\ai_core\tools\image.py                         11      8    27%   10-18
+src\ai_core\tools\knowledge.py                    230    186    19%   60-62, 65-68, 71-74, 77-81, 84, 88-89, 93, 97-101, 105-121, 125-145, 149-182, 186-189, 193-230, 250-251, 257, 263, 267-293, 304-377, 383-392, 398, 404
+src\ai_core\tools\mcp_external.py                  97     75    23%   29, 33-36, 40-41, 46-53, 57-84, 88-90, 95-133
+src\ai_core\tools\memory.py                        25     20    20%   14-37
+src\ai_core\tools\path.py                          96     81    16%   9-19, 25-39, 45-55, 61-69, 87-113, 127-138, 145-151
+src\ai_core\tools\portrait.py                      54     43    20%   15-25, 37-73
+src\ai_core\tools\resource.py                      65     54    17%   31-34, 41-110
+src\ai_core\tools\search.py                       193    174    10%   13-18, 22, 26-46, 50-55, 59, 63-71, 75-83, 93-109, 113-153, 157-208, 217-260, 266-283
+src\ai_core\tools\skill.py                         53     41    23%   10-23, 36-44, 61-79, 85-95, 101-106
+src\ai_core\tools\video_search.py                  34     31     9%   9-47
+src\main.py                                       125    125     0%   1-192
+src\models\__init__.py                              0      0   100%
+src\models\advanced_practice_model.py              23      0   100%
+src\models\advanced_task_model.py                  16      0   100%
+src\models\agent_skill_model.py                    17      0   100%
+src\models\annotation_model.py                     13     13     0%   1-22
+src\models\chat_history_model.py                   12      0   100%
+src\models\classroom_model.py                      18      0   100%
+src\models\curriculum_model.py                     11      0   100%
+src\models\email_code_model.py                     11     11     0%   3-16
+src\models\exam_model.py                           40      0   100%
+src\models\image_model.py                          11     11     0%   1-19
+src\models\knowledgemodel.py                       14      0   100%
+src\models\memory_episode_model.py                 20      0   100%
+src\models\memory_kv_model.py                      19      0   100%
+src\models\memory_message_model.py                 15      0   100%
+src\models\memory_summary_model.py                 14      0   100%
+src\models\mock_classroom_model.py                 53     53     0%   3-71
+src\models\narration_model.py                       9      9     0%   3-18
+src\models\notification_model.py                   22      0   100%
+src\models\path_model.py                           42      0   100%
+src\models\portrait_radar_model.py                 13     13     0%   3-20
+src\models\portraitmodel.py                        12      0   100%
+src\models\resource_model.py                       22      0   100%
+src\models\study_model.py                          51      0   100%
+src\models\study_room_model.py                     54     54     0%   3-74
+src\models\task_model.py                           17      0   100%
+src\models\user_agent_model.py                     17      0   100%
+src\models\usermodel.py                            18      0   100%
+src\models\video_model.py                          14      0   100%
+src\router\__init__.py                              0      0   100%
+src\router\admin_router.py                        271    271     0%   1-364
+src\router\advanced_learning_router.py             62     62     0%   3-125
+src\router\agent_router.py                         91     91     0%   4-195
+src\router\annotation_router.py                    25     25     0%   3-51
+src\router\chat_router.py                          72     72     0%   1-129
+src\router\diagnosis_router.py                     96     20    79%   39-43, 48-52, 80, 83, 128, 135-136, 138-140, 149, 161
+src\router\exam_router.py                          57     57     0%   3-105
+src\router\image_router.py                         85     85     0%   3-184
+src\router\knowledge_router.py                    126    126     0%   1-257
+src\router\learning_path_router.py                 32     32     0%   3-49
+src\router\mock_classroom_router.py                70     70     0%   3-148
+src\router\notification_router.py                  51     51     0%   2-118
+src\router\path_router.py                         249    249     0%   3-493
+src\router\portrait_router.py                     102    102     0%   1-171
+src\router\resource_router.py                     283    283     0%   1-452
+src\router\study_room_router.py                    58     58     0%   3-124
+src\router\study_router.py                         60     60     0%   3-104
+src\router\user_router.py                         147    147     0%   1-265
+src\router\video_router.py                        123    123     0%   2-196
+src\schemas\__init__.py                             0      0   100%
+src\schemas\admin.py                                5      5     0%   1-9
+src\schemas\annotation.py                           9      9     0%   1-15
+src\schemas\chat.py                                16     16     0%   1-28
+src\schemas\exam.py                                13     13     0%   1-19
+src\schemas\image.py                                6      6     0%   1-8
+src\schemas\path.py                                44      0   100%
+src\schemas\portrait.py                             6      6     0%   1-9
+src\schemas\resource.py                            11     11     0%   1-16
+src\schemas\response.py                            12     12     0%   7-23
+src\schemas\skill.py                                5      5     0%   1-7
+src\schemas\user.py                                37     37     0%   1-62
+src\service\__init__.py                             0      0   100%
+src\service\admin\__init__.py                       0      0   100%
+src\service\admin\service.py                       24     24     0%   1-47
+src\service\advanced\__init__.py                    0      0   100%
+src\service\advanced\practice_service.py          367     55    85%   77, 81, 111, 231, 235, 316-317, 335, 364, 444-446, 531-534, 538-581, 585-588, 603, 605, 646-653, 669, 671, 679, 720, 722, 724, 736
+src\service\advanced\service.py                   395     94    76%   107-110, 112, 115-116, 118, 121-122, 222-223, 227, 252-253, 269-272, 300, 322-323, 327-339, 382-384, 390, 398, 417, 428, 449-451, 496-514, 713, 777, 870-873, 923-1023
+src\service\advanced\task_jobs.py                  98     17    83%   88-91, 97-104, 111-112, 115, 176, 184
+src\service\agent\__init__.py                       0      0   100%
+src\service\agent\service.py                      128    103    20%   29, 33-40, 44, 58-61, 65, 76-88, 92-136, 140-146, 150-153, 157-158, 163-164, 169-179, 187-195, 199-208, 216, 233
+src\service\annotation\__init__.py                  0      0   100%
+src\service\annotation\service.py                  43     43     0%   1-73
+src\service\chat\__init__.py                        0      0   100%
+src\service\chat\service.py                       266    221    17%   22-43, 53-54, 61-130, 171-175, 192-213, 218-223, 227-234, 238-244, 248, 253-269, 272-291, 297-326, 329-336, 339-345, 350-386, 389-397, 400-411
+src\service\curriculum\__init__.py                  0      0   100%
+src\service\curriculum\service.py                 133    121     9%   22-29, 34-57, 62-97, 108-140, 145-161, 166-201
+src\service\diagnosis\__init__.py                   0      0   100%
+src\service\diagnosis\service.py                  207     80    61%   35-36, 49-58, 62-81, 87-88, 91-92, 138-139, 157-163, 177-193, 199-200, 211, 238-240, 251-269, 273-291, 312, 360, 363, 380, 383-384
+src\service\exam\__init__.py                        0      0   100%
+src\service\exam\service.py                       508    348    31%   32, 37-42, 48, 50-51, 58, 63-69, 74-84, 89-90, 97, 99-100, 103-104, 111, 114, 135, 138-141, 155, 160-171, 176-180, 188, 197, 202, 215, 240-242, 248, 256, 315-347, 359-419, 429-513, 517-534, 541-546, 550-554, 558-656, 677-694, 699-736, 751-789, 794-858, 872-873
+src\service\image\__init__.py                       0      0   100%
+src\service\image\service.py                      240    240     0%   3-405
+src\service\memory\__init__.py                      0      0   100%
+src\service\memory\embedding.py                     6      4    33%   13-17
+src\service\memory\retrieval.py                   136    105    23%   58-62, 66-76, 80-86, 95-117, 122-140, 145-161, 170-220, 225-227
+src\service\memory\service.py                     210    210     0%   16-363
+src\service\mock_classroom\__init__.py              0      0   100%
+src\service\mock_classroom\asr.py                 116    116     0%   3-204
+src\service\mock_classroom\scoring.py             116    116     0%   3-248
+src\service\mock_classroom\service.py             262    262     0%   3-485
+src\service\mock_classroom\vision_analyzer.py      53     53     0%   3-116
+src\service\narration\__init__.py                   0      0   100%
+src\service\narration\service.py                  270    217    20%   22-23, 34-39, 54-62, 81-130, 142-197, 202-241, 248-269, 273-275, 279-280, 306-373, 378-383, 388-391, 408-417, 430-446
+src\service\notification\__init__.py                0      0   100%
+src\service\notification\service.py               104     85    18%   23, 34, 45-91, 106-126, 136-156, 161-170, 181-204, 209-213, 218-237
+src\service\path\__init__.py                        0      0   100%
+src\service\path\classroom.py                     347    229    34%   32-38, 50-67, 78, 129-139, 152-160, 236-270, 274-289, 293-300, 326, 361-403, 539, 603, 619-641, 646-672, 684-705, 709-734, 742-774, 788-1001
+src\service\path\classroom_chat.py                338     63    81%   123, 134-139, 141-142, 176-188, 224-248, 255, 261, 265, 276, 279, 285, 308, 311, 330, 339, 379, 402, 503-504, 529, 607-609, 621-623, 677-680, 697, 714
+src\service\path\classroom_transition.py          161    161     0%   3-357
+src\service\path\difficulty.py                     48      4    92%   43, 46-47, 95
+src\service\path\generation_locks.py               23      7    70%   31-37
+src\service\path\helpers.py                       246    136    45%   34-47, 56-71, 76, 79-80, 82, 87-88, 108, 115, 118-120, 124, 141-142, 160-167, 187-188, 200-204, 213-233, 280, 294-304, 326-327, 339-382, 392-456
+src\service\path\node_resource_jobs.py            120     15    88%   64-67, 100, 122, 132-133, 136, 143, 176, 185, 189-190, 192
+src\service\path\path_video_jobs.py                73     11    85%   63, 65-68, 76-78, 90-91, 94
+src\service\path\service.py                      1268    963    24%   74-84, 95-103, 126-129, 138-139, 142, 157, 164-193, 200-528, 539-739, 752-772, 777-788, 815-873, 878-895, 920-954, 981-983, 993-1002, 1036-1042, 1058-1059, 1064-1067, 1071, 1087, 1106-1109, 1120-1121, 1149, 1151, 1157-1159, 1173-1174, 1210-1285, 1305-1403, 1416-1525, 1530-1540, 1549, 1579-1666, 1680-1731, 1751, 1758-1763, 1810-1826, 1833-1859, 1871-1946, 1967-2011, 2029-2041, 2053-2213, 2230-2286, 2329, 2335-2353, 2370-2389, 2400-2409, 2434-2436, 2447, 2452-2454, 2478-2479, 2501, 2535-2541, 2551-2553, 2557-2567, 2576-2578, 2582-2585, 2589
+src\service\path\teaching_context.py              115     33    71%   21, 26-27, 44, 107-108, 141, 143, 146-147, 185-206, 211-218, 222-228
+src\service\portrait\__init__.py                    0      0   100%
+src\service\portrait\service.py                   707    447    37%   20-21, 72-73, 82-90, 111-189, 198-203, 207-210, 214-226, 234-236, 244, 247, 251-255, 260-265, 271-277, 282-285, 290-295, 308, 431, 486-522, 526-542, 549, 552, 575-577, 589-613, 679, 683-685, 699, 718-722, 744, 746, 748-749, 751, 769-777, 784, 787, 794-795, 835-839, 843-844, 851-852, 857-940, 945-954, 958, 975-981, 986-1025, 1030-1111, 1125-1225
+src\service\resource\__init__.py                    0      0   100%
+src\service\resource\document_quality.py          206     16    92%   173, 182, 194, 196, 202, 204, 212, 215, 218, 221, 243, 247, 276, 287, 298, 330
+src\service\resource\generation_context.py         97     75    23%   24-34, 66-79, 84, 92-96, 115-194
+src\service\resource\history.py                    35     27    23%   15-60, 71-96
+src\service\resource\library.py                   227    189    17%   34-60, 64-90, 94-173, 177-227, 231-235, 239-273, 277-281, 285, 289, 293-322, 326-333, 337-356, 360-364
+src\service\resource\matching.py                   50      6    88%   36, 52-53, 74, 78-79
+src\service\resource\metadata.py                   70     54    23%   38-44, 48-51, 55-56, 60-61, 65-74, 78-80, 88-138
+src\service\resource\persistence.py                38     25    34%   31, 40-43, 56-102
+src\service\resource\service.py                   461    326    29%   47-48, 62-98, 106-112, 117, 122, 127, 135, 155-178, 191-192, 194, 202-219, 224, 240-251, 257, 276-322, 326-351, 356-382, 390-396, 398, 401, 426, 430, 434, 438, 442, 446, 450, 454, 458, 462, 466, 470, 474, 479, 495, 499, 503, 534-857, 861, 875-932
+src\service\resource\task_runtime.py               33     21    36%   21, 25, 29, 33, 37-42, 50-60
+src\service\resource\tasks.py                      74     49    34%   28-33, 37, 72-118, 122-132, 136-144, 148-152
+src\service\skill\__init__.py                       0      0   100%
+src\service\skill\service.py                       75     75     0%   1-154
+src\service\study\__init__.py                       0      0   100%
+src\service\study\service.py                      421    360    14%   34, 54, 83-239, 283-298, 309-331, 342-347, 354-489, 524-719, 729-764, 774-775, 780-784, 789-793, 798-813
+src\service\study_room\__init__.py                  0      0   100%
+src\service\study_room\service.py                 393    393     0%   3-723
+src\service\study_room\yolo_detector.py           113    113     0%   6-186
+src\service\user\__init__.py                        0      0   100%
+src\service\user\service.py                       207    207     0%   1-321
+src\service\video\__init__.py                       0      0   100%
+src\service\video\service.py                     1408   1195    15%   43-44, 51, 69, 73-74, 78-85, 89-95, 99-124, 128-141, 145-164, 168-218, 237-240, 244-252, 274-282, 286-303, 307-313, 323-367, 371-415, 424-482, 489-524, 528, 541-549, 559-618, 623-642, 649-657, 663-668, 673-700, 705-729, 734, 744-762, 772-792, 796-808, 813, 831-838, 852-873, 878-880, 893-1263, 1268-1276, 1292-1293, 1310-1320, 1327-1528, 1551-1553, 1564-1569, 1574-1592, 1605-1611, 1627-1713, 1717-1729, 1738-1800, 1811-1848, 1858, 1869-1897, 1911-1924, 1928-1930, 1934-1945, 1953-1989, 1997-1998, 2013-2056, 2060-2066, 2070-2078, 2082-2083, 2087, 2091-2094, 2098-2101, 2110, 2122, 2127-2135, 2140-2252
+src\utils\__init__.py                               0      0   100%
+src\utils\admin_check.py                            4      4     0%   2-7
+src\utils\chat_utils.py                            13      7    46%   16-28
+src\utils\constants.py                             23      0   100%
+src\utils\database.py                              77     58    25%   13, 24-38, 42-52, 57-73, 78-100, 104-118, 121
+src\utils\email_sender.py                          67     67     0%   3-111
+src\utils\exceptions.py                             3      0   100%
+src\utils\file_processor.py                       126    126     0%   5-190
+src\utils\formula_builder.py                       80     16    80%   373, 384, 386, 392-399, 402, 411, 419, 424, 428
+src\utils\json_parser.py                           50     10    80%   14-19, 33, 58, 63, 72
+src\utils\jwt.py                                   38     21    45%   11-12, 34-38, 44-52, 57-61
+src\utils\knowledge_base.py                       274    242    12%   29-32, 38-39, 53-57, 63-76, 81-109, 113-114, 124-174, 192-282, 291-300, 304-317, 325-382, 387-393, 409-440, 448-462
+src\utils\mindmap.py                               34     32     6%   18-58
+src\utils\pptx_generator.py                       534    534     0%   2-722
+src\utils\prompt_loader.py                         22      2    91%   28, 32
+src\utils\pwintohash.py                             8      8     0%   1-15
+src\utils\redis_client.py                         133    108    19%   31-49, 55-61, 66, 75, 80, 85-92, 97-101, 110-120, 135, 152-154, 159-163, 174-186, 191-200, 209-245
+src\utils\scheduler.py                            126    126     0%   4-220
+src\utils\slide_schema.py                         228    195    14%   84-85, 96-103, 111-125, 137-159, 163, 167-176, 180, 184-186, 190-197, 201-206, 210-214, 218-221, 225-290, 309-310, 314-377, 381-409
+src\utils\tts_utils.py                            174    158     9%   34-58, 63-112, 117-136, 147-199, 204-206, 211-212, 222, 227-287
+-----------------------------------------------------------------------------
+TOTAL                                           19320  13833    28%
+Coverage JSON written to file ../tmp/coverage.json
+=========================== short test summary info ===========================
+FAILED tests/test_classroom_chat.py::test_compose_user_prompt_practice_opening_asks_the_first_question
+1 failed, 539 passed, 1 skipped, 1 warning in 28.72s

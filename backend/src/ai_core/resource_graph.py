@@ -87,7 +87,7 @@ PROMPT_MAP = {
     "image": "resource/image_prompt",
 }
 
-# 角色名/资源名统一放在 agent_names.py（对着赛题原文起的名）。这里保留同名符号，
+# 角色名/资源名统一放在 agent_names.py。这里保留同名符号，
 # 是为了不打断本模块里已有的调用点和 import 关系。
 RESOURCE_AGENT_NAMES = AGENT_RESOURCE_NAMES
 

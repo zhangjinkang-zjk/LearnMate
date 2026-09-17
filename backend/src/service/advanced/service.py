@@ -9,7 +9,23 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from backend.src.service.advanced.practice_service import PHASE_SETS
+
 logger = logging.getLogger(__name__)
+
+
+def practice_stages(kind: str, *, active_index: int = 0) -> list[dict]:
+    """某个任务类型的阶段骨架，形状是任务字典里那份（带 status、不带 hint）。
+
+    唯一出处是 `practice_service.PHASE_SETS`：会话的账本按同一套 id 记账，前端也只
+    渲染服务端下发的阶段列表。这里曾经另写了一份 `context/plan/verify/review`，谁也
+    不认识它 —— 落进 `completed_phases` 会被账本当未知值丢掉。
+    """
+    phases = PHASE_SETS[kind]
+    return [
+        {"id": pid, "label": label, "status": "active" if index == active_index else "pending"}
+        for index, (pid, label, _hint) in enumerate(phases)
+    ]
 
 ADVANCED_MILESTONE_SIZE = 10
 ADVANCED_UNLOCK_NODES = 10
@@ -384,6 +400,32 @@ def _clean_list(value: Any, fallback: list[str], limit: int = 6) -> list[str]:
     return cleaned[:limit] or fallback[:limit]
 
 
+def _merge_agent_stages(raw_stages: Any, fallback_stages: list[dict]) -> list[dict]:
+    """把智能体写的阶段文案套在服务端的阶段骨架上。
+
+    **id 和顺序一律取服务端那份。** 以前这里是"智能体给了 id 就用它的"，于是生成器
+    一直在写 `context/plan/verify/review` —— 而会话的账本只认它自己那套（案例诊断是
+    `clues/fault/...`），两个词汇只共用一个 `verify`。那些 id 落进 `completed_phases`
+    之后会被 `_clean_phases` 当未知值静默丢掉：用户的进度会莫名其妙清零，日志里却
+    什么都不显。文案（label/hint）可以让智能体改，骨架不行。
+    """
+    fallback_stages = fallback_stages if isinstance(fallback_stages, list) else []
+    if not isinstance(raw_stages, list) or len(raw_stages) != len(fallback_stages):
+        return fallback_stages
+    merged = []
+    for index, stage in enumerate(raw_stages):
+        base = fallback_stages[index]
+        if not isinstance(stage, dict):
+            return fallback_stages
+        merged.append({
+            "id": base["id"],
+            "label": _clean_text(stage.get("label"), base.get("label", ""), 24),
+            "hint": _clean_text(stage.get("hint"), base.get("hint", ""), 48),
+            "status": base.get("status", "pending"),
+        })
+    return merged
+
+
 def _normalise_agent_tasks(payload: Any, fallback_tasks: list[dict]) -> tuple[list[dict], str] | None:
     """Validate the agent contract while preserving server-owned IDs and context."""
     if not isinstance(payload, dict) or not isinstance(payload.get("tasks"), list):
@@ -412,20 +454,7 @@ def _normalise_agent_tasks(payload: Any, fallback_tasks: list[dict]) -> tuple[li
         ]
         item["criteria"] = _clean_list(raw.get("criteria"), fallback["criteria"])
         item["constraints"] = _clean_list(raw.get("constraints"), fallback["constraints"])
-        raw_stages = raw.get("stages")
-        if isinstance(raw_stages, list) and len(raw_stages) >= 4:
-            item["stages"] = [
-                {
-                    "id": _clean_text(stage.get("id"), fallback["stages"][index]["id"], 24),
-                    "label": _clean_text(stage.get("label"), fallback["stages"][index]["label"], 24),
-                    "hint": _clean_text(stage.get("hint"), "完成本阶段并留下证据", 48),
-                    "status": fallback["stages"][index].get("status", "pending"),
-                }
-                for index, stage in enumerate(raw_stages[:4])
-                if isinstance(stage, dict)
-            ]
-        if len(item.get("stages", [])) != 4:
-            item["stages"] = fallback["stages"]
+        item["stages"] = _merge_agent_stages(raw.get("stages"), fallback["stages"])
         normalised.append(item)
 
     # The agent can propose a mode, but the server owns the progression gate.
@@ -598,12 +627,10 @@ def build_advanced_task(profile: dict, path: dict, mastery_records: Iterable[Any
             "提交能够被他人复查的结果，而不是只写最终结论",
         ],
         "resources": resources,
-        "stages": [
-            {"id": "context", "label": "理解情境", "status": "active"},
-            {"id": "plan", "label": "制定方案", "status": "pending"},
-            {"id": "verify", "label": "验证结果", "status": "pending"},
-            {"id": "review", "label": "复盘答辩", "status": "pending"},
-        ],
+        # 阶段骨架来自 practice_service.PHASE_SETS —— 会话的账本就认那套 id，这里
+        # 再写一份字面量的话，两处迟早对不上（这正是改动前 context/plan/verify/review
+        # 那套词汇的来历：前后端各写各的，谁都没在账本里见过它）。
+        "stages": practice_stages("case"),
         "workspace": {"path_id": path.get("path_id"), "node_id": node.get("id")},
     }
 
@@ -648,6 +675,9 @@ def build_advanced_tasks(profile: dict, path: dict, mastery_records: Iterable[An
         "difficulty_label": "引导练习",
         "status": "pending",
         "support_level": "high",
+        # 三种类型的阶段骨架各不相同 —— 这正是"交互形态跟着任务类型走"的落点，
+        # 以前三个变体都从 base 继承同一份 stages，操作方式自然一字不差。
+        "stages": practice_stages("transfer"),
         "title": f"把“{topic}”迁移到一个新情境",
         "brief": "换一个与原例子不同的情境，说明你会如何识别问题、选择方法并验证结果。",
         "why": f"{base['context']['mastery_label']}；换一个情境检查“{base['context']['focus']}”能否迁移。",
@@ -659,6 +689,7 @@ def build_advanced_tasks(profile: dict, path: dict, mastery_records: Iterable[An
         "difficulty_label": "当前推荐",
         "status": "active",
         "support_level": "medium",
+        "stages": practice_stages("case"),
         "why": base["recommendation"],
     }
     if scope:
@@ -689,6 +720,7 @@ def build_advanced_tasks(profile: dict, path: dict, mastery_records: Iterable[An
         "difficulty_label": "开放挑战",
         "status": "pending",
         "support_level": "low",
+        "stages": practice_stages("project"),
         "title": project_title,
         "brief": project_brief,
         "scenario": project_scenario,

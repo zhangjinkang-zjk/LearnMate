@@ -24,10 +24,16 @@ _MAX_QUESTIONS = 5
 
 # 出题/判分各有兜底，但兜底只有在调用**返回**之后才有机会跑。模型挂住不给响应时
 # 必须靠超时把它推进兜底分支，否则诊断流会一直发 keepalive、用户永远等不到下一题。
+#
+# 60 秒这个值是按实测分布定的，不是拍的：同一个诊断提示词（1137 字）四次采样分别是
+# 9.3s / 20.8s / 50.8s / 156s。当前模型是推理模型且吞吐随供应商负载波动（约 10~21
+# token/秒），慢的是长尾而不是首字 —— 流式调用首字只要 1.9 秒。
+# 40 秒卡在分布中间，一半的题会掉兜底；60 秒能覆盖到 50.8s 那档，最长等待仍是 1 分钟。
+# 之所以不能再往上抬：诊断有 5 题，180 秒的兜底上限会变成十几分钟的等待，比兜底题更糟。
 try:
-    _DIAGNOSIS_LLM_TIMEOUT = max(5, int(os.getenv("DIAGNOSIS_LLM_TIMEOUT_SECONDS", "40")))
+    _DIAGNOSIS_LLM_TIMEOUT = max(5, int(os.getenv("DIAGNOSIS_LLM_TIMEOUT_SECONDS", "60")))
 except (TypeError, ValueError):
-    _DIAGNOSIS_LLM_TIMEOUT = 40
+    _DIAGNOSIS_LLM_TIMEOUT = 60
 
 # asyncio 只保留任务的弱引用，不留强引用的话后台任务可能在跑完前被 GC 掉。
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
@@ -37,6 +43,91 @@ def _spawn_background(coro) -> None:
     task = asyncio.create_task(coro)
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+
+# 模型这两处（出题、判分）的输出都分两段：**先一行直接显示给学生看的正文**，独占一行的
+# `---`，然后是程序要用的 JSON。这样正文一生成就能推给学生，不用等整段 JSON 拼完 ——
+# 等 40 秒看"正在生成回复…"和看着字一个个出来，是完全不同的两件事。
+#
+# 分开之后还有个副作用是好的：正文不经过 JSON 转义，页面也不用再猜字段名。
+_VISIBLE_MARKER = "\n---"
+
+
+def _channel_writer(on_delta, channel: str):
+    """把"这是哪个气泡的字"绑在回调上。
+
+    一轮里有两段正文先后流出来：先判分那句（回复气泡），再下一题（题目气泡）。页面必须
+    知道往哪个气泡里追加，否则两句话会挤在一起。
+    """
+    if not on_delta:
+        return None
+    return lambda text: on_delta(text, channel)
+
+
+def _split_visible(raw: str) -> tuple[str, str]:
+    """把模型输出切成 (给学生看的正文, 剩下的尾巴)。
+
+    没写分隔行时**正文为空**，不是"整段都算正文"：那种情况下整段是 JSON（老格式），
+    把它当正文就等于把 `{"question": ...}` 原样画到学生眼前。
+    """
+    head, sep, tail = raw.partition(_VISIBLE_MARKER)
+    return (head.strip(), tail) if sep else ("", raw)
+
+
+def _releasable(buffer: str) -> str:
+    """流式过程中"现在就可以给学生看"的那一段。
+
+    两条底线：分隔行（或它的半截，比如刚收到一个 `\\n-`）不能露出去；模型没按两段式写、
+    直接吐 JSON 时，一个字都不能当正文推 —— 那比不流式更糟。
+    """
+    cut = len(buffer)
+    for stop in (_VISIBLE_MARKER, "{", "["):
+        pos = buffer.find(stop)
+        if pos >= 0:
+            cut = min(cut, pos)
+    if cut == len(buffer) and _VISIBLE_MARKER not in buffer:
+        # 扣住结尾那几个字符：它可能就是分隔行的开头，等下一个块到了再决定
+        for size in range(min(len(_VISIBLE_MARKER) - 1, len(buffer)), 0, -1):
+            if buffer.endswith(_VISIBLE_MARKER[:size]):
+                cut -= size
+                break
+    return buffer[:cut]
+
+
+async def _consume_stream(chunks, on_delta=None, timeout: float | None = None) -> dict:
+    """消费模型流，边收边把"可以安全展示"的那部分推出去。
+
+    返回 {"raw": 完整输出, "visible": 已展示的正文, "done": 是否正常收完}。
+
+    超时不丢已经展示出去的内容：正文已经到学生眼前了，再撤回换成兜底题只会更糟。所以
+    超时/中断都只影响"程序字段拿不拿得到"，不影响学生看到的那句话。
+    """
+    state = {"raw": "", "visible": "", "done": False}
+    try:
+        async with asyncio.timeout(timeout):
+            async for delta in chunks:
+                state["raw"] += delta
+                visible = _releasable(state["raw"])
+                if on_delta and len(visible) > len(state["visible"]):
+                    on_delta(visible[len(state["visible"]):])
+                    state["visible"] = visible
+            state["done"] = True
+    except TimeoutError:
+        logger.warning("诊断模型流超时，用已经拿到的部分继续 timeout=%s", timeout)
+    except Exception:
+        logger.warning("诊断模型流中断，用已经拿到的部分继续", exc_info=True)
+    # 收尾以完整输出切出来的那段为准：流式期间为了不泄露，可能扣住了结尾几个字符。
+    head = _split_visible(state["raw"])[0]
+    if head:
+        state["visible"] = head
+    return state
+
+
+def _tail_payload(raw: str) -> dict:
+    """取分隔行之后那段 JSON；模型没按格式写就整段当 JSON 试一次（兼容老格式）。"""
+    _, tail = _split_visible(raw)
+    parsed = parse_llm_json((tail or raw).strip())
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _goal_code(goal: str) -> str:
@@ -126,7 +217,7 @@ def _fallback_question(index: int, direction: str) -> dict:
     return items[min(index, len(items) - 1)]
 
 
-async def _generate_question(user_id: int, identity: str, direction: str, goal: str, history: list[dict], index: int, max_steps: int) -> dict:
+async def _generate_question(user_id: int, identity: str, direction: str, goal: str, history: list[dict], index: int, max_steps: int, on_delta=None) -> dict:
     history_lines = []
     for item in history:
         history_lines.append(f"第{item['index']}题：{item['content']}")
@@ -144,13 +235,16 @@ async def _generate_question(user_id: int, identity: str, direction: str, goal: 
             max_steps=str(max_steps),
             history="\n".join(history_lines) or "暂无，这是第一题。",
         )
-        response = await asyncio.wait_for(
-            llm.ainvoke(prompt, priority="high", user_id=int(user_id), pool="diagnosis"),
+        state = await _consume_stream(
+            llm.astream(prompt, priority="high", user_id=int(user_id), pool="diagnosis"),
+            on_delta,
             timeout=_DIAGNOSIS_LLM_TIMEOUT,
         )
-        result = parse_llm_json(response.content.strip())
-        if isinstance(result, dict):
-            content = str(result.get("content") or "").strip()
+        if state["raw"]:
+            result = _tail_payload(state["raw"])
+            # 正文以流出来的那句为准（它就是学生屏幕上已经看到的东西）；JSON 里若还带了
+            # content（老格式），只在流式那段为空时兜一下。
+            content = state["visible"].strip() or str(result.get("content") or "").strip()
             reference_answer = str(result.get("reference_answer") or result.get("answer") or "").strip()
             evaluation_points = [str(point).strip()[:80] for point in (result.get("evaluation_points") or []) if str(point).strip()][:3]
             if content and reference_answer:
@@ -212,7 +306,7 @@ def _fallback_evaluation(question: ExamQuestion, answer_text: str) -> dict:
     return {"is_correct": is_correct, "score": 1.0 if is_correct else 0.0, "feedback": feedback}
 
 
-async def _evaluate_answer(user_id: int, question: ExamQuestion, answer_text: str) -> dict:
+async def _evaluate_answer(user_id: int, question: ExamQuestion, answer_text: str, on_delta=None) -> dict:
     answer = str(answer_text or "").strip()[:2000]
     feedback_basis, points = _evaluation_context(question)
     try:
@@ -225,25 +319,27 @@ async def _evaluate_answer(user_id: int, question: ExamQuestion, answer_text: st
             evaluation_points="；".join(points)[:300] or "关注回答是否给出概念、依据或验证方式",
             answer=answer,
         )
-        response = await asyncio.wait_for(
-            llm.ainvoke(prompt, priority="high", user_id=int(user_id), pool="diagnosis"),
+        state = await _consume_stream(
+            llm.astream(prompt, priority="high", user_id=int(user_id), pool="diagnosis"),
+            on_delta,
             timeout=_DIAGNOSIS_LLM_TIMEOUT,
         )
-        result = parse_llm_json(response.content.strip())
-        if isinstance(result, dict) and isinstance(result.get("is_correct"), bool):
-            return {
-                "is_correct": result["is_correct"],
-                "score": 1.0 if result["is_correct"] else 0.0,
-                "feedback": str(result.get("feedback") or feedback_basis or "已记录你的回答。")[:500],
-            }
+        if state["raw"]:
+            result = _tail_payload(state["raw"])
+            is_correct = result.get("is_correct")
+            if isinstance(is_correct, bool):
+                # 学生屏幕上那句就是服务端认的那句，两者必须同一个来源 —— 否则会出现
+                # "屏幕上说答得好、后台判 0 分"这种自相矛盾。
+                text = state["visible"].strip() or str(result.get("feedback") or "").strip() or feedback_basis or "已记录你的回答。"
+                return {"is_correct": is_correct, "score": 1.0 if is_correct else 0.0, "feedback": text[:500]}
     except Exception:
         logger.warning("开放回答评估失败，使用关键词兜底 user_id=%s question_id=%s", user_id, question.id, exc_info=True)
     return _fallback_evaluation(question, answer)
 
 
-async def _submit_open_answer(user_id: int, record: ExamRecord, answer_text: str, time_spent: int | None, session_id: str) -> dict:
+async def _submit_open_answer(user_id: int, record: ExamRecord, answer_text: str, time_spent: int | None, session_id: str, on_delta=None) -> dict:
     question = await record.question
-    evaluation = await _evaluate_answer(user_id, question, answer_text)
+    evaluation = await _evaluate_answer(user_id, question, answer_text, _channel_writer(on_delta, "reply"))
     # 复用 ExamService 的掌握度、画像和会话汇总逻辑；题目答案是服务端参考答案，实际回答随后写回记录。
     probe_answer = str(question.answer or "") if evaluation["is_correct"] else "__learnmate_incorrect_answer__"
     result = await ExamService.submit_answer(question.id, user_id, probe_answer, time_spent, session_id)
@@ -263,7 +359,7 @@ async def _submit_open_answer(user_id: int, record: ExamRecord, answer_text: str
     return result
 
 
-async def start(user_id: int, identity: str, direction: str, goal: str, max_steps: int = 3) -> dict:
+async def start(user_id: int, identity: str, direction: str, goal: str, max_steps: int = 3, on_delta=None) -> dict:
     await init_db()
     identity, direction, goal = str(identity or "").strip(), str(direction or "").strip(), str(goal or "").strip()
     if not identity or not direction or not goal:
@@ -280,7 +376,7 @@ async def start(user_id: int, identity: str, direction: str, goal: str, max_step
     except Exception:
         logger.exception("首次定向学习事件记录失败 user_id=%s", user_id)
     session_id = str(uuid.uuid4())[:12]
-    payload = await _generate_question(user_id, identity, direction, goal, [], 0, max_steps)
+    payload = await _generate_question(user_id, identity, direction, goal, [], 0, max_steps, _channel_writer(on_delta, "question"))
     question = await _create_question(user_id, session_id, payload)
     return {"session_id": session_id, "current_index": 0, "total_questions": max_steps, "question": _safe_question(question)}
 
@@ -298,7 +394,7 @@ def _replay_feedback(record: ExamRecord) -> dict:
     }
 
 
-async def answer(user_id: int, session_id: str, question_id: int, answer_text: str, time_spent: int | None = None, max_steps: int = 3) -> dict:
+async def answer(user_id: int, session_id: str, question_id: int, answer_text: str, time_spent: int | None = None, max_steps: int = 3, on_delta=None) -> dict:
     await init_db()
     max_steps = max(_MIN_QUESTIONS, min(int(max_steps or _MIN_QUESTIONS), _MAX_QUESTIONS))
     record = await ExamRecord.filter(user_id=user_id, session_id=session_id, question_id=question_id).first()
@@ -318,7 +414,7 @@ async def answer(user_id: int, session_id: str, question_id: int, answer_text: s
         feedback = _replay_feedback(record)
         summary = await ExamService.get_session(session_id, user_id) or {}
     else:
-        feedback = await _submit_open_answer(user_id, record, str(answer_text or ""), time_spent, session_id)
+        feedback = await _submit_open_answer(user_id, record, str(answer_text or ""), time_spent, session_id, on_delta)
         summary = feedback.get("session_summary") or {}
 
     records = await ExamRecord.filter(user_id=user_id, session_id=session_id).order_by("id").prefetch_related("question").all()
@@ -334,7 +430,7 @@ async def answer(user_id: int, session_id: str, question_id: int, answer_text: s
             onboarding.get("direction", ""),
             onboarding.get("goal", ""),
         ))
-        return {"finished": True, "feedback": feedback, "result": {"session_id": session_id, "percentage": percentage, "correct_count": summary.get("correct_count", 0), "total_questions": len(records), "message": _result_message(percentage)}}
+        return {"finished": True, "reply": _reply_text(feedback), "feedback": feedback, "result": {"session_id": session_id, "percentage": percentage, "correct_count": summary.get("correct_count", 0), "total_questions": len(records), "message": _result_message(percentage)}}
 
     user = await User.filter(id=user_id).first()
     picture = await user.picture if user else None
@@ -343,9 +439,27 @@ async def answer(user_id: int, session_id: str, question_id: int, answer_text: s
     history = []
     for index, item in enumerate(answered):
         history.append({"index": index + 1, "content": item.question.content, "answer_text": item.user_answer or "", "is_correct": bool(item.is_correct)})
-    payload = await _generate_question(user_id, onboarding.get("identity", ""), onboarding.get("direction", ""), onboarding.get("goal", ""), history, len(answered), max_steps)
+    payload = await _generate_question(user_id, onboarding.get("identity", ""), onboarding.get("direction", ""), onboarding.get("goal", ""), history, len(answered), max_steps, _channel_writer(on_delta, "question"))
     question = await _create_question(user_id, session_id, payload)
-    return {"finished": False, "feedback": feedback, "current_index": len(answered), "total_questions": max_steps, "question": _safe_question(question)}
+    return {"finished": False, "reply": _reply_text(feedback), "feedback": feedback, "current_index": len(answered), "total_questions": max_steps, "question": _safe_question(question)}
+
+
+def _reply_text(feedback) -> str:
+    """回给学生的这一句反馈，**保证非空**。
+
+    以前这句话是前端自己去嵌套字典里掏的（先 `feedback.feedback`，再 `feedback.analysis`），
+    任何一层形状对不上，学生看到的就是"正在生成回复…"—— 一句永远不会兑现的话，而服务端
+    其实已经把反馈写好了。掏不到、类型不对、空串，全都长得一样：屏幕上少一句话，没人知道。
+
+    所以这里把它变成响应体上的一个平铺字段，并且这里是唯一出口：真拿不到就给一句诚实的话，
+    而不是留空让前端去猜。
+    """
+    if isinstance(feedback, str):
+        text = feedback
+    else:
+        data = feedback if isinstance(feedback, dict) else {}
+        text = data.get("feedback") or data.get("analysis") or ""
+    return str(text).strip() or "已记录你的回答，我们接着往下。"
 
 
 def _result_message(percentage: float | None) -> str:

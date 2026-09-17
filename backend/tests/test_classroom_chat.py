@@ -6,8 +6,11 @@ classroom_chat 课堂对话服务测试
 覆盖：prompt 组装、课堂上下文、agent 懒创建缓存、SSE 事件序列、异常兜底。
 所有 DB / Brain / LLM 依赖用 monkeypatch 模拟，不碰真实数据库和 LLM。
 """
+from types import SimpleNamespace
+
 import pytest
 
+from backend.src.models.advanced_practice_model import AdvancedPracticeSession
 from backend.src.service.path import classroom_chat as cg_chat
 from backend.src.service.chat import service as chat_service
 
@@ -104,6 +107,73 @@ def test_compose_user_prompt_practice_keeps_one_step_at_a_time():
 
 def test_compose_user_prompt_free():
     assert cg_chat._compose_user_prompt("free", "为什么补码能统一加减？", {}) == "为什么补码能统一加减？"
+
+
+# ── 开场（practice_opening）──
+#
+# 这一轮以前压根不存在：会话建好时只种一句写死的通用开场，教练要等学生先说一句才被
+# 调用。于是学生在进阶学习里看到的第一问永远一样、也不提这个任务是什么。
+
+def test_compose_user_prompt_practice_opening_asks_the_first_question():
+    prompt = cg_chat._compose_user_prompt("practice_opening", "", {"phase": "理解问题"})
+    assert "学生还没有任何发言" in prompt
+    assert "理解问题" in prompt
+    assert "只问一个问题" in prompt
+    # 第一轮不该记进度：学生还没答，任何标记都是错的
+    assert "不输出任何阶段标记" in prompt
+
+
+def test_practice_opening_fallback_carries_the_task_title():
+    """兜底必须点出任务名 —— 这正是原来那句写死开场缺的东西。"""
+    text = cg_chat._opening_fallback({"phase": "理解问题", "title": "构建一个身份-权限模型"})
+    assert "构建一个身份-权限模型" in text
+    assert "理解问题" in text
+    assert "「」" not in text
+
+
+def test_practice_opening_fallback_without_a_title_is_still_a_whole_sentence():
+    """拿不到任务名时退回通用那句，但不能拼出「」这种空引用。"""
+    for segment in ({}, {"phase": "理解问题"}, None):
+        text = cg_chat._opening_fallback(segment)
+        assert text == cg_chat._FALLBACK_REPLIES["practice_opening"]
+        assert "「」" not in text
+
+
+def test_practice_opening_fallback_falls_back_to_the_first_phase_label():
+    text = cg_chat._opening_fallback({"title": "写一份检索方案"})
+    assert "理解问题" in text
+    assert "写一份检索方案" in text
+
+
+@pytest.mark.asyncio
+async def test_the_opening_turn_never_records_phase_progress(monkeypatch):
+    """开场是助手在提问。模型不听话写了 [[PHASE:done]]，也不能记进账本。"""
+    monkeypatch.setattr(cg_chat, "get_or_create_classroom_agent", _async_value(123))
+    monkeypatch.setattr(cg_chat, "_get_classroom_brain", lambda *a, **k: StubBrain([
+        {"role": "assistant", "type": "chunk", "content": "这个任务要你产出的是「检索方案」。"},
+        {"role": "assistant", "type": "chunk", "content": "[[PHASE:done]]"},
+    ]))
+    monkeypatch.setattr(cg_chat, "_build_classroom_path_context", _async_value("ctx"))
+    monkeypatch.setattr(cg_chat, "_build_global_portrait_context", _async_value("portrait"))
+
+    session = SimpleNamespace(status="active")
+    monkeypatch.setattr(AdvancedPracticeSession, "filter", lambda *a, **k: FakeQuerySet(session))
+    recorded = []
+
+    async def fake_record(session_arg, markers):
+        recorded.append(list(markers))
+        return {}
+
+    monkeypatch.setattr(cg_chat.AdvancedPracticeService, "record_phase_markers", fake_record)
+
+    events = await _collect(cg_chat.stream_classroom_chat(
+        1, 1, 1, {"phase": "理解问题"}, "practice_opening", "", practice_session_id="abc",
+    ))
+    joined = "\n".join(events)
+    assert "这个任务要你产出的是" in joined
+    assert "[[PHASE:done]]" not in joined, "标记照样要剥掉，不能漏给学生看"
+    assert recorded == [[]], "开场那一轮不该把标记交给账本"
+    assert '"type":"phase"' not in joined
 
 
 # ── _build_classroom_path_context ──

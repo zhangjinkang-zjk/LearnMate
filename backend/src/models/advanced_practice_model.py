@@ -18,6 +18,12 @@ class AdvancedPracticeSession(Model):
     messages = fields.JSONField(default=list, description="对话消息快照")
     confirmed_facts = fields.JSONField(default=list, description="已确认事实")
     assumptions = fields.JSONField(default=list, description="待验证假设")
+    # 交付物勾选状态：{交付物文案: 是否已产出}。键用文案而不是下标 —— 任务快照重建后
+    # 交付物顺序可能变，而下标会把勾选悄悄挪到另一条上。
+    #
+    # ⚠️ 这一列是后加的，Tortoise 的 generate_schemas 只建表不改表，所以**上线前必须
+    # 先手动 ALTER**（见同名 .sql）；列不存在时 SELECT 会连整张表的查询一起报错。
+    deliverable_state = fields.JSONField(default=dict, description="交付物勾选状态")
     final_submission = fields.TextField(null=True, description="用户提交的最终方案")
     evaluation = fields.JSONField(null=True, description="提交后的评价结果")
     started_at = fields.DatetimeField(auto_now_add=True)

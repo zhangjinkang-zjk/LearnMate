@@ -322,6 +322,47 @@ def _format_dialogue(dialogue: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _format_assessment(assessment: dict | None) -> str:
+    """把基础测评（诊断）的结果压成一句给提示词；没有就明说没有。
+
+    不能返回空串：提示词那一段在讲"有测评时怎么用、没有时别乱提测评"，空串会让模型
+    对着一片空白猜自己是不是漏了什么。
+    """
+    data = assessment if isinstance(assessment, dict) else {}
+    try:
+        percentage = float(data.get("percentage"))
+    except (TypeError, ValueError):
+        return "本次没有基础测评结果，只按访谈记录判断。"
+
+    parts = [f"正确率 {round(percentage)}%"]
+    correct, total = data.get("correct_count"), data.get("total_questions")
+    if isinstance(correct, int) and isinstance(total, int) and total > 0:
+        parts.append(f"答对 {correct}/{total} 题")
+    message = str(data.get("message") or "").strip()
+    if message:
+        # 后端那句评语本身就带句号（diagnosis 的 _result_message），这里再补一个会变成"。。"
+        parts.append(f"系统评语：{message[:120].rstrip('。.!！?？')}")
+    return "；".join(parts) + "。"
+
+
+def _clean_assessment(assessment: dict | None) -> dict | None:
+    """落库用的那一份：只留已知字段，越界的丢掉。取不到有效正确率就当没有。"""
+    data = assessment if isinstance(assessment, dict) else {}
+    try:
+        percentage = round(float(data.get("percentage")), 1)
+    except (TypeError, ValueError):
+        return None
+    cleaned = {"percentage": percentage}
+    for key in ("correct_count", "total_questions"):
+        value = data.get(key)
+        if isinstance(value, int) and value >= 0:
+            cleaned[key] = value
+    message = str(data.get("message") or "").strip()
+    if message:
+        cleaned["message"] = message[:120]
+    return cleaned
+
+
 def _answer_excerpt(dialogue: list[dict], index: int = -1, fallback: str = "这个方向") -> str:
     try:
         answer = str((dialogue or [])[index].get("answer", "") or "").strip()
@@ -368,6 +409,8 @@ _GENERIC_QUESTION_VARIANTS = [
 _INTERVIEW_STAGES = (
     "确认学习方向或主题：一门学科、一个技术领域、一项工作技能，或一个想系统弄懂的主题。"
     "允许用户只说关键词或回答「还没想好」，用 1 到 3 个具体例子告诉他可以怎么答。"
+    "举例要写成陈述，不要把例子也写成一问 —— 整句只能有一个问号，"
+    "两个问号会被当成「一次问了多件事」拦掉，那一问就白出了。"
     "这一问不要追问项目、交付物、工作场景或学习方式。",
     "接住第 1 问问到的方向，问用户准备怎么用它、希望达成什么结果：可以问会用到的人、"
     "场景、作品或时间节点，也可以问为什么现在值得学。必须引用用户说过的方向原话。"
@@ -627,8 +670,14 @@ class PortraitChatHistory_Service:
             return {"question": "", "finish": True}
 
         dialogue_text = _format_dialogue(dialogue)
-        if not dialogue_text and step == 0:
-            return {**_fallback_interview_question(step, dialogue, max_steps), "source": "fallback"}
+        # 第 1 问以前在这里直接返回兜底题，理由是"没有对话可依据，不值得等一次 ~50 秒的
+        # 调用"。代价是**每个学生的第一问都是同一句模板**：前端靠 source === 'agent'
+        # 决定要不要把屏幕上的题面换成模型那一版（LearnmateChatView 的 upgradeQuestion），
+        # 而兜底题的 source 是 'fallback' —— 于是模型版永远换不上去，它写得再好也轮不到它。
+        # 现在照常交给模型，"第一问不能干等"改由前端负责：它本来就先显示本地题面、等
+        # 模型版本回来再替换，第 2 到第 5 问走的一直是这条路。
+        # 提示词那边早就准备好了这种情形（{dialogue_text} 会填成"暂无，准备提出第一问"，
+        # {stage_instruction} 是第 1 段的"确认学习方向"）。
 
         try:
             from backend.src.ai_core.llm_config import llm
@@ -672,8 +721,14 @@ class PortraitChatHistory_Service:
         user_id: int,
         dialogue: list[dict],
         onboarding_context: dict | None = None,
+        assessment: dict | None = None,
     ) -> dict:
-        """通过多轮问答对话让 LLM 提取并初始化用户画像"""
+        """通过多轮问答对话让 LLM 提取并初始化用户画像。
+
+        assessment 是访谈之后那次基础测评（诊断）的结果。它以前只被前端当门槛用 ——
+        前端发了、接口没这个字段，Pydantic 静默丢掉，于是"正在结合访谈与基础测评生成
+        综合画像"那句文案是假的：测评分数从来没进过画像。
+        """
         user = await User.filter(id=user_id).first()
         if not user:
             raise ValueError("用户不存在")
@@ -703,7 +758,11 @@ class PortraitChatHistory_Service:
         from backend.src.utils.json_parser import parse_llm_json
 
         template = load_prompt("portrait/init_from_dialogue")
-        prompt = fill_prompt(template, dialogue_text=dialogue_text)
+        prompt = fill_prompt(
+            template,
+            dialogue_text=dialogue_text,
+            assessment_text=_format_assessment(assessment),
+        )
 
         # 模型挂了不能把整个"访谈收尾"变成 500：这一步真正不能丢的是 identity/direction/goal，
         # 它们是请求里带过来的，不经过模型；模型只负责推断认知风格、标签和摘要。
@@ -765,6 +824,13 @@ class PortraitChatHistory_Service:
                 traits["learning_direction"] = learning_direction[:120]
             if learning_goal_text:
                 traits["learning_direction_goal"] = learning_goal_text[:160]
+        # 把测评结果和访谈结论存在一起：画像之外的地方（路径生成、学情页）要回答
+        # "这个起点是怎么来的"时，得能查到当时那次测评。
+        assessment_record = _clean_assessment(assessment)
+        if assessment_record:
+            onboarding = traits.get("onboarding") if isinstance(traits.get("onboarding"), dict) else {}
+            onboarding["assessment"] = assessment_record
+            traits["onboarding"] = onboarding
         if tags:
             traits["interest"] = build_trait_entry(
                 "、".join(tags[:3]), "user_stated", traits.get("interest")
@@ -795,7 +861,7 @@ class PortraitChatHistory_Service:
             logger.debug("已忽略异常 backend/src/service/portrait/service.py:449", exc_info=True)
 
         # 只记长度，不记内容：cognition / learning_goal / tags 都是用户画像数据，
-        # 属于赛题「(5) 数据合规与伦理」要求脱敏的交互产物，不该进日志。
+        # 属于个人信息，不该进日志。
         logger.info(
             "对话画像初始化成功 user_id=%s cognition_len=%s goal_len=%s tags=%s",
             user_id,

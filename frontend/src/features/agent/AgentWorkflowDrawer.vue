@@ -132,7 +132,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { AlertCircle, Check, Circle, LoaderCircle, Maximize2, Minimize2, Minus, X } from 'lucide-vue-next'
-import { phasesForWorkflow, resourceAgentLabels, sectionedResourceTypes, setWorkflowExpanded, setWorkflowOpen } from '@/entities/agent/agentWorkflowState'
+import { phasesForWorkflow, resourceAgentLabels, sectionedResourceTypes, sectionStatus, setWorkflowExpanded, setWorkflowOpen } from '@/entities/agent/agentWorkflowState'
 import WorkflowSectionCard from './WorkflowSectionCard.vue'
 
 const props = defineProps({
@@ -189,15 +189,10 @@ const plannedCount = computed(() => Math.max(
   (props.state.resourceTypes || []).length,
 ))
 
-// 章节状态由"生成"和"审核"两维合成，判定顺序必须和 WorkflowSectionCard 里一致，
-// 否则同一章在芯片和卡片上会显示成两种状态。
-const sectionStatusOf = (section) => {
-  if (section.genStatus === 'failed' || section.reviewStatus === 'failed') return 'failed'
-  const active = [section.reviewStatus, section.genStatus].find((status) => activeStatuses.has(String(status || '').toLowerCase()))
-  if (active) return String(active).toLowerCase()
-  if (section.reviewStatus === 'done' || section.genStatus === 'done') return 'done'
-  return 'pending'
-}
+// 章节状态由"生成"和"审核"两维合成。这条规则和章节卡片共用同一个实现
+// （agentWorkflowState.sectionStatus）—— 以前两边各写一份，注释写着"必须一致"，
+// 实际已经不一致了：这里把"生成完成"就算完成，卡片还要求审核完成。
+const sectionStatusOf = (section) => sectionStatus(section)
 
 const sectionsOfType = (type) => Object.values(props.state.sections || {})
   .filter((section) => section.resourceType === type)

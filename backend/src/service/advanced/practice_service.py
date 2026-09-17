@@ -36,19 +36,92 @@ PASS_SCORE = 60
 GRADING_TIMEOUT_SECONDS = 120
 CRITERIA_LABELS = ("问题理解", "证据与依据", "方案取舍", "验证方法")
 
+# ── 阶段词汇 ──────────────────────────────────────────
+# 每个阶段是 `(id, label, hint)`。id 进账本和数据库，label/hint 只给人看。
+#
+# **通用词汇（下面这 6 个）是"没有 kind 的会话"用的**，也就是这次改动之前建的所有
+# 会话 —— 它们的 `completed_phases` 里存的就是这 6 个 id。保留它是为了**不做数据
+# 迁移**：老会话继续按 6 阶段解释，进度不丢。
+#
+# 新会话按任务类型取 `PHASE_SETS` 里那一套（都是 4 个）。三类任务的阶段数一致是有
+# 意的：`phase_score` 的分母就是阶段数，统一成 4 才不会让某一类任务"每阶段更值钱"。
 PHASES = (
-    ("understand", "理解问题"),
-    ("evidence", "寻找证据"),
-    ("hypothesis", "提出假设"),
-    ("compare", "比较方案"),
-    ("verify", "验证结果"),
-    ("review", "总结"),
+    ("understand", "理解问题", "界定目标与限制"),
+    ("evidence", "寻找证据", "从材料提取依据"),
+    ("hypothesis", "提出假设", "说明可能原因"),
+    ("compare", "比较方案", "解释取舍关系"),
+    ("verify", "验证结果", "设计检查方法"),
+    ("review", "总结", "留下可复查结论"),
 )
-PHASE_IDS = {phase_id for phase_id, _ in PHASES}
-PHASE_LABELS = dict(PHASES)
-PHASE_ORDER = tuple(phase_id for phase_id, _ in PHASES)
+PHASE_IDS = {phase_id for phase_id, _, _ in PHASES}
+PHASE_LABELS = {phase_id: label for phase_id, label, _ in PHASES}
+PHASE_ORDER = tuple(phase_id for phase_id, _, _ in PHASES)
+
+PHASE_SETS: dict[str, tuple[tuple[str, str, str], ...]] = {
+    "case": (
+        ("clues", "线索筛选", "圈出材料里可用的线索"),
+        ("fault", "定位故障", "指出出问题的环节"),
+        ("reasoning", "说明推理", "讲清从线索到结论的链条"),
+        # 不是 `hypothesis`：那个 id 已经在通用词汇里表示"提出假设"，同一个 id 在两套
+        # 词汇里指两个不同的阶段，"这串 id 属于哪一套"就没法只从 id 本身看出来。
+        ("check", "验证假设", "给出能证伪的检查"),
+    ),
+    "transfer": (
+        ("source", "识别原方法", "说清原情境里的做法"),
+        ("breakdown", "找出失效点", "指出新情境下哪一条不成立"),
+        ("redesign", "改造方案", "给出改造后的方案与取舍"),
+        ("boundary", "说明边界", "讲清适用范围与失效条件"),
+    ),
+    "project": (
+        ("scope", "拆解需求", "界定目标、约束与交付物"),
+        ("delivery", "阶段交付", "按阶段产出可检查的结果"),
+        ("integration", "集成验证", "把各部分接起来并验证"),
+        ("retro", "复盘", "留下可复查的结论"),
+    ),
+}
+
 MAX_MESSAGES = 120
 MAX_MESSAGE_LENGTH = 4000
+
+
+def phases_for(kind: Any) -> tuple[tuple[str, str, str], ...]:
+    """这个任务类型用哪套阶段。缺失或未知 kind → 通用 6 阶段。
+
+    回落到通用集合而不是某个默认类型，是因为"没有 kind"恰恰是**改动之前建的会话**
+    的记号：它们必须继续按老词汇解释，否则进度会被当成未知 id 全部丢掉。
+    """
+    return PHASE_SETS.get(str(kind or "").strip().lower(), PHASES)
+
+
+def snapshot_phases(snapshot: Any) -> tuple[tuple[str, str, str], ...]:
+    """会话快照该用哪套阶段：快照里的 kind 选词汇，快照里的 stages 提供文案。
+
+    快照里的 `stages` 是"服务端 id + 任务生成器文案"合并后的结果（见
+    `_clean_stages`），所以文案用它那份更像给人看的；**id 一定以服务端这套为准** ——
+    按 id 去取它的文案，取不到就用默认文案。
+    """
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    base = phases_for(snapshot.get("kind"))
+    stored = {
+        str(item.get("id")): item
+        for item in (snapshot.get("stages") or [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    if not stored:
+        return base
+    merged = []
+    for phase_id, label, hint in base:
+        item = stored.get(phase_id) or {}
+        merged.append((
+            phase_id,
+            _clip_text(item.get("label"), 40) or label,
+            _clip_text(item.get("hint"), 60) or hint,
+        ))
+    return tuple(merged)
+
+
+def session_phases(session: Any) -> tuple[tuple[str, str, str], ...]:
+    return snapshot_phases(getattr(session, "task_snapshot", None))
 
 # ── 阶段推进 ──────────────────────────────────────────
 # 阶段进度是**服务端**的账本。以前它由前端无条件推进（每说一句话就过一关），并且
@@ -99,21 +172,51 @@ def _clean_list(values: Any, limit: int = 20, item_limit: int = 240) -> list[str
     return result
 
 
-def _clean_phases(values: Any) -> list[str]:
-    """把阶段 id 列表规整成 `PHASES` 顺序，去掉重复和未知值。"""
-    cleaned = _clean_list(values, limit=len(PHASES), item_limit=32)
-    return [phase_id for phase_id in PHASE_ORDER if phase_id in set(cleaned)]
+# ── 阶段账本 ──────────────────────────────────────────
+# 下面四个函数都要求显式传 `phases`（该会话那套词汇）。不给默认值是有意的：写一个
+# 默认值看起来省事，但调用点漏传时就会**静默**地用错词汇 —— 症状是用户的进度被当成
+# 未知 id 清空，而日志里什么都不显。宁可让 8 个调用点各自写明白。
+
+def _clean_deliverable_state(values: Any, snapshot: Any) -> dict[str, bool]:
+    """交付物勾选状态：只留这条任务真有的交付物，值只留 bool。
+
+    上限跟着快照里的交付物条数走 —— 学生勾的是任务给他的那份清单，客户端塞进来的
+    多余键既没意义也没地方显示，留着只会让下次 hydrate 出一堆幽灵条目。
+    """
+    if not isinstance(values, dict):
+        return {}
+    labels = (snapshot or {}).get("deliverables") if isinstance(snapshot, dict) else None
+    if not isinstance(labels, list):
+        return {}
+    allowed = {_clip_text(label, 240) for label in labels}
+    return {
+        _clip_text(key, 240): bool(value)
+        for key, value in values.items()
+        if _clip_text(key, 240) in allowed
+    }
 
 
-def _next_phase(phase_id: str) -> str | None:
+def _clean_phases(values: Any, phases: Any) -> list[str]:
+    """把阶段 id 列表规整成 `phases` 的顺序，去掉重复和未知值。
+
+    未知 id 会被丢掉 —— 这正是"前端不能拿任务 stages 的 id 去往返"的原因：两套词汇
+    只共用一个 `verify`，混着用等于把进度清零。
+    """
+    order = tuple(item[0] for item in phases)
+    cleaned = _clean_list(values, limit=len(order), item_limit=32)
+    return [phase_id for phase_id in order if phase_id in set(cleaned)]
+
+
+def _next_phase(phase_id: str, phases: Any) -> str | None:
     """下一个阶段 id；已经是最后一个阶段则返回 None。"""
-    if phase_id not in PHASE_IDS:
+    order = tuple(item[0] for item in phases)
+    if phase_id not in order:
         return None
-    index = PHASE_ORDER.index(phase_id)
-    return PHASE_ORDER[index + 1] if index + 1 < len(PHASE_ORDER) else None
+    index = order.index(phase_id)
+    return order[index + 1] if index + 1 < len(order) else None
 
 
-def clamp_current_phase(requested: str, completed: Any) -> str:
+def clamp_current_phase(requested: str, completed: Any, phases: Any) -> str:
     """把客户端想要的当前阶段夹紧到它已经解锁的范围内。
 
     回看任何一个**已完成**的阶段是允许的（那只是浏览），但不能往前跳到还没解锁的
@@ -121,28 +224,31 @@ def clamp_current_phase(requested: str, completed: Any) -> str:
     进度了。这跟前端 `isPhaseAvailable` 是同一条规则，区别是这条规则现在由服务端
     说了算，前端只负责提前给出反馈。
     """
-    if requested not in PHASE_IDS:
-        return PHASE_ORDER[0]
-    done = _clean_phases(completed)
-    unlocked = min(len(done), len(PHASE_ORDER) - 1)
-    index = PHASE_ORDER.index(requested)
-    return requested if index <= unlocked else PHASE_ORDER[unlocked]
+    order = tuple(item[0] for item in phases)
+    if requested not in order:
+        return order[0]
+    done = _clean_phases(completed, phases)
+    unlocked = min(len(done), len(order) - 1)
+    index = order.index(requested)
+    return requested if index <= unlocked else order[unlocked]
 
 
-def advance_phase_state(completed: Any, current_phase: str, markers: Any) -> tuple[list[str], str]:
+def advance_phase_state(completed: Any, current_phase: str, markers: Any, phases: Any) -> tuple[list[str], str]:
     """按智能体留下的标记推进一格，返回新的 `(completed, current_phase)`。
 
     没有 `done` 标记就原样返回 —— 学生只是聊了一轮，不构成过关。有标记时只完成
     **当前**阶段（标记不带阶段 id），所以进度永远是连续前缀，不会出现
-    `["understand", "review"]` 这种跳级状态。
+    `["understand", "review"]` 这种跳级状态。这套机制对任意阶段数和任意 id 都成立，
+    所以换 kind 的阶段集合不需要动它，只要把 `phases` 传对。
     """
-    done = _clean_phases(completed)
-    current = current_phase if current_phase in PHASE_IDS else PHASE_ORDER[0]
+    order = tuple(item[0] for item in phases)
+    done = _clean_phases(completed, phases)
+    current = current_phase if current_phase in order else order[0]
     seen = {str(item or "").strip().lower() for item in markers or []}
     if PHASE_DONE_MARKER not in seen:
         return done, current
-    done = _clean_phases([*done, current])
-    return done, _next_phase(current) or current
+    done = _clean_phases([*done, current], phases)
+    return done, _next_phase(current, phases) or current
 
 
 def practice_record_text(session: Any) -> str:
@@ -155,8 +261,12 @@ def practice_record_text(session: Any) -> str:
     snapshot = getattr(session, "task_snapshot", None)
     if not isinstance(snapshot, dict):
         snapshot = {}
-    completed = _clean_phases(getattr(session, "completed_phases", None))
-    labels = "、".join(PHASE_LABELS[item] for item in completed) or "还没有阶段完成"
+    phases = session_phases(session)
+    completed = _clean_phases(getattr(session, "completed_phases", None), phases)
+    phase_labels = {phase_id: label for phase_id, label, _ in phases}
+    # 用人看的 label（"线索筛选"）而不是 id：这段文字直接喂给总结提示词，那边不该
+    # 看见 kind 相关的内部 id。
+    labels = "、".join(phase_labels[item] for item in completed) or "还没有阶段完成"
     lines = [
         f"任务：{_clip_text(snapshot.get('title'), 120) or '实践任务'}",
         f"已完成阶段：{labels}",
@@ -181,8 +291,12 @@ def _transcript_text(messages: Any, *, limit: int = 20, item_limit: int = 260) -
     return "\n".join(lines)
 
 
-def build_grading_prompt(task: dict, messages: Any, completed: list[str], submission: str) -> str:
-    """拼一次判分的输入。`task` 必须是服务端快照里那个任务（见 `resolve_server_task`）。"""
+def build_grading_prompt(task: dict, messages: Any, completed: list[str], submission: str, phases: Any) -> str:
+    """拼一次判分的输入。`task` 必须是服务端快照里那个任务（见 `resolve_server_task`）。
+
+    `phases` 是这个会话那套阶段词汇：完成情况要用它的 label 呈现，否则项目实训的
+    判分提示词里会写着"理解问题"这种别的类型的阶段名。
+    """
     from backend.src.utils.prompt_loader import fill_prompt, load_prompt
 
     task = task if isinstance(task, dict) else {}
@@ -190,7 +304,8 @@ def build_grading_prompt(task: dict, messages: Any, completed: list[str], submis
         item.get("label") if isinstance(item, dict) else item
         for item in task.get("deliverables") or []
     ]
-    phases = "、".join(PHASE_LABELS[item] for item in completed if item in PHASE_LABELS)
+    phase_labels = {phase_id: label for phase_id, label, _ in phases}
+    completed_labels = "、".join(phase_labels[item] for item in completed if item in phase_labels)
     return fill_prompt(
         load_prompt("advanced/practice_evaluator"),
         task_title=_clip_text(task.get("title"), 240) or "当前实践任务",
@@ -207,7 +322,7 @@ def build_grading_prompt(task: dict, messages: Any, completed: list[str], submis
             [str(item) for item in deliverables if item] or ["（未指定交付物）"],
             ensure_ascii=False,
         ),
-        completed_phases=phases or "没有阶段记录",
+        completed_phases=completed_labels or "没有阶段记录",
         transcript=_transcript_text(messages, limit=12, item_limit=300) or "（这次没有留下对话记录）",
         submission=_clip_text(submission, 3000) or "（提交内容为空）",
     )
@@ -302,7 +417,8 @@ async def run_grading(user_id: int, session_key: str) -> None:
         return
 
     messages = session.messages if isinstance(session.messages, list) else []
-    completed = _clean_phases(session.completed_phases)
+    phases = session_phases(session)
+    completed = _clean_phases(session.completed_phases, phases)
     submission = session.final_submission or ""
     baseline = session.evaluation if isinstance(session.evaluation, dict) else {}
     eligible = bool(
@@ -325,7 +441,7 @@ async def run_grading(user_id: int, session_key: str) -> None:
         from backend.src.ai_core.llm_config import llm
         from backend.src.utils.json_parser import parse_llm_json
 
-        prompt = build_grading_prompt(task, messages, completed, submission)
+        prompt = build_grading_prompt(task, messages, completed, submission, phases)
         response = await asyncio.wait_for(
             llm.ainvoke(prompt, priority="low", user_id=user_id, pool="advanced"),
             timeout=GRADING_TIMEOUT_SECONDS,
@@ -441,11 +557,21 @@ class PhaseStreamStripper:
 
 
 def _task_snapshot(task: Any) -> dict:
+    """会话自己那份任务快照。
+
+    这里以前只留了 id/title/problem/focus/criteria/deliverables，把 `kind` /
+    `support_level` / `stages` 丢掉了 —— 而这三个恰恰决定"这次任务该怎么学"：
+    阶段词汇按 kind 选，提示强度按 support_level 给，阶段文案优先用生成器写的那份。
+    丢掉之后，会话就再也不知道自己做的是案例诊断还是项目实训了。
+    """
     if not isinstance(task, dict):
         return {}
+    kind = _clip_text(task.get("kind"), 32).lower()
     return {
         "id": _clip_text(task.get("id"), 128),
         "title": _clip_text(task.get("title"), 240),
+        "kind": kind if kind in PHASE_SETS else "",
+        "support_level": _clip_text(task.get("support_level"), 16).lower(),
         "problem": _clip_text(task.get("problem") or task.get("scenario"), 1200),
         "focus": _clip_text(task.get("focus"), 240),
         "criteria": _clean_list(task.get("criteria"), limit=8),
@@ -453,17 +579,104 @@ def _task_snapshot(task: Any) -> dict:
             [item.get("label") if isinstance(item, dict) else item for item in task.get("deliverables") or []],
             limit=8,
         ),
+        # 阶段骨架（id/status）是服务端的，这里存的只是"给这个 id 配了什么文案"。
+        "stages": _clean_stages(task.get("stages"), kind),
     }
 
 
-def _welcome_message() -> dict[str, str]:
-    return {
-        "role": "assistant",
-        "text": "我们从“理解问题”开始。先说说这个任务要解决的核心问题，以及你准备依据哪些信息判断。",
-    }
+def _clean_stages(stages: Any, kind: str) -> list[dict[str, str]]:
+    """把任务里的 stages 规整成该 kind 的阶段骨架 + 它给的文案。
+
+    id 和顺序一律取服务端那套：智能体写的 `context/plan/verify/review` 进不了账本，
+    留着它只会在 `_clean_phases` 那里被静默丢掉。文案（label/hint）可以用它的。
+    """
+    phases = phases_for(kind)
+    items = [item for item in (stages if isinstance(stages, list) else []) if isinstance(item, dict)]
+    if len(items) != len(phases):
+        return [{"id": pid, "label": label, "hint": hint} for pid, label, hint in phases]
+    return [
+        {
+            "id": pid,
+            "label": _clip_text(items[index].get("label"), 40) or label,
+            "hint": _clip_text(items[index].get("hint"), 60) or hint,
+        }
+        for index, (pid, label, hint) in enumerate(phases)
+    ]
+
+
+def _welcome_message(snapshot: Any = None) -> dict[str, str]:
+    """新建会话时种下的开场。
+
+    这是学生进页面**立刻**能看到的那一句（教练那份开场是流式的，要等），所以它必须
+    点出任务是什么：以前这里是一句跟任务无关的通用话术，学生看完不知道要回答什么，
+    只能回一句"你在说啥"，要等第二轮模型才把任务讲清楚。
+
+    阶段名取该会话那套词汇的首个阶段 —— 项目实训的第一句不该是"我们从理解问题开始"。
+    """
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    title = _clip_text(snapshot.get("title"), 120)
+    phase = snapshot_phases(snapshot)[0][1]
+    if title:
+        text = (
+            f"我们先从「{phase}」开始：这个任务要你产出的是「{title}」。"
+            "先说说它要解决的核心问题，以及你准备依据哪些信息判断。"
+        )
+    else:
+        text = f"我们从「{phase}」开始。先说说这个任务要解决的核心问题，以及你准备依据哪些信息判断。"
+    return {"role": "assistant", "text": text}
+
+
+# 改动之前种下的那句开场。它不带任务名，所以被它开过头的会话等于还没开过头 ——
+# 留着这个字面量是为了认得老会话，不是为了让新代码再产生它。
+_LEGACY_OPENINGS = frozenset({
+    "我们从“理解问题”开始。先说说这个任务要解决的核心问题，以及你准备依据哪些信息判断。",
+})
+
+
+def _opening_pending(session: AdvancedPracticeSession) -> bool:
+    """这次会话是不是还在等教练生成开场（前端据此决定要不要发那一轮请求）。
+
+    判据：学生还没说过话，且助手那侧没有说过开场以外的话。用服务端自己种的文案做
+    精确比对，前端就不需要知道那句话是什么 —— 否则又是两处会各自漂移的字面量。
+    """
+    seed = _welcome_message(session.task_snapshot).get("text")
+    for message in session.messages or []:
+        if not isinstance(message, dict):
+            continue
+        text = str(message.get("text") or "").strip()
+        if not text:
+            continue
+        # 学生说过话就说明对话已经开起来了；助手说过别的话就说明开场已经生成过。
+        if message.get("role") == "user" or (text != seed and text not in _LEGACY_OPENINGS):
+            return False
+    return True
+
+
+def session_phase_list(session: Any) -> list[dict[str, str]]:
+    """下发给前端的阶段列表：id / label / hint / status。
+
+    前端以前自己抄了一份 6 阶段（含文案），于是服务端一直在送 `current_phase_label`
+    而它丢掉不用、自己再算一遍 —— 两处各写各的，迟早对不上。现在阶段列表由服务端
+    出，前端只渲染。
+    """
+    phases = session_phases(session)
+    completed = set(_clean_phases(getattr(session, "completed_phases", None), phases))
+    current = getattr(session, "current_phase", "") or ""
+    result = []
+    for phase_id, label, hint in phases:
+        if phase_id in completed:
+            status = "completed"
+        elif phase_id == current:
+            status = "current"
+        else:
+            status = "pending"
+        result.append({"id": phase_id, "label": label, "hint": hint, "status": status})
+    return result
 
 
 def _serialize(session: AdvancedPracticeSession) -> dict:
+    phases = session_phases(session)
+    labels = {phase_id: label for phase_id, label, _ in phases}
     return {
         "session_id": session.session_key,
         "task_id": session.task_key,
@@ -471,9 +684,17 @@ def _serialize(session: AdvancedPracticeSession) -> dict:
         "node_id": session.node_id,
         "status": session.status,
         "current_phase": session.current_phase,
-        "current_phase_label": PHASE_LABELS.get(session.current_phase, "理解问题"),
+        "current_phase_label": labels.get(session.current_phase, phases[0][1]),
         "completed_phase_ids": session.completed_phases or [],
+        # 阶段列表与交付物勾选状态都从这里下发，前端不再自己定义阶段词汇。
+        "phases": session_phase_list(session),
+        # 这一列是后加的：库里已存在的行是 NULL，取回来就是 None。用 getattr 是因为
+        # 测试里的会话替身往往没有这个字段，而缺字段不该让整个响应拼不出来。
+        "deliverable_state": getattr(session, "deliverable_state", None) or {},
         "messages": session.messages or [],
+        # 前端据此决定要不要让教练生成开场（见 _opening_pending）。种下的那句开场
+        # 是同步的、通用的；教练那份是流式的、读得到任务的。
+        "opening_pending": _opening_pending(session),
         "confirmed_facts": session.confirmed_facts or [],
         "assumptions": session.assumptions or [],
         "final_submission": session.final_submission or "",
@@ -506,6 +727,7 @@ class AdvancedPracticeService:
             node_id=node_id,
         ).first()
         if not session:
+            snapshot = _task_snapshot(task)
             try:
                 session = await AdvancedPracticeSession.create(
                     user_id=user_id,
@@ -513,11 +735,15 @@ class AdvancedPracticeService:
                     task_key=task_key,
                     path_id=path_id,
                     node_id=node_id,
-                    task_snapshot=_task_snapshot(task),
+                    task_snapshot=snapshot,
                     status="active",
-                    current_phase="understand",
+                    # 首个阶段按任务类型取：项目实训的第一阶段是"拆解需求"，不是
+                    # "理解问题"。写死 "understand" 会让新会话一开局就带着一个不属于
+                    # 自己词汇表的 current_phase，而它会被 clamp 悄悄换掉。
+                    current_phase=snapshot_phases(snapshot)[0][0],
                     completed_phases=[],
-                    messages=[_welcome_message()],
+                    messages=[_welcome_message(snapshot)],
+                    deliverable_state={},
                     confirmed_facts=[],
                     assumptions=[],
                 )
@@ -555,21 +781,24 @@ class AdvancedPracticeService:
         messages: Any,
         confirmed_facts: Any = None,
         assumptions: Any = None,
+        deliverable_state: Any = None,
     ) -> dict:
         session = await AdvancedPracticeSession.filter(user_id=user_id, session_key=session_key).first()
         if not session:
             raise ValueError("巩固会话不存在")
         if session.status == "completed":
             return _serialize(session)
+        phases = session_phases(session)
         # `completed_phase_ids` 只保留在签名里兼容旧客户端：**不采信**。进度唯一的
         # 来源是流式回复里的 `[[PHASE:done]]` 标记（见 `record_phase_markers`）。
-        completed = _clean_phases(session.completed_phases)
+        completed = _clean_phases(session.completed_phases, phases)
         session.status = "active"
-        session.current_phase = clamp_current_phase(current_phase, completed)
+        session.current_phase = clamp_current_phase(current_phase, completed, phases)
         session.completed_phases = completed
         session.messages = _clean_messages(messages)
         session.confirmed_facts = _clean_list(confirmed_facts)
         session.assumptions = _clean_list(assumptions)
+        session.deliverable_state = _clean_deliverable_state(deliverable_state, session.task_snapshot)
         session.ended_at = None
         await session.save()
         return _serialize(session)
@@ -583,19 +812,21 @@ class AdvancedPracticeService:
         """
         if session is None or session.status == "completed":
             return {}
+        phases = session_phases(session)
         completed, current = advance_phase_state(
             session.completed_phases,
             session.current_phase,
             markers,
+            phases,
         )
-        if completed == _clean_phases(session.completed_phases) and current == session.current_phase:
+        if completed == _clean_phases(session.completed_phases, phases) and current == session.current_phase:
             return {}
         session.completed_phases = completed
         session.current_phase = current
         await session.save(update_fields=["completed_phases", "current_phase", "updated_at"])
         return {
             "current_phase": current,
-            "current_phase_label": PHASE_LABELS.get(current, ""),
+            "current_phase_label": {pid: label for pid, label, _ in phases}.get(current, ""),
             "completed_phase_ids": completed,
         }
 
@@ -621,6 +852,7 @@ class AdvancedPracticeService:
         messages: Any,
         confirmed_facts: Any = None,
         assumptions: Any = None,
+        deliverable_state: Any = None,
     ) -> dict:
         session = await AdvancedPracticeSession.filter(user_id=user_id, session_key=session_key).first()
         if not session:
@@ -629,9 +861,10 @@ class AdvancedPracticeService:
             return _serialize(session)
 
         normalized_messages = _clean_messages(messages)
+        phases = session_phases(session)
         # 判分用的阶段进度取服务端账本，不取本次请求 —— 这里的 phase_score 占 40 分，
         # 采信客户端等于把分数交给提交方自己填。
-        completed = _clean_phases(session.completed_phases)
+        completed = _clean_phases(session.completed_phases, phases)
         submission = _clip_text(final_submission, 6000)
         if not submission:
             submission = next((item["text"] for item in reversed(normalized_messages) if item["role"] == "user"), "")
@@ -640,13 +873,15 @@ class AdvancedPracticeService:
             normalized_messages,
             completed,
             submission,
+            phases,
         )
         session.status = "completed"
-        session.current_phase = clamp_current_phase(current_phase, completed)
+        session.current_phase = clamp_current_phase(current_phase, completed, phases)
         session.completed_phases = completed
         session.messages = normalized_messages
         session.confirmed_facts = _clean_list(confirmed_facts)
         session.assumptions = _clean_list(assumptions)
+        session.deliverable_state = _clean_deliverable_state(deliverable_state, session.task_snapshot)
         session.final_submission = submission
         # 先落确定性基线再回响应：用户不用等智能体。复核是另一件事，由下面的作业覆盖
         # 这份评价（`evaluation_status` 告诉前端它还在不在跑）。
@@ -661,11 +896,15 @@ class AdvancedPracticeService:
         return _serialize(session)
 
     @staticmethod
-    def _evaluate(task: dict, messages: list[dict[str, str]], completed: list[str], submission: str) -> dict:
+    def _evaluate(task: dict, messages: list[dict[str, str]], completed: list[str], submission: str, phases: Any) -> dict:
         user_text = "\n".join(item["text"] for item in messages if item["role"] == "user")
         corpus = f"{user_text}\n{submission}"
         user_count = sum(1 for item in messages if item["role"] == "user")
-        phase_score = round(len(set(completed)) / len(PHASES) * 40)
+        # 分母是这套词汇的阶段数。三类任务都是 4 个，所以每完成一个阶段的价值一致；
+        # 老会话（无 kind）走通用 6 阶段，分母仍是 6 —— 行为与改动前相同。
+        phase_score = round(len(set(completed)) / len(phases) * 40)
+        pending_labels = [label for phase_id, label, _ in phases if phase_id not in set(completed)]
+        next_pending_label = pending_labels[0] if pending_labels else ""
         evidence_score = 30 if re.search(r"依据|材料|数据|日志|证据|指标|文档", corpus) else 0
         validation_score = 20 if re.search(r"验证|测试|对比|复现|评估|回归", corpus) else 0
         decision_score = 10 if re.search(r"方案|选择|取舍|原因|风险|假设", corpus) else 0
@@ -684,8 +923,8 @@ class AdvancedPracticeService:
             strengths.append("已经开始把基础知识放入具体任务中")
 
         next_steps = []
-        if len(completed) < len(PHASES):
-            next_steps.append("补齐尚未完成的阶段，尤其是验证和复盘")
+        if len(completed) < len(phases):
+            next_steps.append(f"补齐尚未完成的阶段，下一个是「{next_pending_label}」")
         if not evidence_score:
             next_steps.append("补充一条具体材料、数据或日志作为依据")
         if not validation_score:
@@ -694,7 +933,9 @@ class AdvancedPracticeService:
             next_steps.append("把本次方案整理成可复查的项目记录")
 
         criteria = [
-            {"label": "问题理解", "passed": "understand" in completed},
+            # 四条维度标签本身不动（它们描述提交质量，且判分提示词按标签逐字匹配），
+            # 但第一条问的是"有没有走完第一个阶段"，那要看这套词汇的首个阶段 id。
+            {"label": "问题理解", "passed": phases[0][0] in completed},
             {"label": "证据与依据", "passed": bool(evidence_score)},
             {"label": "方案取舍", "passed": bool(decision_score)},
             {"label": "验证方法", "passed": bool(validation_score)},

@@ -34,7 +34,11 @@
       </div>
     </section>
 
-    <p v-if="isLoading" class="conversation-status" role="status">{{ loadingMessage }}</p>
+    <p v-if="isLoading" class="conversation-status" role="status">
+      <span>{{ loadingMessage }}</span>
+      <!-- 前 3 秒不显示：一闪而过的秒数只是噪音。之后它替用户回答"是不是卡住了"。 -->
+      <span v-if="elapsedSeconds >= 3" class="conversation-status__elapsed">已等待 {{ elapsedSeconds }} 秒</span>
+    </p>
     <p v-else-if="errorMessage" class="conversation-status conversation-status--error" role="alert">
       <span>{{ errorMessage }}</span>
       <button class="diagnosis-retry" type="button" @click="retryFailedStep">重试</button>
@@ -43,7 +47,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { diagnosisApi } from '@/shared/api/diagnosisApi'
 import { applyWorkflowEvent, finishWorkflow, resetWorkflow } from '@/entities/agent/agentWorkflowState'
@@ -51,7 +55,8 @@ import { learningState } from '@/entities/learning/learningState'
 import ImmersiveOnboardingBackdrop from '@/shared/ui/ImmersiveOnboardingBackdrop.vue'
 
 const router = useRouter()
-const totalQuestions = 3
+// 5 题：后端 _MAX_QUESTIONS 就是 5，之前这里写死 3，白白少问了两题。
+const totalQuestions = 5
 const isLoading = ref(false)
 const isFinished = ref(false)
 const errorMessage = ref('')
@@ -63,6 +68,56 @@ const currentQuestion = ref(null)
 const messages = ref([])
 const sessionId = ref('')
 const loadingMessage = ref('正在分析你的回答')
+
+// 模型是边写边推的（SSE 的 reply_delta）：一轮里有两段 —— 先判分那句回复，再下一题。
+// 每来一段就往对应气泡里追加，所以第一个字一出现就顶掉了"正在等一整段返回"。
+// 值是气泡在 messages 里的下标，收到最终结果时按它把那句话改成服务端认定的版本。
+const liveBubbles = ref({})
+
+function appendDelta(channel, text) {
+  const key = channel === 'question' ? 'question' : 'reply'
+  if (!text) return
+  const index = liveBubbles.value[key]
+  if (index === undefined || index >= messages.value.length) {
+    messages.value.push({ role: 'assistant', text: '' })
+    liveBubbles.value[key] = messages.value.length - 1
+    messages.value[liveBubbles.value[key]].text = text
+    return
+  }
+  messages.value[index].text = (messages.value[index].text || '') + text
+}
+
+// 结果里的那句话是权威版本：流式那段可能被超时截断，或者模型没按格式写。
+function setChannelText(channel, text) {
+  const index = liveBubbles.value[channel]
+  if (index !== undefined && index < messages.value.length) {
+    messages.value[index].text = text
+    return
+  }
+  messages.value.push({ role: 'assistant', text })
+  liveBubbles.value[channel] = messages.value.length - 1
+}
+
+// 出题要等模型，实测同一个提示词 9 秒到 156 秒不等（供应商那边负载波动），等待本身
+// 去不掉。这里只把等待变可见 —— 不画进度条：进度是编的，秒数是真的。
+const elapsedSeconds = ref(0)
+let elapsedTimer = null
+
+function startWaiting() {
+  stopWaiting()
+  const startedAt = Date.now()
+  elapsedSeconds.value = 0
+  elapsedTimer = window.setInterval(() => {
+    elapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000)
+  }, 1000)
+}
+
+function stopWaiting() {
+  if (elapsedTimer !== null) {
+    window.clearInterval(elapsedTimer)
+    elapsedTimer = null
+  }
+}
 
 const canSubmit = computed(() => Boolean(answerDraft.value.trim()))
 const context = computed(() => ({
@@ -91,6 +146,7 @@ async function startDiagnosis() {
   currentQuestion.value = null
   errorMessage.value = ''
   messages.value = [{ role: 'assistant', text: '我会根据你的学习方向，从基础理解开始了解你的起点。每次只回答一个问题即可。' }]
+  liveBubbles.value = {}
   // 诊断是独立的一条工作流（workflowKind='diagnosis'），阶段表只有"学情诊断"。
   resetWorkflow({ title: '学情诊断', workflowKind: 'diagnosis' })
 
@@ -104,17 +160,20 @@ async function startDiagnosis() {
 
   isLoading.value = true
   loadingMessage.value = '正在根据你的学习方向生成第一道诊断题'
+  startWaiting()
   try {
     const result = await diagnosisApi.startStream({ ...context.value, max_steps: totalQuestions }, handleStreamEvent)
     sessionId.value = result.session_id
     currentQuestion.value = result.question
-    messages.value.push({ role: 'assistant', text: questionText(result.question) })
+    // 第一题在流式里已经边写边显示了，这里只把最后那句定稿，不再多推一个气泡。
+    setChannelText('question', questionText(result.question))
   } catch (error) {
     failedStep.value = 'start'
     errorMessage.value = error.response?.data?.detail || error.message || '暂时无法开始能力诊断，请检查网络后重试。'
     finishWorkflow(true)
   } finally {
     isLoading.value = false
+    stopWaiting()
   }
 }
 
@@ -127,8 +186,10 @@ async function submitAnswer() {
   const answer = answerDraft.value.trim()
   if (!answer || !currentQuestion.value || isLoading.value) return
   messages.value.push({ role: 'user', text: answer })
+  liveBubbles.value = {}
   isLoading.value = true
   loadingMessage.value = '正在结合你的回答调整下一道题'
+  startWaiting()
   errorMessage.value = ''
   try {
     const result = await diagnosisApi.answerStream({
@@ -143,7 +204,12 @@ async function submitAnswer() {
       ? result.current_index
       : answeredCount.value + 1
     const feedback = result.feedback || {}
-    messages.value.push({ role: 'assistant', text: feedback.is_correct ? '这道题回答正确，我继续确认你在实际应用中的判断。' : (feedback.analysis || '正在生成回复…') })
+    // 服务端现在直接给一句平铺的 reply（它自己保证非空，真拿不到也会说"已记录你的回答"）。
+    // 这句通常在流式里已经写出来了，这里是定稿（流被超时截断时也是它兜住），所以走
+    // setChannelText 复用同一个气泡，而不是再多推一个。后面两个字段是旧响应的写法，
+    // 留着兼容老版本后端。
+    const reply = String(result.reply || feedback.feedback || feedback.analysis || '').trim()
+    setChannelText('reply', reply || '已记录你的回答。')
     answerDraft.value = ''
     if (result.finished) {
       isFinished.value = true
@@ -153,7 +219,7 @@ async function submitAnswer() {
       window.setTimeout(() => router.push('/learnmate-summary'), 500)
     } else {
       currentQuestion.value = result.question
-      messages.value.push({ role: 'assistant', text: questionText(result.question) })
+      setChannelText('question', questionText(result.question))
     }
   } catch (error) {
     // 重发的是同一题（answerDraft 没被清空），不是整轮重开：服务端会把已经落库的
@@ -161,8 +227,11 @@ async function submitAnswer() {
     failedStep.value = 'answer'
     errorMessage.value = error.response?.data?.detail || error.message || '回答提交失败，请重试。'
     messages.value.pop()
+    // 弹掉气泡会让记住的下标全部错位，下一次追加就会写到别人身上。
+    liveBubbles.value = {}
   } finally {
     isLoading.value = false
+    stopWaiting()
   }
 }
 
@@ -170,11 +239,14 @@ function handleStreamEvent(event) {
   // 同一条流同时喂给全局"智能体流程"抽屉，学情诊断才能作为协同闭环里的第一个
   // 角色被看见（写法与资料生成弹窗、学习路径页一致）。
   if (event?.type === 'agent_event') applyWorkflowEvent(event)
+  if (event?.type === 'reply_delta') appendDelta(event.channel, String(event.text || ''))
   if (event?.type === 'status' && event.message) loadingMessage.value = event.message
   if (event?.type === 'keepalive') loadingMessage.value = '仍在分析中，请稍候'
 }
 
 onMounted(startDiagnosis)
+// 切页/刷新时把计时器收掉，别让它挂在后台空转。
+onUnmounted(stopWaiting)
 </script>
 
 <!-- 前景刻意与画像访谈页（LearnmateChatView）保持一致：全幅气泡 + 底部胶囊输入框，
@@ -382,6 +454,12 @@ onMounted(startDiagnosis)
   font-size: 12px;
   letter-spacing: 0.02em;
   pointer-events: none;
+}
+
+.conversation-status__elapsed {
+  /* 等宽数字：秒数从 9 跳到 10 时宽度不变，提示文字不会左右抽动 */
+  font-variant-numeric: tabular-nums;
+  color: rgba(226, 244, 82, 0.75);
 }
 
 .conversation-status--error {
