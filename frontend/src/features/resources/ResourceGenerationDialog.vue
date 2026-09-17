@@ -124,6 +124,7 @@ const errorMessage = ref('')
 const taskProgress = ref(0)
 const taskMessage = ref('')
 const generatedResources = ref([])
+const streamedResources = ref([])
 const isDiscarding = ref(false)
 const agentStages = ref([])
 let taskId = ''
@@ -161,6 +162,7 @@ function resetDialog() {
   taskProgress.value = 0
   taskMessage.value = ''
   generatedResources.value = []
+  streamedResources.value = []
   isDiscarding.value = false
   taskId = ''
   resetAgentStages()
@@ -208,11 +210,49 @@ function applyGenerationEvent(event) {
     return
   }
   if (type === 'file' || type === 'resource') {
+    collectStreamedResource(event)
     updateAgentStage('executor', 'done', message || '生成内容已就绪')
+    return
+  }
+  if (type === 'external_videos') {
+    const videos = Array.isArray(event.external_videos) ? event.external_videos : []
+    videos.forEach(collectStreamedResource)
+    updateAgentStage('executor', videos.length ? 'done' : 'running', message || '视频资源已就绪')
     return
   }
   if (type === 'done') updateAgentStage('complete', 'done', message || '任务已完成')
   if (type === 'error') updateAgentStage('complete', 'failed', message || event.error || '任务失败')
+}
+
+function collectStreamedResource(resource) {
+  const resourceId = resource?.resource_id ?? resource?.id
+  if (!resourceId) return
+  if (streamedResources.value.some((item) => String(item.resource_id ?? item.id) === String(resourceId))) return
+  streamedResources.value.push(resource)
+}
+
+function isRequestedResource(resource) {
+  const type = String(resource?.resource_type || resource?.file_type || '')
+  if (type === selectedType.value) return true
+  return selectedType.value === 'video' && ['external_video', 'html'].includes(type)
+}
+
+async function resolveGeneratedResources(task) {
+  const taskResult = Array.isArray(task?.result) ? task.result : []
+  const candidates = taskResult.length ? taskResult : streamedResources.value
+  if (candidates.length) {
+    return Promise.all(candidates.map(async (item) => {
+      const resourceId = item?.resource_id ?? item?.id
+      if (!resourceId) return item
+      try { return await resourceApi.get(resourceId) } catch { return item }
+    }))
+  }
+
+  const resources = await resourceApi.list()
+  const topic = description.value.trim()
+  return (Array.isArray(resources) ? resources : [])
+    .filter((resource) => isRequestedResource(resource) && String(resource?.topic || '').trim() === topic)
+    .slice(0, 3)
 }
 
 function startTaskEventStream() {
@@ -267,11 +307,8 @@ async function pollTask() {
       clearPoll()
       clearTaskEventStream()
       updateAgentStage('complete', 'done', '资料生成完成')
-      const result = Array.isArray(task.result) ? task.result : []
-      if (!result.length) throw new Error('生成完成，但没有可保存的资料')
-      generatedResources.value = await Promise.all(result.map(async (item) => {
-        try { return await resourceApi.get(item.resource_id) } catch { return item }
-      }))
+      generatedResources.value = await resolveGeneratedResources(task)
+      if (!generatedResources.value.length) throw new Error('视频服务未返回可保存的资料。当前后端没有把视频写入资源任务结果，请确认服务已更新并重启。')
       stage.value = 'result'
       return
     }

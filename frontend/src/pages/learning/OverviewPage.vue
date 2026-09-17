@@ -104,7 +104,9 @@ const trendY = (rate) => {
   const ratio = Number.isFinite(value) && max > min ? Math.max(0, Math.min(1, (value - min) / (max - min))) : 0.5
   return chartBottom - ratio * (chartBottom - chartTop)
 }
-const trendPointTop = (value) => `${(trendY(value) / chartHeight) * 100}%`
+function trendPointTop(value) {
+  return `${(trendY(value) / chartHeight) * 100}%`
+}
 
 function smoothPath(points) {
   if (!points.length) return ''
