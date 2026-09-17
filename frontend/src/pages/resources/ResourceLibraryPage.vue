@@ -1,7 +1,7 @@
 <template>
   <div class="library-page">
     <PageTitle eyebrow="RESOURCE LIBRARY" title="资料库" description="根据当前画像和学习情况结合知识库生成的专属学习资料">
-      <template #actions><button class="button button--primary" type="button" @click="generationOpen = true"><Sparkles :size="15" />生成资料</button></template>
+      <template #actions><button class="button button--primary library-generate-button" type="button" @click="generationOpen = true"><Sparkles :size="20" />生成资料</button></template>
     </PageTitle>
     <section class="library-context surface">
       <div class="context-copy"><span class="context-icon"><Target :size="18" /></span><div><p class="eyebrow">PERSONALIZED FOR YOU</p><h2>{{ profile.direction || '正在生成学习方向…' }}</h2><p>{{ profile.stage || '正在生成学习阶段…' }}<span v-if="profile.goal"> · {{ profile.goal }}</span></p></div></div>
@@ -105,6 +105,7 @@ onBeforeUnmount(() => window.clearTimeout(noticeTimer))
 .library-page .button--quiet { border-radius: 12px; }
 .library-page :deep(.button--primary) { border-color: #e2f452; border-radius: 12px; background: #e2f452; color: #1e3c34; }
 .library-page :deep(.button--primary:hover) { border-color: #d5f242; background: #d5f242; color: #1e3c34; }
+.library-generate-button { min-height: 56px; padding: 0 24px; font-size: 16px; font-weight: 800; }
 .library-page .filter-tabs button.is-active,
 .library-page :deep(.filter-tabs button.is-active) { border-color: #e2f452 !important; border-radius: 12px; background: #e2f452 !important; color: #1e3c34 !important; }
 .resource-list .resource-row:nth-child(odd) { background: #fff; }

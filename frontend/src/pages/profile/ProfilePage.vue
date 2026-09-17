@@ -178,7 +178,17 @@ const displayTraitItems = computed(() => Object.entries(portrait.traits || {}).f
 
 const fallbackDimensions = [{ key: 'memory', label: '记忆', score: 0, desc: '基础回忆与知识提取表现' }, { key: 'understanding', label: '理解', score: 0, desc: '概念理解与知识关联表现' }, { key: 'application', label: '应用', score: 0, desc: '场景迁移与实际应用表现' }, { key: 'analysis', label: '分析', score: 0, desc: '问题拆解与综合判断表现' }, { key: 'breadth', label: '广度', score: 0, desc: '知识覆盖与探索范围' }, { key: 'persistence', label: '坚持', score: 0, desc: '学习投入与持续参与' }]
 const radarDimensions = computed(() => { const dimensions = Array.isArray(radar.value?.dimensions) ? radar.value.dimensions : []; return fallbackDimensions.map((fallback) => { const current = dimensions.find((item) => item.key === fallback.key) || {}; return { ...fallback, ...current, desc: fallback.desc, score: Math.max(0, Math.min(100, Math.round(Number(current.score ?? fallback.score) || 0))) } }) })
-const hasRadarData = computed(() => Array.isArray(radar.value?.dimensions) && radar.value.dimensions.some((item) => Number(item.score) > 0))
+const hasRadarData = computed(() => {
+  const dimensions = radar.value?.dimensions
+  if (!Array.isArray(dimensions) || !dimensions.length) return false
+
+  // 已作答但全错时，六个维度可能都是 0；这仍然是一份真实测试结果，必须展示雷达图。
+  const answeredCount = Number(radar.value?.answered_count)
+  if (Number.isFinite(answeredCount)) return answeredCount > 0
+
+  // 兼容尚未升级 answered_count 字段的历史接口，避免已有雷达记录被误判为空。
+  return dimensions.some((item) => Number(item.score) > 0) || Boolean(radar.value?.updated_at)
+})
 const radarUpdatedLabel = computed(() => radar.value?.updated_at ? `更新于 ${new Date(radar.value.updated_at).toLocaleDateString('zh-CN')}` : '等待数据')
 const radarCenter = { x: 150, y: 132 }; const radarRadius = 88; const radarLevels = [25, 50, 75, 100]
 const radarVertices = computed(() => radarDimensions.value.map((item, index) => { const angle = -Math.PI / 2 + index * (Math.PI * 2 / 6); const x = radarCenter.x + Math.cos(angle) * radarRadius; const y = radarCenter.y + Math.sin(angle) * radarRadius; const labelRadius = radarRadius + 21; return { ...item, x, y, labelX: radarCenter.x + Math.cos(angle) * labelRadius, labelY: radarCenter.y + Math.sin(angle) * labelRadius + (index === 0 ? -2 : 4), anchor: Math.abs(Math.cos(angle)) < 0.2 ? 'middle' : Math.cos(angle) > 0 ? 'start' : 'end' } }))
