@@ -4,7 +4,7 @@
     <div v-else-if="errorMessage" class="surface surface-pad error-state"><strong>学习概览暂时无法读取</strong><p>{{ errorMessage }}</p><button class="button button--secondary" type="button" @click="loadOverview">重试 <ArrowRight :size="14" /></button></div>
     <div v-else class="overview-dashboard">
       <section class="path-trend-panel">
-        <div class="section-heading section-heading--compact"><div><p class="eyebrow path-eyebrow">LEARNING PATH</p><h2>{{ trendMode === 'path' ? '学习路径' : '资源难度匹配' }}</h2><small v-if="path.subject || profile.direction" class="path-subject">{{ path.subject || profile.direction }}</small></div><div class="trend-heading-side"><div class="trend-switch" :class="{ 'is-resource': trendMode === 'resource' }" role="tablist" aria-label="难度曲线类型"><span class="trend-switch-indicator" aria-hidden="true"></span><button type="button" :class="{ 'is-active': trendMode === 'path' }" role="tab" :aria-selected="trendMode === 'path'" @click="trendMode = 'path'">学习路径</button><button type="button" :class="{ 'is-active': trendMode === 'resource' }" role="tab" :aria-selected="trendMode === 'resource'" @click="trendMode = 'resource'">资源匹配</button></div><div class="trend-caption"><span v-if="trendMode === 'path'">当前路径进度 {{ pathProgressLabel }}</span><span v-else>资源难度与当前能力的匹配</span><small>{{ trendMode === 'path' ? '首节点难度 = 1.0' : '实线为资源难度，虚线为当前能力' }}</small></div></div></div>
+        <div class="section-heading section-heading--compact"><div><p class="eyebrow path-eyebrow">LEARNING PATH</p><h2>{{ trendMode === 'path' ? '学习路径' : '资源难度匹配' }}</h2><small v-if="path.subject || profile.direction" class="path-subject">{{ path.subject || profile.direction }}</small><span v-if="trendMode === 'path' && path.currentNode" class="path-current-node">当前学习：{{ path.currentNode }}</span></div><div class="trend-heading-side"><div class="trend-switch" :class="{ 'is-resource': trendMode === 'resource' }" role="tablist" aria-label="难度曲线类型"><span class="trend-switch-indicator" aria-hidden="true"></span><button type="button" :class="{ 'is-active': trendMode === 'path' }" role="tab" :aria-selected="trendMode === 'path'" @click="trendMode = 'path'">学习路径</button><button type="button" :class="{ 'is-active': trendMode === 'resource' }" role="tab" :aria-selected="trendMode === 'resource'" @click="trendMode = 'resource'">资源匹配</button></div><div class="trend-caption"><span v-if="trendMode === 'path'" class="path-progress-badge"><b>{{ pathProgressLabel }}</b><small>路径进度</small></span><span v-else>资源难度与当前能力的匹配</span><small>{{ trendMode === 'path' ? '曲线展示后续节点的相对难度' : '实线为资源难度，虚线为当前能力' }}</small></div></div></div>
         <div v-if="activeTrend.length > 1" class="trend-chart" :aria-label="trendMode === 'path' ? '当前学习路径相对难度折线图' : '资源难度与当前能力匹配曲线'">
           <svg viewBox="0 0 920 42" role="img" :aria-label="trendMode === 'path' ? '学习路径节点相对难度折线图' : '资源难度与当前能力匹配曲线'" preserveAspectRatio="none">
             <line v-for="level in [8, 21, 34]" :key="level" x1="0" :y1="level" x2="920" :y2="level" class="chart-grid" />
@@ -27,7 +27,7 @@
           <section class="surface surface-pad blindspot-panel"><div class="section-heading section-heading--compact"><div><p class="eyebrow module-eyebrow">KNOWLEDGE GAPS</p><h2>知识盲区</h2></div><span class="muted">{{ weakPoints.length }} 个待巩固</span></div><div v-if="weakPoints.length" class="blindspot-list"><article v-for="(point, index) in weakPoints" :key="point.tag" class="blindspot-item"><div class="blindspot-copy"><span class="blindspot-index">{{ String(index + 1).padStart(2, '0') }}</span><div><strong>{{ point.tag }}</strong><small>{{ point.accuracy === null ? '正在生成' : `正确率 ${point.accuracy}%` }}</small></div></div><div v-if="point.accuracy !== null" class="mini-progress"><span :style="{ width: `${point.accuracy}%` }"></span></div><RouterLink class="icon-link" to="/learning/advanced" :aria-label="`练习${point.tag}`" title="开始练习"><ArrowRight :size="15" /></RouterLink></article></div><div v-else class="empty-state">正在生成知识盲区…</div></section>
         </div>
 
-        <section class="surface surface-pad mastery-panel"><div class="mastery-card-header"><div><p class="eyebrow module-eyebrow">OVERALL MASTERY</p><h2>总体掌握度</h2><p class="muted">按知识点对比当前掌握度与达标线</p></div><div class="mastery-headline"><span>当前总计</span><strong>{{ masteryScore === null ? '正在生成' : `${masteryScore}%` }}</strong><em v-if="masteryDelta !== null" :class="{ 'is-positive': masteryDelta >= 0 }">{{ masteryDeltaLabel }} 达标线</em></div></div><div v-if="masteryItems.length" class="mastery-legend" aria-label="柱状图图例"><span><i class="legend-swatch legend-swatch--current"></i>当前掌握度</span><span><i class="legend-swatch legend-swatch--target"></i>达标线 60%</span></div><div v-if="masteryItems.length" class="mastery-chart" aria-label="知识点掌握度与达标线柱状图"><div class="mastery-axis"><span>100%</span><span>50%</span><span>0%</span></div><div class="bars"><div v-for="item in masteryItems" :key="item.tag" class="bar-column"><div class="bar-track"><span class="bar-value bar-value--current" :style="{ height: `${item.score}%` }" :title="`${item.tag}：当前掌握度 ${item.score}%`"><strong>{{ item.score }}%</strong></span><span class="bar-value bar-value--target" :style="{ height: `${item.target}%` }" :title="`${item.tag}：达标线 ${item.target}%`"></span></div><span class="bar-label" :title="item.tag">{{ item.shortTag }}</span></div></div></div><div v-else class="empty-state mastery-empty">正在生成掌握度数据…</div><div class="mastery-footer"><span>已答 {{ stats.examAnswered }} 题</span><span>学习 {{ formatDuration(stats.studySeconds) }}</span></div></section>
+        <section class="surface surface-pad mastery-panel"><div class="mastery-card-header"><div><p class="eyebrow module-eyebrow">OVERALL MASTERY</p><h2>总体掌握度</h2><p class="muted">按知识点对比当前掌握度与达标线</p></div><div class="mastery-headline"><span>当前总计</span><strong>{{ masteryScore === null ? '正在生成' : `${masteryScore}%` }}</strong><em v-if="masteryDelta !== null" :class="{ 'is-positive': masteryDelta >= 0 }">{{ masteryDeltaLabel }} 达标线</em></div></div><p v-if="overviewSummary.text" class="mastery-insight">{{ learningSummary }}</p><div v-if="masteryItems.length" class="mastery-legend" aria-label="柱状图图例"><span><i class="legend-swatch legend-swatch--current"></i>当前掌握度</span><span><i class="legend-swatch legend-swatch--target"></i>达标线 60%</span></div><div v-if="masteryItems.length" class="mastery-chart" aria-label="知识点掌握度与达标线柱状图"><div class="mastery-axis"><span>100%</span><span>50%</span><span>0%</span></div><div class="bars"><div v-for="item in masteryItems" :key="item.tag" class="bar-column"><div class="bar-track"><span class="bar-value bar-value--current" :style="{ height: `${item.score}%` }" :title="`${item.tag}：当前掌握度 ${item.score}%`"><strong>{{ item.score }}%</strong></span><span class="bar-value bar-value--target" :style="{ height: `${item.target}%` }" :title="`${item.tag}：达标线 ${item.target}%`"></span></div><span class="bar-label" :title="item.tag">{{ item.shortTag }}</span></div></div></div><div v-else class="empty-state mastery-empty">正在生成掌握度数据…</div><div class="mastery-footer"><span>已答 {{ stats.examAnswered }} 题</span><span>学习 {{ formatDuration(stats.studySeconds) }}</span></div></section>
       </div>
     </div>
   </div>
@@ -177,15 +177,15 @@ onMounted(loadOverview)
 .overview-page :deep(.page-heading .eyebrow) { font-size: 12px; line-height: 1.3; letter-spacing: .08em; }
 .overview-page :deep(.page-heading .eyebrow) { color: var(--muted); }
 .overview-page { height: 100%; --ink: #3f4146; }
-.overview-dashboard { grid-template-rows: minmax(210px, .42fr) minmax(0, 1fr); gap: 16px; }
+.overview-dashboard { grid-template-rows: minmax(236px, .48fr) minmax(0, 1fr); gap: 16px; }
 .overview-columns, .overview-left, .overview-top-cards { gap: 16px; }
 .overview-left { grid-template-rows: minmax(220px, .9fr) minmax(0, 1fr); }
 .path-trend-panel { padding: 0 20px 4px; background: transparent; border: 0; }
 .path-trend-panel { overflow: hidden; }
 .path-trend-panel .trend-chart, .path-trend-panel .trend-chart svg { overflow: hidden; }
 .path-trend-panel { min-height: 210px; }
-.path-trend-panel .trend-chart { min-height: 110px; height: 110px; }
-.path-trend-panel .trend-chart svg { height: 94px; }
+.path-trend-panel .trend-chart { min-height: 88px; height: 88px; }
+.path-trend-panel .trend-chart svg { height: 70px; }
 .path-trend-panel .trend-line { stroke: var(--accent-deep); stroke-width: 4; }
 .path-trend-panel .trend-point { stroke: var(--accent-deep); stroke-width: 2.5; }
 .path-trend-panel .trend-caption { display: grid; gap: 3px; text-align: right; }
@@ -271,12 +271,20 @@ onMounted(loadOverview)
 .compact-panel .section-heading > svg { width: 32px; height: 32px; padding: 8px; border-radius: 50%; background: rgba(255, 255, 255, .72); }
 .overview-start-button { box-shadow: 0 6px 14px rgba(30, 60, 52, .2); }
 .overview-start-button:hover { box-shadow: 0 8px 18px rgba(30, 60, 52, .26); }
+.path-trend-panel { padding: 12px 20px 4px; border: 1px solid rgba(63, 91, 49, .2); border-radius: 12px; background: #f5f8ef; }
+.path-current-node { display: block; max-width: 520px; margin-top: 8px; overflow: hidden; color: var(--accent-deep); font-size: 11px; font-weight: 800; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.path-progress-badge { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 6px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.path-progress-badge b { color: var(--accent-deep); font-size: 21px; line-height: 1; }
+.path-progress-badge small { color: var(--muted); font-size: 10px; }
+.goal-list li:first-child .goal-status { width: 10px; height: 10px; background: var(--accent); box-shadow: 0 0 0 3px rgba(185, 227, 49, .18); }
+.goal-list li:not(:first-child) .goal-status { opacity: .56; }
+.mastery-insight { display: -webkit-box; max-width: 94%; margin: 12px 0 1px; overflow: hidden; -webkit-box-orient: vertical; color: #514c8c; font-size: 11px; line-height: 1.55; -webkit-line-clamp: 2; }
 :global(.page-container:has(.overview-page)) { width: 100%; height: calc(100vh - 64px); box-sizing: border-box; margin: 0; padding: 20px 20px 20px 28px; overflow: hidden; }
 @media (max-width: 900px) {
   .overview-page { height: auto; }
   .overview-dashboard { grid-template-rows: auto auto; }
   .path-trend-panel { min-height: 180px; }
-  .path-trend-panel .trend-chart { height: 100px; }
+  .path-trend-panel .trend-chart { height: 88px; }
   .overview-left { grid-template-rows: auto auto; }
   :global(.page-container:has(.overview-page)) { height: auto; min-height: 0; padding: 24px 20px 58px 24px; overflow: visible; }
 }
@@ -285,5 +293,7 @@ onMounted(loadOverview)
   .mastery-headline { min-width: 76px; }
   .mastery-headline strong { font-size: 24px; }
   .mastery-legend { margin-top: 13px; }
+  .path-current-node { max-width: 260px; }
+  .path-trend-panel { padding: 16px; }
 }
 </style>

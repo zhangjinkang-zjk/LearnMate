@@ -3,9 +3,6 @@
     <header class="practice-dialogue__header">
       <div>
         <p class="eyebrow">学习巩固 · {{ task.kind_label || '实践任务' }}</p>
-        <h2>先想清楚，再给方案</h2>
-        <p>LearnMate 会根据你的回答追问证据、假设和取舍，不会直接替你完成任务。</p>
-        <small class="practice-agent-note">本轮由学习助教 Agent 负责追问；任务生成与资源审核属于独立流程。</small>
       </div>
       <div class="phase-progress" aria-label="巩固阶段进度">
         <span class="phase-progress__count">{{ currentPhaseIndex + 1 }} / {{ phases.length }}</span>
@@ -60,7 +57,7 @@
     <p v-if="errorMessage" class="practice-error" role="status">{{ errorMessage }}</p>
     <form v-if="!evaluation" class="practice-composer" @submit.prevent="sendMessage()">
       <label class="sr-only" for="practice-answer">你的方案思考</label>
-      <textarea id="practice-answer" v-model="draft" rows="4" maxlength="1800" :disabled="isStreaming || isLoadingSession || isSubmitting" :placeholder="`围绕“${currentPhase.label}”写下你的判断…`" @keydown.ctrl.enter.prevent="sendMessage()" @keydown.meta.enter.prevent="sendMessage()"></textarea>
+      <textarea id="practice-answer" v-model="draft" rows="3" maxlength="1800" :disabled="isStreaming || isLoadingSession || isSubmitting" :placeholder="`围绕“${currentPhase.label}”写下你的判断…`" @keydown.ctrl.enter.prevent="sendMessage()" @keydown.meta.enter.prevent="sendMessage()"></textarea>
       <div class="practice-actions">
         <span>{{ draft.length }} / 1800</span>
         <div>
@@ -384,7 +381,7 @@ onBeforeUnmount(() => {
 .guide-block > strong, .guide-block li { overflow-wrap: anywhere; }
 .practice-error { padding: 0 20px 8px; }
 .practice-composer { padding: 11px 20px 15px; }
-.practice-composer textarea { min-height: 74px; max-height: 145px; padding: 11px 12px; line-height: 1.65; }
+.practice-composer textarea { height: 68px; min-height: 68px; max-height: 120px; padding: 11px 12px; line-height: 1.65; }
 .practice-actions { margin-top: 8px; }
 .practice-actions > div { gap: 7px; }
 .practice-actions .button { min-height: 36px; }
@@ -399,7 +396,6 @@ onBeforeUnmount(() => {
 </style>
 
 <style scoped>
-.practice-agent-note { display: block; margin-top: 7px; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .practice-dialogue .button--secondary { border-color: #d5e2c8; background: #eef5e6; color: var(--accent-deep); }
 .practice-dialogue .button--secondary:hover { border-color: #b9c9b2; background: #e3eed9; }
 .practice-session-loading { display: grid; min-height: 280px; place-items: center; color: var(--muted); font-size: 12px; }
