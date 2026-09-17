@@ -108,6 +108,7 @@ onBeforeUnmount(() => window.clearTimeout(noticeTimer))
 .library-page .button--quiet { border-radius: 12px; }
 .library-page :deep(.button--primary) { border-color: #e2f452; border-radius: 12px; background: #e2f452; color: #1e3c34; }
 .library-page :deep(.button--primary:hover) { border-color: #d5f242; background: #d5f242; color: #1e3c34; }
+.library-generate-button { min-height: 56px; padding: 0 24px; font-size: 16px; font-weight: 800; }
 .library-page .filter-tabs button.is-active,
 .library-page :deep(.filter-tabs button.is-active) { border-color: #e2f452 !important; border-radius: 12px; background: #e2f452 !important; color: #1e3c34 !important; }
 .resource-list .resource-row:nth-child(odd) { background: #fff; }

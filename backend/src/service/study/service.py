@@ -75,6 +75,74 @@ def _build_path_difficulty_trend(nodes: list[dict]) -> list[dict]:
     ]
 
 
+def _knowledge_tag_key(value: object) -> str:
+    """Return a stable key for matching a mastery record to a path node."""
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _index_reviewable_nodes_by_tag(nodes: list[dict]) -> dict[str, dict]:
+    """Map current-path knowledge tags to the chapter that can be reviewed."""
+    indexed: dict[str, dict] = {}
+    for node in nodes:
+        if node.get("status") not in {"completed", "in_progress", "unlocked"}:
+            continue
+        for tag in node.get("knowledge_tags") or []:
+            key = _knowledge_tag_key(tag)
+            if key:
+                indexed.setdefault(key, node)
+    return indexed
+
+
+def _build_reviewable_weak_points(
+    points: list[dict],
+    *,
+    path_id: int | None,
+    reviewable_nodes_by_tag: dict[str, dict],
+) -> list[dict]:
+    """Return only measured knowledge gaps that have a valid chapter review target."""
+    weak_points = []
+    seen_tags = set()
+    for point in points:
+        if not isinstance(point, dict):
+            continue
+        tag = str(point.get("tag") or point.get("knowledge_tag") or "").strip()
+        # Radar dimensions are useful in the ability chart, but they are not
+        # chapter knowledge points and cannot be routed to a specific review.
+        if point.get("source") != "mastery" or not tag or tag in seen_tags:
+            continue
+        target_node = reviewable_nodes_by_tag.get(_knowledge_tag_key(tag))
+        if not target_node:
+            continue
+        try:
+            accuracy_value = float(point.get("accuracy"))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(accuracy_value):
+            continue
+        if 0 <= accuracy_value <= 1:
+            accuracy = round(accuracy_value * 100)
+        elif 0 <= accuracy_value <= 100:
+            accuracy = round(accuracy_value)
+        else:
+            continue
+        try:
+            attempts = max(int(point.get("total_attempts") or 0), 0)
+        except (TypeError, ValueError):
+            attempts = 0
+        seen_tags.add(tag)
+        weak_points.append({
+            "tag": tag,
+            "accuracy": accuracy,
+            "level": point.get("level") or "",
+            "attempts": attempts,
+            "source": "mastery",
+            "path_id": path_id,
+            "node_id": target_node.get("id"),
+            "node_title": _node_title(target_node),
+        })
+    return weak_points[:6]
+
+
 class StudyService:
 
     @staticmethod
@@ -137,33 +205,11 @@ class StudyService:
             if len(next_content) >= 3:
                 break
 
-        weak_points = []
-        seen_tags = set()
-        for point in stats.get("weak_points", []):
-            if not isinstance(point, dict):
-                continue
-            tag = str(point.get("tag") or point.get("knowledge_tag") or "").strip()
-            if not tag or tag in seen_tags:
-                continue
-            try:
-                accuracy_value = float(point.get("accuracy"))
-            except (TypeError, ValueError):
-                continue
-            if not math.isfinite(accuracy_value):
-                continue
-            if 0 <= accuracy_value <= 1:
-                accuracy = round(accuracy_value * 100)
-            elif 0 <= accuracy_value <= 100:
-                accuracy = round(accuracy_value)
-            else:
-                continue
-            seen_tags.add(tag)
-            weak_points.append({
-                "tag": tag,
-                "accuracy": accuracy,
-                "level": point.get("level") or "",
-            })
-        weak_points = weak_points[:6]
+        weak_points = _build_reviewable_weak_points(
+            stats.get("weak_points", []),
+            path_id=(current_path or {}).get("path_id"),
+            reviewable_nodes_by_tag=_index_reviewable_nodes_by_tag(nodes),
+        )
 
         mastery_values = []
         mastery_bars = []

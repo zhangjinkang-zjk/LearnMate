@@ -102,7 +102,6 @@
                 <span>{{ isMindmapLoading ? '读取中' : mindmapError ? '重试结构' : '知识结构' }}</span>
               </button>
               <button
-                v-if="pptResource"
                 type="button"
                 role="tab"
                 :aria-selected="resourceView === 'ppt'"
@@ -112,7 +111,7 @@
                 @click="showPpt"
               >
                 <Presentation :size="16" />
-                <span>{{ isPptLoading ? '读取中' : pptError ? '重试 PPT' : 'PPT 辅助' }}</span>
+                <span>{{ isPptLoading ? '读取中' : !pptResource && isResourceGenerating ? '生成中' : pptError ? '重试 PPT' : 'PPT 辅助' }}</span>
               </button>
               <button
                 type="button"
@@ -209,8 +208,23 @@
                 <p>主讲文档不受影响，材料读取完成后会自动显示。</p>
               </div>
 
+              <div v-else-if="resourceView === 'ppt' && !pptResource" class="document-loading surface" aria-live="polite">
+                <LoaderCircle v-if="isResourceGenerating" class="spin" :size="25" />
+                <CircleAlert v-else :size="25" />
+                <strong>{{ isResourceGenerating ? '正在生成 PPT 辅助材料' : 'PPT 辅助材料暂时不可用' }}</strong>
+                <p>{{ isResourceGenerating ? '生成完成后会自动显示在这里。' : resourceGenerationError || '可以重新生成本章材料后再查看。' }}</p>
+                <button v-if="!isResourceGenerating" class="button button--quiet" type="button" @click="loadActiveNode">重新生成</button>
+              </div>
+
+              <div v-else-if="resourceView === 'ppt' && pptError" class="document-loading document-loading--error surface">
+                <CircleAlert :size="25" />
+                <strong>PPT 辅助材料暂时无法打开</strong>
+                <p>{{ pptError }}</p>
+                <button class="button button--quiet" type="button" @click="showPpt">重新读取</button>
+              </div>
+
               <PptEditorFrame
-                v-else-if="resourceView === 'ppt'"
+                v-else-if="resourceView === 'ppt' && pptResource"
                 :content="pptContent"
                 :title="activeNode?.title"
                 :theme-id="pptResource?.ppt_theme_id || 'minimal-white'"
@@ -1099,13 +1113,20 @@ async function loadActiveNode() {
         if (loadVersion !== nodeLoadVersion) return
         if (workflowStarted) finishWorkflow(false)
         isResourceGenerating.value = false
+        const refreshed = await fundamentalsApi.getNode(learningPath.value.path_id, activeNode.value.id).catch(() => null)
         if (!documentContent.value && !documentError.value) {
-          const refreshed = await fundamentalsApi.getNode(learningPath.value.path_id, activeNode.value.id).catch(() => null)
           const refreshedDocument = findResource(refreshed?.progress?.resources, 'document')
           if (refreshedDocument && await hydrateResource('document', refreshedDocument, loadVersion)) {
             void refreshDocumentAnnotations()
             markDocumentReady()
           }
+        }
+        // The resource stream can finish before its final PPT event reaches the
+        // browser. Re-read the persisted node bindings so a completed PPT is
+        // never hidden just because that one stream event was missed.
+        if (!pptContent.value) {
+          const refreshedPpt = findResource(refreshed?.progress?.resources, 'ppt')
+          if (refreshedPpt) await hydrateResource('ppt', refreshedPpt, loadVersion)
         }
         if (!documentContent.value && !documentError.value) documentError.value = '资源生成完成，但没有找到本章主讲文档'
         if (!documentContent.value) isResourceLoading.value = false
@@ -1159,11 +1180,12 @@ async function showMindmap() {
 }
 
 async function showPpt() {
-  if (!pptResource.value || isPptLoading.value) return
-  await reportReadDuration(true)
+  if (isPptLoading.value) return
   resourceView.value = 'ppt'
   resourceDownloadError.value = ''
   openedAt = 0
+  if (!pptResource.value) return
+  await reportReadDuration(true)
   if (pptContent.value) return
   isPptLoading.value = true
   pptError.value = ''
@@ -1172,8 +1194,6 @@ async function showPpt() {
     if (!loaded) throw new Error(pptError.value || 'PPT 内容为空')
   } catch (error) {
     pptError.value = errorDetail(error, 'PPT 辅助材料加载失败。')
-    resourceView.value = 'document'
-    if (document.visibilityState === 'visible') openedAt = Date.now()
   } finally {
     isPptLoading.value = false
   }

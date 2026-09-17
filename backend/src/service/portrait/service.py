@@ -1189,7 +1189,7 @@ class PortraitRadarService:
         radar.persistence = persistence
         await radar.save()
 
-        return PortraitRadarService._format(radar)
+        return PortraitRadarService._format(radar, answered_count=len(records))
 
     @staticmethod
     async def get(user_id: int) -> dict | None:
@@ -1200,16 +1200,29 @@ class PortraitRadarService:
         try:
             return await PortraitRadarService.compute(user_id)
         except ValueError:
-            return PortraitRadarService._format(radar) if radar else None
+            return await PortraitRadarService._format_existing_radar(user_id, radar)
         except Exception:
             logger.exception("画像雷达重算失败 user_id=%s", user_id)
-            return PortraitRadarService._format(radar) if radar else None
+            return await PortraitRadarService._format_existing_radar(user_id, radar)
 
     @staticmethod
-    def _format(radar) -> dict:
+    async def _format_existing_radar(user_id: int, radar) -> dict | None:
+        """重算暂时失败时，仍携带历史雷达对应的答题证据。"""
+        if not radar:
+            return None
+        from backend.src.models.exam_model import ExamRecord
+
+        answered_count = await ExamRecord.filter(
+            user_id=user_id, is_correct__not_isnull=True
+        ).count()
+        return PortraitRadarService._format(radar, answered_count=answered_count)
+
+    @staticmethod
+    def _format(radar, *, answered_count: int | None = None) -> dict:
         return {
             "radar_id": radar.id,
             "user_id": radar.user_id,
+            "answered_count": answered_count,
             "dimensions": [
                 {"key": "memory",        "label": "记忆",   "score": radar.memory,        "desc": "基础回忆与知识提取表现"},
                 {"key": "understanding", "label": "理解",   "score": radar.understanding, "desc": "概念理解与知识关联表现"},
