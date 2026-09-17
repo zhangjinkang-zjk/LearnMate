@@ -119,7 +119,6 @@
                 role="tab"
                 :aria-selected="resourceView === 'video'"
                 :class="{ 'is-active': resourceView === 'video' }"
-                :disabled="isVideoLoading"
                 :title="videoError || '查看当前学习路径的视频讲解'"
                 @click="showVideo"
               >
@@ -257,7 +256,11 @@
                   <strong>{{ chapterFooterTitle }}</strong>
                   <span>{{ documentContent ? `${estimatedReadMinutes} 分钟阅读 · ${activeNode.knowledge_tags?.length || 0} 个知识点` : '正在准备学习材料' }}</span>
                 </div>
-                <button class="button button--primary" type="button" :disabled="!documentContent || isResourceLoading" @click="handlePrimaryAction">
+                <RouterLink v-if="pathCompleted && !nextNode" class="button button--primary" to="/learning/advanced">
+                  去做实战任务
+                  <ArrowRight :size="15" />
+                </RouterLink>
+                <button v-else class="button button--primary" type="button" :disabled="!documentContent || isResourceLoading" @click="handlePrimaryAction">
                   {{ primaryActionLabel }}
                   <ArrowRight :size="15" />
                 </button>
@@ -389,6 +392,13 @@ let nodeLoadVersion = 0
 let openedAt = 0
 let readReportPromise = null
 let readingIntervalId = null
+// 视频是「路径级」产物，生成要跑好几分钟。所以它是后台作业 + 轮询，而不用 nodeLoadVersion
+// 守卫：切章节不该中断它（换章不影响同一条路径的视频）。只有切路径和离开页面才作废。
+let videoPollToken = 0
+let videoPollTimer = null
+let videoPollWake = null
+const VIDEO_POLL_INTERVAL_MS = 3000
+const VIDEO_POLL_MAX_MS = 12 * 60 * 1000
 
 const activeNodeIndex = computed(() => learningPath.value?.nodes.findIndex((node) => node.id === activeNodeId.value) ?? -1)
 const activeNode = computed(() => learningPath.value?.nodes[activeNodeIndex.value] || null)
@@ -425,9 +435,16 @@ const primaryActionLabel = computed(() => {
   if (activeNode.value?.status === 'completed') return '复习本章检查'
   return '完成阅读，进入检查'
 })
+// 整条路径都学完了：末章后面没有可进的章节是正常终态，得说清楚并指个去处，
+// 否则用户停在最后一章只看到"本章已完成"，不知道是没有下一步还是加载坏了。
+const pathCompleted = computed(() => {
+  const nodes = learningPath.value?.nodes || []
+  return nodes.length > 0 && nodes.every((node) => node.status === 'completed')
+})
 const chapterFooterTitle = computed(() => {
   if (activeNode.value?.status !== 'completed') return '读完正文，再用检查确认真正掌握'
-  return nextNode.value ? '本章已完成，下一章已经解锁' : '本章已完成'
+  if (nextNode.value) return '本章已完成，下一章已经解锁'
+  return pathCompleted.value ? '这条路径的节点都学完了' : '本章已完成'
 })
 
 function openNavigationDrawer(drawer) {
@@ -616,6 +633,7 @@ function setResourceError(type, message) {
   if (type === 'document') documentError.value = message
   if (type === 'ppt') pptError.value = message
   if (type === 'mindmap') mindmapError.value = message
+  if (type === 'video') videoError.value = message
 }
 
 async function hydrateResource(type, summary, loadVersion) {
@@ -902,6 +920,8 @@ async function selectPath(pathId) {
   pathSwitchError.value = ''
   await reportReadDuration(true)
   resourceController?.abort()
+  // 视频是路径级的：换了路径，上一轮的轮询结果不能再往新路径上写。
+  invalidateVideoPoll()
   try {
     const selected = await loadPathWorkspace(nextPathId)
     if (!selected || !Array.isArray(selected.nodes) || !selected.nodes.length) throw new Error('这条路径暂时没有可学习的章节')
@@ -1151,20 +1171,61 @@ async function showPpt() {
   }
 }
 
-async function showVideo() {
-  if (!learningPath.value || isVideoLoading.value) return
-  await reportReadDuration(true)
-  resourceView.value = 'video'
-  resourceDownloadError.value = ''
-  openedAt = 0
-  if (videoResource.value?.file_url) return
+// 只清定时器不够：正在等待的那一轮轮询会永远挂着，isVideoLoading 也就永远不落。
+// 所以同时把它唤醒，让循环靠 token 自己退出。
+function stopVideoPoll() {
+  if (videoPollTimer) {
+    window.clearTimeout(videoPollTimer)
+    videoPollTimer = null
+  }
+  if (videoPollWake) {
+    videoPollWake()
+    videoPollWake = null
+  }
+}
 
+function waitNextVideoPoll(ms) {
+  return new Promise((resolve) => {
+    videoPollWake = resolve
+    videoPollTimer = window.setTimeout(() => {
+      videoPollTimer = null
+      videoPollWake = null
+      resolve()
+    }, ms)
+  })
+}
+
+function invalidateVideoPoll() {
+  videoPollToken += 1
+  stopVideoPoll()
+}
+
+// 后端把生成甩到后台作业里，POST 只回状态，产物要轮询 GET 取。
+// 这样每个请求都是短的，不会再出现「前端 180 秒超时、后端还在跑」。
+async function pollPathVideo() {
+  const token = ++videoPollToken
+  const pathId = learningPath.value?.path_id
+  if (!pathId) return
+  const deadline = Date.now() + VIDEO_POLL_MAX_MS
   isVideoLoading.value = true
   videoError.value = ''
+  stopVideoPoll()
   try {
-    let video = await fundamentalsApi.getPathVideo(learningPath.value.path_id)
-    if (!video?.file_url) video = await fundamentalsApi.generatePathVideo(learningPath.value.path_id)
-    if (!video?.file_url) throw new Error('视频课件尚未生成完成')
+    let video = await fundamentalsApi.getPathVideo(pathId)
+    if (video?.status === 'failed') throw new Error(video.error || '视频生成失败，请稍后重试。')
+    if (!video?.file_url && video?.status !== 'generating') {
+      video = await fundamentalsApi.generatePathVideo(pathId)
+      if (video?.status === 'failed') throw new Error(video.error || '视频生成失败，请稍后重试。')
+    }
+    while (!video?.file_url) {
+      if (token !== videoPollToken) return
+      if (Date.now() > deadline) throw new Error('视频生成耗时过长，请稍后重试。')
+      await waitNextVideoPoll(VIDEO_POLL_INTERVAL_MS)
+      if (token !== videoPollToken) return
+      video = await fundamentalsApi.getPathVideo(pathId)
+      if (video?.status === 'failed') throw new Error(video.error || '视频生成失败，请稍后重试。')
+    }
+    if (token !== videoPollToken) return
     videoResource.value = {
       ...video,
       resource_id: video.html_id || video.resource_id || video.id || null,
@@ -1172,10 +1233,26 @@ async function showVideo() {
       topic: video.topic || `${learningPath.value.goal} 视频讲解`,
     }
   } catch (error) {
+    if (token !== videoPollToken) return
     videoError.value = errorDetail(error, '视频讲解准备失败，请稍后重试。')
   } finally {
-    isVideoLoading.value = false
+    if (token === videoPollToken) isVideoLoading.value = false
   }
+}
+
+async function showVideo() {
+  if (!learningPath.value) return
+  if (isVideoLoading.value) {
+    // 生成期间再次点击（可能刚切到别的视图）只切回视频页，不重开一轮轮询。
+    resourceView.value = 'video'
+    return
+  }
+  await reportReadDuration(true)
+  resourceView.value = 'video'
+  resourceDownloadError.value = ''
+  openedAt = 0
+  if (videoResource.value?.file_url) return
+  await pollPathVideo()
 }
 
 function showDocument() {
@@ -1270,6 +1347,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   resourceController?.abort()
+  invalidateVideoPoll()
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   document.removeEventListener('keydown', handleGlobalKeydown)
   if (readingIntervalId) window.clearInterval(readingIntervalId)

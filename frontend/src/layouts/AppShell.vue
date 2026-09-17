@@ -38,7 +38,6 @@
       </div>
 
       <button
-        v-if="workflowState.available"
         class="sidebar-workflow-launcher"
         type="button"
         title="查看智能体工作流"

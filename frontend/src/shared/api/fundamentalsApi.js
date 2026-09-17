@@ -52,8 +52,9 @@ export const fundamentalsApi = {
     return unwrap(await httpClient.get(`/path/${pathId}/video`))
   },
 
+  // 只负责"启动"生成，后端的视频作业立即返回状态，结果靠轮询 getPathVideo 取。
   async generatePathVideo(pathId) {
-    return unwrap(await httpClient.post(`/path/${pathId}/video`, undefined, { timeout: 180000 }))
+    return unwrap(await httpClient.post(`/path/${pathId}/video`, undefined))
   },
 
   async markResourceRead(resourceId, durationSeconds = 0) {

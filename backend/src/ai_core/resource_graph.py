@@ -13,7 +13,7 @@ from typing import TypedDict, NotRequired
 
 from langgraph.graph import StateGraph, START, END
 
-from backend.src.ai_core.llm_config import llm, llm_vision
+from backend.src.ai_core.llm_config import CREATIVE_TEMPERATURE, llm, llm_vision
 from backend.src.ai_core.ppt_planner import (
     DOC_DEFAULT_SECTIONS,
     DOC_SECTION_COUNT_BY_DEPTH,
@@ -30,6 +30,15 @@ from backend.src.ai_core.streaming import (
     push_text_stream as _push_text_stream,
     safe_stream_writer as _safe_stream_writer,
 )
+from backend.src.ai_core.agent_names import (
+    CROSS_VALIDATOR_AGENT,
+    EXECUTOR_AGENT,
+    LEADER_AGENT,
+    RESOURCE_AGENT_NAMES as AGENT_RESOURCE_NAMES,
+    REVIEWER_AGENT,
+    resource_agent_name,
+    resource_reviewer_name,
+)
 from backend.src.utils.formula_builder import build_formula_sheet
 from backend.src.utils.knowledge_base import search as kb_search
 from backend.src.utils.prompt_loader import load_prompt, fill_prompt
@@ -37,8 +46,10 @@ from backend.src.utils.json_parser import parse_llm_json
 from backend.src.utils.slide_schema import PPT_SPEAKER_NOTES_MAX_CHARS, limit_speaker_notes
 from backend.src.service.path.teaching_context import format_teaching_context
 from backend.src.service.resource.document_quality import (
+    detect_ai_style_tells,
     document_meaningful_length,
     evaluate_key_point_coverage,
+    format_ai_style_tells,
     validate_document_chapter,
     validate_document_safety,
     validate_document_section,
@@ -76,21 +87,9 @@ PROMPT_MAP = {
     "image": "resource/image_prompt",
 }
 
-RESOURCE_AGENT_NAMES = {
-    "document": "文档生成智能体",
-    "ppt": "PPT生成智能体",
-    "mindmap": "思维导图生成智能体",
-    "exercise": "习题生成智能体",
-    "case": "案例资料生成智能体",
-    "reading": "阅读材料生成智能体",
-    "image": "图片生成智能体",
-}
-
-
-def resource_agent_name(resource_type: str) -> str:
-    """Return the user-facing LearnMate agent name for a resource type."""
-    normalized = str(resource_type or "").strip().lower()
-    return RESOURCE_AGENT_NAMES.get(normalized, f"{normalized or '资源'}生成智能体")
+# 角色名/资源名统一放在 agent_names.py（对着赛题原文起的名）。这里保留同名符号，
+# 是为了不打断本模块里已有的调用点和 import 关系。
+RESOURCE_AGENT_NAMES = AGENT_RESOURCE_NAMES
 
 # ═══════════════════════════════════════
 #  State
@@ -132,13 +131,13 @@ class ResourceState(TypedDict):
 async def leader_node(state: ResourceState) -> dict:
     """LeaderAgent: 分析需求，决定生成哪些资源类型（用户已指定则跳过 LLM）"""
     writer = _safe_stream_writer()
-    _push_agent_event(writer, "leader", "LeaderAgent", "leader", "running", "正在分析学习需求")
+    _push_agent_event(writer, "leader", LEADER_AGENT, "leader", "running", "正在分析学习需求")
     requested = state.get("resource_types") or []
     if requested:
         _push_agent_event(
             writer,
             "leader",
-            "LeaderAgent",
+            LEADER_AGENT,
             "leader",
             "done",
             f"已确认生成类型：{' / '.join(requested)}",
@@ -156,7 +155,7 @@ async def leader_node(state: ResourceState) -> dict:
         response = await llm.ainvoke(prompt_text, priority=state.get("llm_priority", "high"), user_id=int(state.get("user_id", 0)), pool="leader")
     except Exception as e:
         logger.exception("LeaderAgent LLM 调用失败")
-        _push_agent_event(writer, "leader", "LeaderAgent", "leader", "failed", "规划失败，降级生成文档")
+        _push_agent_event(writer, "leader", LEADER_AGENT, "leader", "failed", "规划失败，降级生成文档")
         return {"resource_types": ["document"]}
 
     try:
@@ -168,7 +167,7 @@ async def leader_node(state: ResourceState) -> dict:
     _push_agent_event(
         writer,
         "leader",
-        "LeaderAgent",
+        LEADER_AGENT,
         "leader",
         "done",
         f"规划完成：{' / '.join(resource_types)}",
@@ -677,6 +676,9 @@ async def generate_ppt_parallel(
 
     total = len(sections)
     _results: list[dict] = [{} for _ in range(total)]
+    # 审核分散在每个章节的协程里，日志一条条往外冒，单看每一行看不出全貌。
+    # 收尾时汇总一行，让"审核阶段到底跑了什么、结果如何"在日志里可读。
+    review_stats = {"reviewed": 0, "rejected": 0, "passed": 0, "fallback": 0}
     gen_sem = asyncio.Semaphore(max(1, total))
     review_sem = asyncio.Semaphore(2)
     soft_quick_reasons = {"missing_speaker_notes", "speaker_notes_too_long", "hollow_bullet_or_step", "too_sparse_visible_content"}
@@ -1098,8 +1100,10 @@ async def generate_ppt_parallel(
                     total=total,
                 )
                 review_result = await _review_ppt_section(content, section_title, format_checked=True)
+                review_stats["reviewed"] += 1
             if review_result.get("passed"):
                 final_passed = True
+                review_stats["passed"] += 1
                 _results[idx] = {"idx": idx, "content": content}
                 if draft_pushed:
                     _push_section_replace(idx, content, section_title)
@@ -1126,11 +1130,15 @@ async def generate_ppt_parallel(
             # 截断反馈防止多轮累积导致 prompt 膨胀
             if len(review_feedback) > 400:
                 review_feedback = review_feedback[:400] + "…"
+            review_stats["rejected"] += 1
+            # 日志打完整的 400 字，不再二次截到 120 —— 这行日志的全部价值就在于说清
+            # "到底哪里不对"，截断之后结论往往正好被切掉（实测会断在"建议根"这种地方）。
             logger.warning("[PPT-Review] idx=%d section=%s round=%d 审核未通过: %s",
-                           idx, section_title, round_idx + 1, review_feedback[:120])
+                           idx, section_title, round_idx + 1, review_feedback)
             round_idx += 1
 
         if not final_passed and not is_portrait_section:
+            review_stats["fallback"] += 1
             fallback_content = _fallback_ppt_section(section_title)
             _results[idx] = {"idx": idx, "content": fallback_content}
             if draft_pushed:
@@ -1154,6 +1162,9 @@ async def generate_ppt_parallel(
 
     # ── 所有章节同时启动（asyncio.gather 天然并行）──
     await asyncio.gather(*[_gen_section(i, s) for i, s in enumerate(sections)])
+    logger.info("[PPT-Review] 审核汇总 章节=%d 送审=%d次 未通过=%d次 达标=%d章 兜底=%d章",
+                total, review_stats["reviewed"], review_stats["rejected"],
+                review_stats["passed"], review_stats["fallback"])
     _push_agent_event(stream_writer, "executor:ppt", "PPT生成智能体", "executor", "done", "PPT 内容生成完成", resource_type="ppt", current=total, total=total, elapsed_ms=int((time.perf_counter() - _t_total) * 1000))
 
     # ═══════════════════════════════════
@@ -1371,6 +1382,7 @@ async def generate_document_parallel(
     user_id: int = 0,
     rag_mode: str = "reference",
     teaching_context: dict | None = None,
+    skip_review: bool = False,
 ) -> str:
     """Generate one complete node chapter from a planned set of internal sections."""
     _t_total = time.perf_counter()
@@ -1408,6 +1420,32 @@ async def generate_document_parallel(
 
     total = len(sections)
     completed_count = [0]
+    # 小节质检分散在各自的协程里，逐条日志看不出全貌。收尾汇总一行，
+    # 让"文档的审核/质检阶段到底跑了什么"在日志里可读（与 PPT 的 [PPT-Review] 汇总对齐）。
+    doc_stats = {"sections": 0, "quality_retries": 0, "error_retries": 0, "fallback": 0, "chapter_repairs": 0,
+                 "consistency_issues": 0, "consistency_repairs": 0, "consistency_remaining": 0}
+    # 文风套路命中统计（小节 idx → {类别: 次数}）。只观测不拦截，见
+    # detect_ai_style_tells 的注释。
+    #
+    # 按小节覆盖而不是累加：整章重修 / 交叉验证重修会再次调用 gen_section，
+    # 累加会把同一节数两遍（首轮与重修版本都算），汇总出现「命中小节 6/3」这种
+    # 不可能的数。覆盖式记录天然以最后一版为准，也就是真正交付的那一版。
+    section_style: dict[int, dict[str, int]] = {}
+
+    def _record_style(section_idx: int, title: str, text: str) -> None:
+        """记录该小节**最终交付版本**的文风命中。
+
+        两条出口都要记：正常接受，以及重写用尽后的尽力稿 / 兜底骨架。只在接受路径
+        记的话，走兜底的小节会显示成「无命中」——分母变小、明细为空，读起来像"文风
+        很干净"，而实际是压根没测到，正好把结论带反。
+        """
+        tells = detect_ai_style_tells(text)
+        section_style[section_idx] = tells
+        if tells:
+            logger.info(
+                "[Doc-Style] 第 %d/%d 节「%s」命中文风套路 %s",
+                section_idx + 1, total, title, format_ai_style_tells(tells),
+            )
 
     async def gen_section(
         idx: int,
@@ -1482,11 +1520,14 @@ async def generate_document_parallel(
                 document_outline=document_outline,
             )
             try:
+                # 正文走创作温度：打散句式套路、降低"AI 味"，也保证候选重试会产出
+                # 与上一轮不同的内容（同 prompt 同温度下重试基本是重复劳动）。
                 response = await llm.ainvoke(
                     section_prompt,
                     priority=llm_priority,
                     user_id=user_id,
                     pool="document",
+                    temperature=CREATIVE_TEMPERATURE,
                 )
                 content = _promote_section_heading(
                     _strip_outer_markdown_fence(str(response.content or ""))
@@ -1500,6 +1541,9 @@ async def generate_document_parallel(
                 else:
                     quality_errors = []
                 if not quality_errors:
+                    # 文风只观测不拦截：把它做成打回条件会让每轮重写都撞同一条规则，
+                    # 烧完重试次数再走兜底，比不拦更慢且不收敛。
+                    _record_style(idx, section_title, content)
                     _push_text_stream(
                         stream_writer,
                         "document",
@@ -1510,6 +1554,9 @@ async def generate_document_parallel(
                     )
                     elapsed = time.perf_counter() - t0
                     completed_count[0] += 1
+                    # 整章重修会带着 chapter_feedback 再跑一遍 gen_section，那不算"首次达标"。
+                    if repair_round == 0:
+                        doc_stats["sections"] += 1
                     _push_agent_event(
                         stream_writer,
                         section_agent_id,
@@ -1533,12 +1580,14 @@ async def generate_document_parallel(
                     + "；".join(quality_errors)
                 )
                 last_error = ValueError(quality_feedback)
+                doc_stats["quality_retries"] += 1
                 logger.warning(
                     "[Doc-Section] 质量不达标触发重试 idx=%d 第 %d 次 errors=%s",
                     idx, attempt + 1, quality_errors,
                 )
             except Exception as error:
                 last_error = error
+                doc_stats["error_retries"] += 1
                 logger.warning(
                     "[Doc-Section] 生成失败触发重试 idx=%d 第 %d 次 error=%s",
                     idx, attempt + 1, error,
@@ -1555,6 +1604,7 @@ async def generate_document_parallel(
             else bool(best_content) and not is_failed_generation_content(best_content)
         )
         if not section_ok:
+            doc_stats["fallback"] += 1
             best_content = _fallback_document_section(topic, section_title)
         # 这一节到此为止，标 done；要不要再修由整章校验决定，那一步会另发 executor:document 的 retrying。
         _push_agent_event(
@@ -1573,6 +1623,8 @@ async def generate_document_parallel(
             "[Doc-Section] 小节重写次数用尽 idx=%d section=%s 保留尽力稿=%s 长度=%d error=%s",
             idx, section_title, section_ok, len(best_content), last_error,
         )
+        # 兜底稿同样要记录，否则这一节在汇总里显示成"无命中"而不是"没测到"。
+        _record_style(idx, section_title, best_content)
         return idx, best_content
 
     def _compose(parts: list[str]) -> str:
@@ -1594,6 +1646,7 @@ async def generate_document_parallel(
         if not chapter_errors:
             break
         targets = _document_repair_targets(parts, chapter_errors)
+        doc_stats["chapter_repairs"] += 1
         logger.warning(
             "[Doc-Parallel] 整章校验未通过，第 %d 轮重修 sections=%s errors=%s",
             repair_round,
@@ -1640,7 +1693,76 @@ async def generate_document_parallel(
             "；".join(coverage_gaps),
         )
 
+    # ── 跨章节交叉验证（ConsistencyReviewer）──
+    # 逐节审核只看得到单节，看不见节与节之间的问题：概念重复 / 符号冲突 / 逻辑断层 /
+    # 前后矛盾。其中「前后矛盾」正是幻觉最典型的表征 —— 单节自洽的文本一样会有。
+    #
+    # 这一段必须待在生成器**内部**，不能做成图末端的独立节点：文档在 executor 返回前
+    # 就已经通过 resource_complete 推给前端并落库了，跑到图末端再修，数据库和用户手里
+    # 留下的都是没修的那一版 —— 检查跑了、产物没变，就是空转。
+    if not skip_review:
+        checked = split_document_sections(combined)
+        if len(checked) >= 2:
+            _push_agent_event(
+                stream_writer, "cross_validator", CROSS_VALIDATOR_AGENT, "reviewer", "reviewing",
+                f"正在对 {len(checked)} 个章节做交叉验证", sections=len(checked),
+            )
+            issues = await review_cross_section_consistency(
+                checked, topic=topic, llm_priority=llm_priority, user_id=user_id,
+            )
+            if issues is None:
+                _push_agent_event(
+                    stream_writer, "cross_validator", CROSS_VALIDATOR_AGENT, "reviewer", "failed",
+                    "交叉验证未能完成，已跳过",
+                )
+            elif issues:
+                logger.warning(
+                    "[Doc-Review] 交叉验证发现跨章节问题 topic=%s count=%s detail=%s",
+                    topic, len(issues), json.dumps(issues, ensure_ascii=False)[:600],
+                )
+                doc_stats["consistency_issues"] = len(issues)
+                # 一轮带反馈的重修 + 复检。只报不改等于没跑 —— 能改变产物才算"协同决策"。
+                repair_feedback = _consistency_feedback(issues)
+                repaired = await asyncio.gather(*(
+                    gen_section(index, title, repair_feedback, 1)
+                    for index, title in enumerate(sections)
+                ))
+                for index, (_, content) in zip(range(total), repaired):
+                    parts[index] = content
+                combined = _compose(parts)
+                doc_stats["consistency_repairs"] = 1
+                remaining = await review_cross_section_consistency(
+                    split_document_sections(combined), topic=topic, llm_priority=llm_priority, user_id=user_id,
+                )
+                left = len(remaining) if remaining else 0
+                doc_stats["consistency_remaining"] = left
+                _push_agent_event(
+                    stream_writer, "cross_validator", CROSS_VALIDATOR_AGENT, "reviewer",
+                    "retrying" if left else "done",
+                    f"按交叉验证意见重修后仍有 {left} 处问题" if left else "交叉验证修复完成，未再发现跨章节不一致",
+                    issue_count=left,
+                )
+            else:
+                _push_agent_event(
+                    stream_writer, "cross_validator", CROSS_VALIDATOR_AGENT, "reviewer", "done",
+                    "交叉验证通过，未发现跨章节不一致", issue_count=0,
+                )
+
     logger.info("[Doc-Parallel] 完成 小节数=%d 全程耗时=%.1fs", len(sections), time.perf_counter() - _t_total)
+    logger.info("[Doc-Review] 质检汇总 小节=%d 首轮达标=%d 质量重写=%d次 异常重写=%d次 兜底=%d节 整章重修=%d轮",
+                total, doc_stats["sections"], doc_stats["quality_retries"],
+                doc_stats["error_retries"], doc_stats["fallback"], doc_stats["chapter_repairs"])
+    _style_totals: dict[str, int] = {}
+    for _tells in section_style.values():
+        for _label, _count in _tells.items():
+            _style_totals[_label] = _style_totals.get(_label, 0) + _count
+    _style_hit = sum(1 for _tells in section_style.values() if _tells)
+    logger.info("[Doc-Style] 文风观测汇总 命中小节=%d/%d 明细=%s（仅观测，不参与打回）",
+                _style_hit, len(section_style), format_ai_style_tells(_style_totals))
+    if doc_stats["consistency_issues"]:
+        logger.info("[Doc-Review] 交叉验证 发现问题=%d处 已触发重修=%s 修复后剩余=%d处",
+                    doc_stats["consistency_issues"], "是" if doc_stats["consistency_repairs"] else "否",
+                    doc_stats["consistency_remaining"])
     _push_agent_event(
         stream_writer,
         "executor:document",
@@ -1681,7 +1803,7 @@ async def executor_node(state: ResourceState) -> dict:
     _push_agent_event(
         writer,
         "executor",
-        "ExecutorAgent",
+        EXECUTOR_AGENT,
         "executor",
         "running",
         f"正在并行调度：{' / '.join(resource_types)}",
@@ -1807,6 +1929,7 @@ async def executor_node(state: ResourceState) -> dict:
             user_id=user_id_int,
             rag_mode=rag_mode,
             teaching_context=teaching_context,
+            skip_review=bool(state.get("skip_review", False)),
         )
         _emit_resource_complete("document", content)
         return content
@@ -1925,7 +2048,7 @@ async def executor_node(state: ResourceState) -> dict:
     _push_agent_event(
         writer,
         "executor",
-        "ExecutorAgent",
+        EXECUTOR_AGENT,
         "executor",
         "done",
         "并行生成阶段完成",
@@ -2045,13 +2168,16 @@ async def reviewer_node(state: ResourceState) -> dict:
     generated = state.get("generated_resources", {})
     llm_priority = state.get("llm_priority", "high")
     user_id_int = int(state.get("user_id", 0))
-    _push_agent_event(writer, "reviewer", "ReviewerAgent", "reviewer", "reviewing", "正在进行质量审核", total=len(generated))
+    _push_agent_event(writer, "reviewer", REVIEWER_AGENT, "reviewer", "reviewing", "正在进行质量审核", total=len(generated))
 
     async def review_one(rt: str, content: str) -> dict:
-        reviewer_name = resource_agent_name(rt).replace("生成智能体", "审核智能体")
+        reviewer_name = resource_reviewer_name(rt)
         _push_agent_event(writer, f"reviewer:{rt}", reviewer_name, "reviewer", "reviewing", f"正在审核 {rt}", resource_type=rt)
-        # PPT / 文档 已在 generate_*_parallel 内部逐章节审核（生成→审核→重生成循环），跳过全局审核
+        # PPT / 文档 已在 generate_*_parallel 内部逐章节审核（生成→审核→重生成循环），跳过全局审核。
+        # 这里必须留一行日志：否则整个 reviewer 节点在日志上完全静音，排查时看起来
+        # 像"审核阶段什么都没发生"，而实际是审核早就分散在生成阶段做完了。
         if rt in ("ppt", "document", "case", "reading"):
+            logger.info("[审核] %s: 跳过全局审核（该类型已在生成阶段逐章节审核）", rt)
             _push_agent_event(writer, f"reviewer:{rt}", reviewer_name, "reviewer", "done", f"{rt} 已通过内置审核", resource_type=rt, score=100)
             return {"passed": True, "score": 100, "feedback": ""}
         # API 生成的图片跳过文本审核
@@ -2092,7 +2218,7 @@ async def reviewer_node(state: ResourceState) -> dict:
 
     tasks = [review_one(rt, content) for rt, content in generated.items()]
     if not tasks:
-        _push_agent_event(writer, "reviewer", "ReviewerAgent", "reviewer", "done", "没有需要审核的资源")
+        _push_agent_event(writer, "reviewer", REVIEWER_AGENT, "reviewer", "done", "没有需要审核的资源")
         return {"review_passed": True, "review_feedback": ""}
 
     results = await asyncio.gather(*tasks)
@@ -2115,7 +2241,7 @@ async def reviewer_node(state: ResourceState) -> dict:
     _push_agent_event(
         writer,
         "reviewer",
-        "ReviewerAgent",
+        REVIEWER_AGENT,
         "reviewer",
         "done" if all_passed else "retrying",
         "质量审核通过" if all_passed else "审核发现问题，准备重新生成",
@@ -2227,70 +2353,43 @@ def split_document_sections(document: str) -> list[tuple[str, str]]:
     return []
 
 
-async def cross_validator_node(state: ResourceState) -> dict:
-    """ConsistencyReviewer: 在成稿上做跨章节交叉验证。
-
-    `reviewer_node` 是**逐章节**审的（generate_document_parallel 内部就是
-    生成→审核→重生成的循环），结构上只看得到单节，看不到节与节之间的问题。
-    这里补的是那一层：概念重复 / 符号冲突 / 逻辑断层 / 前后矛盾 ——
-    其中「前后矛盾」正是幻觉最典型的表征，单节自洽的文本一样会有。
-
-    只报告、不改判：不动 review_passed / retry_count，因此不会改变既有的
-    重试语义，也不会因为这里多判一次而多跑一轮生成。
-    """
-    writer = _safe_stream_writer()
-    document = str((state.get("generated_resources") or {}).get("document") or "")
-    sections = split_document_sections(document)
-
-    if len(sections) < 2:
-        _push_agent_event(
-            writer, "cross_validator", "ConsistencyReviewer", "reviewer", "skipped",
-            "章节数不足两节，无需跨章节验证", sections=len(sections),
-        )
-        return {"consistency_issues": []}
-
-    _push_agent_event(
-        writer, "cross_validator", "ConsistencyReviewer", "reviewer", "reviewing",
-        f"正在对 {len(sections)} 个章节做交叉验证", sections=len(sections),
-    )
-
-    digest = "\n\n".join(
+def _consistency_digest(sections: list[tuple[str, str]]) -> str:
+    return "\n\n".join(
         f"### {title}\n{body[:_CONSISTENCY_SECTION_CHARS]}"
         for title, body in sections[:_CONSISTENCY_MAX_SECTIONS]
     )
+
+
+async def review_cross_section_consistency(
+    sections: list[tuple[str, str]],
+    *,
+    topic: str,
+    llm_priority: str = "high",
+    user_id: int = 0,
+) -> list[dict] | None:
+    """跑一次跨章节一致性审查，返回问题列表。
+
+    调用失败返回 None —— 必须和"没问题返回 []"区分开，否则一次超时会被当成"通过"。
+    """
     try:
-        prompt = fill_prompt(load_prompt(_CONSISTENCY_PROMPT), content=digest)
-        response = await llm.ainvoke(
-            prompt,
-            priority=state.get("llm_priority", "high"),
-            user_id=int(state.get("user_id", 0)),
-            pool="reviewer",
-        )
+        prompt = fill_prompt(load_prompt(_CONSISTENCY_PROMPT), content=_consistency_digest(sections))
+        response = await llm.ainvoke(prompt, priority=llm_priority, user_id=user_id, pool="reviewer")
         parsed = parse_llm_json(str(response.content or "").strip())
     except Exception:
-        logger.exception("[交叉验证] 调用失败 topic=%s", state.get("topic", ""))
-        _push_agent_event(
-            writer, "cross_validator", "ConsistencyReviewer", "reviewer", "failed",
-            "交叉验证未能完成，已跳过",
-        )
-        return {"consistency_issues": []}
-
+        logger.exception("[交叉验证] 调用失败 topic=%s", topic)
+        return None
     raw_issues = parsed.get("issues") if isinstance(parsed, dict) else None
     issues = [item for item in raw_issues if isinstance(item, dict)] if isinstance(raw_issues, list) else []
-    issues = issues[:5]
+    return issues[:5]
 
-    _push_agent_event(
-        writer, "cross_validator", "ConsistencyReviewer", "reviewer",
-        "retrying" if issues else "done",
-        f"交叉验证发现 {len(issues)} 处跨章节问题" if issues else "交叉验证通过，未发现跨章节不一致",
-        issue_count=len(issues),
-    )
-    if issues:
-        logger.warning(
-            "[交叉验证] 发现跨章节问题 topic=%s count=%s detail=%s",
-            state.get("topic", ""), len(issues), json.dumps(issues, ensure_ascii=False)[:600],
-        )
-    return {"consistency_issues": issues}
+
+def _consistency_feedback(issues: list[dict]) -> str:
+    """把交叉验证结论转成能直接喂给生成器的重修要求。"""
+    lines = [
+        f"- （{item.get('type') or '一致性问题'}）{item.get('sections') or ''}：{item.get('detail') or ''}".rstrip("：")
+        for item in issues
+    ]
+    return "跨章节一致性检查发现以下问题，请完整重写本小节以消除它们：\n" + "\n".join(lines)
 
 
 # ═══════════════════════════════════════
@@ -2303,7 +2402,6 @@ def build_graph():
     workflow.add_node("leader", leader_node)
     workflow.add_node("executor", executor_node)
     workflow.add_node("reviewer", reviewer_node)
-    workflow.add_node("cross_validator", cross_validator_node)
 
     workflow.add_edge(START, "leader")
     workflow.add_edge("leader", "executor")
@@ -2312,14 +2410,14 @@ def build_graph():
         should_review,
         {"reviewer": "reviewer", "end": END},
     )
-    # 审核判定为"结束"的那一刻（通过，或重试到上限）才做一次跨章节交叉验证；
-    # 还要回 executor 重生成时不做，避免对将被替换的内容白跑一次。
+    # 跨章节交叉验证已经挪进 generate_document_parallel 内部 —— 它必须在文档被推送/落库
+    # **之前**跑，否则检查改变不了产物。所以这里不再挂末端节点：同一份文档审两遍既浪费
+    # 一次 LLM 调用，末端那一遍的结论又没有任何下游消费者。
     workflow.add_conditional_edges(
         "reviewer",
         should_continue,
-        {"executor": "executor", "end": "cross_validator"},
+        {"executor": "executor", "end": END},
     )
-    workflow.add_edge("cross_validator", END)
 
     return workflow.compile()
 

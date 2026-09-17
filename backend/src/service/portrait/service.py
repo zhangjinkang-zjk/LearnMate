@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import asyncio
 import time as _time
 from datetime import datetime
@@ -30,6 +31,14 @@ _EXTRACTION_INTERVAL = _env_int("PORTRAIT_EXTRACTION_INTERVAL_SECONDS", 20, mini
 
 # 画像分析（访谈成稿、画像总结）的模型调用上限。超了就降级，不把用户卡在 500 上。
 _PORTRAIT_LLM_TIMEOUT = _env_int("PORTRAIT_LLM_TIMEOUT_SECONDS", 40, minimum=5)
+
+# 访谈下一问单独一档，比 _PORTRAIT_LLM_TIMEOUT 宽松：这一问实测要 ~50 秒
+# （提示词 1662 字、输出只有一行 JSON，慢在模型本身，不是提示词长度）。
+# 原来这里写死 10 秒，等于每一问都必然超时、全部落到兜底模板上，而失败只记在
+# debug 级别，所以"五个问题过于生硬"看了很久都没人发现是超时。
+# 前端不等这一问（先显示本地兜底题，模型赶在用户动笔前回来才替换），
+# 所以这里的宽限不会让用户干等，只决定"能不能拿到模型那一版"。
+_INTERVIEW_LLM_TIMEOUT = _env_int("INTERVIEW_LLM_TIMEOUT_SECONDS", 75, minimum=10)
 
 TRAIT_KEYS = [
     "knowbase",
@@ -324,8 +333,107 @@ def _answer_excerpt(dialogue: list[dict], index: int = -1, fallback: str = "这�
     return answer[:24] + ("..." if len(answer) > 24 else "")
 
 
+# 第 1 题答成这些时，"答案"里没有可用的方向。模板里的「如果把「{first}」做好了」
+# 会把它原样嵌进去，于是"这句回答没有信息量"被后面几问各复读一遍 —— 用户看到的
+# "五个问题过于生硬"有一半来自这里（第 1 问的提示词明确允许回答"还没想好"）。
+_NON_DIRECTION_ANSWERS = {
+    "无", "没有", "暂无", "不知道", "还不知道", "不知道学什么", "不清楚", "不确定",
+    "不明白", "随便", "都行", "都可以", "什么都行", "还没想好", "没想好",
+    "嗯", "哦", "好的", "好", "是", "否", "test", "测试",
+    "1", "2", "3", "4", "5", "0", "。", "？", "?", ".", "无。", "不知道。", "还没想好。",
+}
+
+# 拿不到可用的方向时改问这些：不引用用户的回答，也就不会把一句无意义的话放大。
+_GENERIC_QUESTION_VARIANTS = [
+    [],  # 第 1 问本来就不引用回答
+    [
+        "你希望把想学的这件事用在什么地方？可以是课程作业、实习任务、竞赛项目，或者工作里的某件事。",
+        "你打算先拿它做成点什么？说一个你希望看到的结果就够了。",
+    ],
+    [
+        "你以前试过这个方向吗？可以从最近一次尝试说起，照着教程做一遍也算。",
+        "现在把这个方向交给你，你能先自己做完哪一步？说个具体动作就好。",
+    ],
+    [
+        "做这件事的时候，哪个动作最容易让你停住或者返工？比如拆需求、选方案、调试、检查结果。",
+        "从开始到交付，中间哪一段你最没把握？比如判断方向、动手实现，或者确认效果。",
+    ],
+    [],  # 第 5 问不引用回答
+]
+
+
+# 访谈的五个阶段。服务端按 step 决定这一问属于哪一段，并且**只把这一段的要求**
+# 交给模型 —— 模型看不到后面要问什么，也就跳不了阶段、跑不了题。这是换更快（更弱）
+# 的模型之后仍然能守住"问题不偏"的关键：约束在服务端，不在提示词的说服力上。
+_INTERVIEW_STAGES = (
+    "确认学习方向或主题：一门学科、一个技术领域、一项工作技能，或一个想系统弄懂的主题。"
+    "允许用户只说关键词或回答「还没想好」，用 1 到 3 个具体例子告诉他可以怎么答。"
+    "这一问不要追问项目、交付物、工作场景或学习方式。",
+    "接住第 1 问问到的方向，问用户准备怎么用它、希望达成什么结果：可以问会用到的人、"
+    "场景、作品或时间节点，也可以问为什么现在值得学。必须引用用户说过的方向原话。"
+    "不要问起点，不要问技能缺口，不要问练习条件。",
+    "了解用户的起点：以前试过什么、能独立完成到哪一步、哪一步还要照着示例做、"
+    "有没有做出过一个小成果。必须引用用户说过的方向原话。不要要求他自评几分，"
+    "不要问技能缺口，不要问练习条件。",
+    "定位技能缺口：最耗时间的动作、最难做判断的地方、最常返工的环节、失败后不会检查什么、"
+    "或哪一步无法迁移到新情况。只挑一个角度。不要问练习条件，不要要求他自评几分。",
+    "了解练习条件：什么时候必须用上、每周能稳定投入多少时间、有没有现成的材料或设备限制、"
+    "希望先练一个多大的最小任务。只问一个条件，不要再回到前面几段问过的内容。",
+)
+
+# 长度闸门比提示词里的要求（20 到 90 字）宽一圈：提示词负责引导，这里只拦真异常，
+# 免得把一句好问题因为差几个字丢掉。
+_INTERVIEW_QUESTION_MIN = 8
+_INTERVIEW_QUESTION_MAX = 100
+# "A、B、C" / "A/B/C" 这种是选择题写法，访谈明确不要。
+_FORM_QUESTION_PATTERN = re.compile(r"[A-DＡ-Ｄ]\s*[、/／,，]\s*[A-DＡ-Ｄ]")
+
+
+def _normalise_question(text) -> str:
+    """比对重复用的归一化：去掉空白、标点和引号，只留字。"""
+    return re.sub(r"[\s\W_]+", "", str(text or ""))
+
+
+def _question_rejection_reason(question, dialogue: list[dict], step: int) -> str:
+    """模型写的这一问能不能用：能用返回空串，不能用返回原因（拿去记日志）。
+
+    只管那些"一眼就不对"的情况。判断不了的一律放行 —— 与其用一堆似是而非的规则
+    拦掉好问题，不如只拦确定坏的，剩下的交给服务端锁住的阶段本身。
+    """
+    text = " ".join(str(question or "").split())
+    if not text:
+        return "空问题"
+    if len(text) < _INTERVIEW_QUESTION_MIN:
+        return f"太短（{len(text)} 字）"
+    if len(text) > _INTERVIEW_QUESTION_MAX:
+        return f"太长（{len(text)} 字）"
+    if text.count("？") + text.count("?") > 1:
+        return "一次问了多件事"
+    if _FORM_QUESTION_PATTERN.search(text):
+        return "问成了选择题"
+    asked = {
+        _normalise_question(turn.get("question"))
+        for turn in (dialogue or [])
+        if isinstance(turn, dict) and turn.get("question")
+    }
+    if _normalise_question(text) in asked:
+        return "和已经问过的一问重复"
+    return ""
+
+
+def _usable_direction(dialogue: list[dict]) -> str:
+    """第 1 题的答案能不能当成"想学的方向"引用进后面的问题；不能就返回空串。"""
+    answer = _answer_excerpt(dialogue, 0, "")
+    if not answer or answer.lower() in _NON_DIRECTION_ANSWERS:
+        return ""
+    # 单个数字或符号（"1"、"？"）不是方向；单个汉字或字母（"学"、"a"）可能是。
+    if len(answer) < 2 and not answer.isalpha():
+        return ""
+    return answer
+
+
 def _fallback_interview_question(step: int, dialogue: list[dict], max_steps: int = 5) -> dict:
-    first = _answer_excerpt(dialogue, 0, "你最近想做成的事情")
+    first = _usable_direction(dialogue)
     # Keep the learning progression stable, while varying the conversational angle
     # so a fallback response does not sound like a repeated questionnaire.
     seed_text = " ".join(str(item.get("answer", "") or "") for item in (dialogue or []))
@@ -360,7 +468,8 @@ def _fallback_interview_question(step: int, dialogue: list[dict], max_steps: int
         ],
     ]
     idx = max(0, min(step, len(question_variants) - 1))
-    variants = question_variants[idx]
+    # 方向不可用时换成不引用回答的那一套，而不是把「1」嵌进模板
+    variants = question_variants[idx] if first else (_GENERIC_QUESTION_VARIANTS[idx] or question_variants[idx])
     question = variants[(seed + step) % len(variants)]
     return {"question": question, "finish": step >= max_steps - 1}
 
@@ -519,7 +628,7 @@ class PortraitChatHistory_Service:
 
         dialogue_text = _format_dialogue(dialogue)
         if not dialogue_text and step == 0:
-            return _fallback_interview_question(step, dialogue, max_steps)
+            return {**_fallback_interview_question(step, dialogue, max_steps), "source": "fallback"}
 
         try:
             from backend.src.ai_core.llm_config import llm
@@ -527,25 +636,36 @@ class PortraitChatHistory_Service:
             from backend.src.utils.json_parser import parse_llm_json
 
             template = load_prompt("portrait/interview_next")
+            # 只把"这一问属于哪一段"的要求交给模型。它看不到后面的阶段，
+            # 所以跳阶段/跑题在提示词层面就没有落点。
+            stage_instruction = _INTERVIEW_STAGES[min(step, len(_INTERVIEW_STAGES) - 1)]
             prompt = fill_prompt(
                 template,
                 step=str(step + 1),
                 max_steps=str(max_steps),
+                stage_instruction=stage_instruction,
                 dialogue_text=dialogue_text or "暂无，准备提出第一问",
             )
             response = await asyncio.wait_for(
                 llm.ainvoke(prompt, priority="low", user_id=int(user_id), pool="portrait"),
-                timeout=10,
+                timeout=_INTERVIEW_LLM_TIMEOUT,
             )
             result = parse_llm_json(response.content.strip())
             question = str(result.get("question", "") if isinstance(result, dict) else "").strip()
             finish = bool(result.get("finish", False)) if isinstance(result, dict) else False
-            if question and 8 <= len(question) <= 90:
-                return {"question": question, "finish": finish or step >= max_steps - 1}
+            reason = _question_rejection_reason(question, dialogue, step)
+            if not reason:
+                # source 是给前端用的：它先显示本地兜底题、只在模型版本回来时替换，
+                # 必须能区分"这是模型写的"和"这是兜底"，否则会把一句模板题换成另一句。
+                return {"question": question, "finish": finish or step >= max_steps - 1, "source": "agent"}
+            logger.warning(
+                "画像访谈下一问不合用（%s），使用兜底问题 user_id=%s step=%s 内容=%r",
+                reason, user_id, step, question[:60],
+            )
         except Exception:
-            logger.debug("画像访谈下一问生成失败，使用兜底问题 user_id=%s step=%s", user_id, step, exc_info=True)
+            logger.warning("画像访谈下一问生成失败，使用兜底问题 user_id=%s step=%s", user_id, step, exc_info=True)
 
-        return _fallback_interview_question(step, dialogue, max_steps)
+        return {**_fallback_interview_question(step, dialogue, max_steps), "source": "fallback"}
 
     @staticmethod
     async def init_from_dialogue(

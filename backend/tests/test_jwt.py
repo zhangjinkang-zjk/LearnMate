@@ -13,7 +13,7 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from jose import jwt, JWTError
 
-from backend.src.utils.jwt import create_access_token, decode_token
+from backend.src.utils.jwt import JWT_EXPIRE_MINUTES, create_access_token, decode_token
 
 
 class TestCreateAccessToken:
@@ -49,15 +49,22 @@ class TestCreateAccessToken:
         payload = decode_token(token)
         assert payload["role"] == "admin"
 
-    def test_expiry_7_days_later(self):
-        """Token 默认 7 天后过期"""
+    def test_expiry_follows_the_configured_ttl(self):
+        """Token 的有效期等于配置的 JWT_EXPIRE_MINUTES（代码内置默认是 7 天）。
+
+        不能写死 7 天：这个常量是模块级读环境变量的，而 .env 被别的模块 import 时
+        就加载了，所以 .env 里配了 JWT_EXPIRE_MINUTES 时（比如调试期调短），
+        写死天数的断言会因为 import 顺序而时红时绿。这里钉的是"配置真的生效了"。
+        """
         token = create_access_token(user_id=1)
         payload = decode_token(token)
         exp = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
         now = datetime.now(timezone.utc)
-        # 过期时间应该在 6~8 天之间（留点余量）
+
+        expected = timedelta(minutes=JWT_EXPIRE_MINUTES)
         diff = exp - now
-        assert timedelta(days=6) < diff < timedelta(days=8)
+        # 留一分钟余量给签发到断言之间的耗时
+        assert expected - timedelta(minutes=1) < diff < expected + timedelta(minutes=1)
 
     def test_iat_field_present(self):
         """Payload 应包含 iat (签发时间) 字段"""

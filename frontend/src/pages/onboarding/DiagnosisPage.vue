@@ -46,6 +46,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { diagnosisApi } from '@/shared/api/diagnosisApi'
+import { applyWorkflowEvent, finishWorkflow, resetWorkflow } from '@/entities/agent/agentWorkflowState'
 import { learningState } from '@/entities/learning/learningState'
 import ImmersiveOnboardingBackdrop from '@/shared/ui/ImmersiveOnboardingBackdrop.vue'
 
@@ -70,19 +71,39 @@ const context = computed(() => ({
   goal: learningState.goal || localStorage.getItem('learnmate_goal') || '',
 }))
 
+// /learning/diagnosis/start 要求身份、学习方向、学习目标都非空。方向/目标是画像访谈
+// 问出来再写回本地的（DirectionSetupPage 那一步只强制身份），所以正常走完访谈这里
+// 一定有值；万一没有（直接打开这个地址、或本地存储被清过），就在本地拦住。
+const missingContext = computed(() => [
+  !context.value.identity && '身份',
+  !context.value.direction && '学习方向',
+  !context.value.goal && '学习目标',
+].filter(Boolean))
+
 function questionText(question) {
   return question?.content || question?.title || ''
 }
 
 async function startDiagnosis() {
-  isLoading.value = true
   isFinished.value = false
-  errorMessage.value = ''
   answeredCount.value = 0
   answerDraft.value = ''
   currentQuestion.value = null
-  loadingMessage.value = '正在根据你的学习方向生成第一道诊断题'
+  errorMessage.value = ''
   messages.value = [{ role: 'assistant', text: '我会根据你的学习方向，从基础理解开始了解你的起点。每次只回答一个问题即可。' }]
+  // 诊断是独立的一条工作流（workflowKind='diagnosis'），阶段表只有"学情诊断"。
+  resetWorkflow({ title: '学情诊断', workflowKind: 'diagnosis' })
+
+  const missing = missingContext.value
+  if (missing.length) {
+    // 不发这个注定 422 的请求，也别让 Pydantic 的校验结构体画到页面上。
+    isLoading.value = false
+    errorMessage.value = `还缺少${missing.join('、')}，请返回上一步完成学习访谈后再开始诊断。`
+    return
+  }
+
+  isLoading.value = true
+  loadingMessage.value = '正在根据你的学习方向生成第一道诊断题'
   try {
     const result = await diagnosisApi.startStream({ ...context.value, max_steps: totalQuestions }, handleStreamEvent)
     sessionId.value = result.session_id
@@ -91,6 +112,7 @@ async function startDiagnosis() {
   } catch (error) {
     failedStep.value = 'start'
     errorMessage.value = error.response?.data?.detail || error.message || '暂时无法开始能力诊断，请检查网络后重试。'
+    finishWorkflow(true)
   } finally {
     isLoading.value = false
   }
@@ -125,6 +147,7 @@ async function submitAnswer() {
     answerDraft.value = ''
     if (result.finished) {
       isFinished.value = true
+      finishWorkflow(false)
       sessionStorage.setItem('learnmate_diagnosis_result', JSON.stringify(result.result || {}))
       messages.value.push({ role: 'assistant', text: result.result?.message || '正在生成诊断结果…' })
       window.setTimeout(() => router.push('/learnmate-summary'), 500)
@@ -144,6 +167,9 @@ async function submitAnswer() {
 }
 
 function handleStreamEvent(event) {
+  // 同一条流同时喂给全局"智能体流程"抽屉，学情诊断才能作为协同闭环里的第一个
+  // 角色被看见（写法与资料生成弹窗、学习路径页一致）。
+  if (event?.type === 'agent_event') applyWorkflowEvent(event)
   if (event?.type === 'status' && event.message) loadingMessage.value = event.message
   if (event?.type === 'keepalive') loadingMessage.value = '仍在分析中，请稍候'
 }

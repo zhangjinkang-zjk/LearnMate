@@ -402,24 +402,25 @@ async def submit_node_quiz(
 
 @router.post("/{path_id}/video")
 async def generate_path_video(path_id: int, user_id: int = Depends(get_user_id_from_token)):
-    """为整条学习路径生成一个综合视频课件"""
+    """启动（或接入）路径视频生成，立即返回状态。
+
+    生成要跑几分钟，不能再让请求同步等它——那样必然撞上前端超时，而后端继续跑完，
+    用户看到的就是"报错但后端还在忙"。现在返回 status，由前端轮询 GET 取结果；
+    生成失败也不再是 500，而是 status="failed" + error，前端才读得到原因。
+    """
     await _assert_path_access(path_id, user_id)
     try:
-        result = await PathService.generate_path_video(path_id, user_id)
+        result = await PathService.start_path_video(path_id, user_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
     return {"code": 200, "msg": "success", "data": result}
 
 
 @router.get("/{path_id}/video")
 async def get_path_video(path_id: int, user_id: int = Depends(get_user_id_from_token)):
-    """获取路径已有的视频课件"""
+    """获取路径视频的当前状态（前端轮询目标）"""
     await _assert_path_access(path_id, user_id)
     result = await PathService.get_path_video(path_id, user_id)
-    if not result:
-        return {"code": 200, "msg": "success", "data": None}
     return {"code": 200, "msg": "success", "data": result}
 
 

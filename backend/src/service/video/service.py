@@ -20,6 +20,7 @@ from backend.src.models.resource_model import GeneratedResource
 from backend.src.models.notification_model import Notification
 from backend.src.models.chat_history_model import ChatHistory
 from backend.src.ai_core.llm_config import llm
+from backend.src.ai_core.agent_names import LEADER_AGENT, SAVER_AGENT, resource_agent_name
 from backend.src.utils.prompt_loader import load_prompt, fill_prompt
 from backend.src.utils.exceptions import ServiceError
 from backend.src.utils.chat_utils import allocate_chat_group_id
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 SRC_DIR = Path(__file__).resolve().parents[2]
 TEMPLATE_PATH = SRC_DIR / "ai_core" / "prompts" / "presentation" / "template.html"
 TEMPLATE_VIDEO_PATH = SRC_DIR / "ai_core" / "prompts" / "presentation" / "template_video.html"
-PRESENTATION_TEMPLATE_VERSION = "visual-v6"
+PRESENTATION_TEMPLATE_VERSION = "visual-v7"
 VIDEO_TEMPLATE_VERSION = "video-v5"
 DEFAULT_VIDEO_VOICE = "zh-CN-XiaoxiaoNeural"
 
@@ -813,13 +814,13 @@ async def _notify_sse(presentation_id: int, data: dict):
 
 
 _VIDEO_PROGRESS_AGENT_MAP = {
-    "portrait_intro": ("leader", "LeaderAgent", "leader", None),
+    "portrait_intro": ("leader", LEADER_AGENT, "leader", None),
     "generate_document": ("executor:document", "文档生成智能体", "executor", "document"),
     "generate_ppt": ("executor:ppt", "PPT生成智能体", "executor", "ppt"),
     "build_intro": ("executor:document", "文档生成智能体", "executor", "document"),
     "build_ppt": ("executor:ppt", "PPT生成智能体", "executor", "ppt"),
-    "generate_resources": ("executor", "视频生成智能体", "executor", None),
-    "render_html": ("saver", "ResourceService", "saver", None),
+    "generate_resources": ("executor", resource_agent_name("video"), "executor", None),
+    "render_html": ("saver", SAVER_AGENT, "saver", None),
     "audio": ("executor:audio", "TTS生成智能体", "executor", None),
     "done": ("complete", "完成", "complete", None),
     "error": ("complete", "生成失败", "complete", None),
@@ -850,7 +851,7 @@ def _push_agent_progress(
     """给前端智能体工作流面板推送统一事件。"""
     agent_id, agent_name, phase, resource_type = _VIDEO_PROGRESS_AGENT_MAP.get(
         step,
-        ("executor", "视频生成智能体", "executor", None),
+        ("executor", resource_agent_name("video"), "executor", None),
     )
     event = {
         "type": "agent_event",
@@ -2266,6 +2267,55 @@ def _render_html(topic: str, sections: list[dict], segments: list[dict] | None =
     html = html.replace("{{SLIDES_HTML}}", slides_html)
     version_tag = f"<!-- template-version:{VIDEO_TEMPLATE_VERSION} -->" if is_video else f"<!-- template-version:{PRESENTATION_TEMPLATE_VERSION} -->"
     return f"{version_tag}\n{html}"
+
+
+async def rerender_presentation_html(video_id: int, topic: str) -> dict | None:
+    """用已有 Video 记录的 chapters_json 重渲染 HTML 外壳，不重跑 LLM / TTS。
+
+    模板改动（bump PRESENTATION_TEMPLATE_VERSION）后，老 deck 靠这条路径秒级升级：
+    chapters_json 里已经存着 slides、audio_url 和 word_timestamps，盘上的音频也还在，
+    只有那一层 HTML 需要换掉。不这样做的话，每次调模板都要把每条视频的 PPT 和音频
+    全部重做一遍（1–3 分钟/条）。
+
+    数据不全时返回 None，由调用方回落到完整的 generate 流程。
+    """
+    record = await Video.filter(id=video_id).first()
+    if not record or not record.chapters_json:
+        return None
+    try:
+        chapters = json.loads(record.chapters_json)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("重渲染跳过：chapters_json 无法解析 video_id=%s", video_id, exc_info=True)
+        return None
+    if not isinstance(chapters, list) or not chapters:
+        return None
+
+    # 音频还没补完（后台仍在生成）时不能重渲染，否则会渲染出一个没有声音的 deck。
+    # _build_audio_segments 会跳过没有 audio_url 的 slide，所以这里按 slide 数自己数。
+    expected = sum(len(ch.get("slides") or []) for ch in chapters)
+    ready = sum(1 for ch in chapters for sl in (ch.get("slides") or []) if sl.get("audio_url"))
+    if expected == 0 or ready < expected:
+        logger.info("重渲染跳过：音频未就绪 video_id=%s ready=%s/%s", video_id, ready, expected)
+        return None
+
+    html = _render_html(topic, chapters, _build_audio_segments(chapters), template_path=None)
+    filename = f"{_safe_filename(topic)}_{uuid.uuid4().hex[:8]}.html"
+    file_path = VIDEOS_DIR / filename
+    # 与生成路径共用同一把锁，避免和正在补音频的那条链路交错写盘
+    async with _get_video_audio_flush_lock(record.id):
+        VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+        _write_text_atomic(file_path, html)
+        _remember_template_version(file_path, PRESENTATION_TEMPLATE_VERSION)
+        record.file_url = f"/static/presentations/{filename}"
+        await record.save()
+
+    logger.info(
+        "视频 HTML 已按模板 %s 重渲染 video_id=%s file=%s",
+        PRESENTATION_TEMPLATE_VERSION, video_id, filename,
+    )
+    # 返回形态与 generate() 对齐（带 ?v=），否则 _create_video_html 的两个分支
+    # 会把同一个字段以两种形态交给前端。
+    return {"id": video_id, "file_url": _versioned_presentation_url(record.file_url)}
 
 
 def _safe_filename(topic: str) -> str:

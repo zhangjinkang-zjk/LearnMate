@@ -39,9 +39,23 @@
     </div>
 
     <section v-if="evaluation" class="practice-evaluation" aria-live="polite">
-      <div><p class="eyebrow">提交结果</p><strong>{{ evaluation.label }}</strong><p>{{ evaluation.passed ? '这次方案已经达到当前任务的验收线。' : '方案已经保存，下面是下一轮需要补强的地方。' }}</p></div>
-      <strong class="practice-evaluation__score">{{ evaluation.score }}<small>分</small></strong>
-      <ul><li v-for="item in evaluation.next_steps || []" :key="item">{{ item }}</li></ul>
+      <div class="practice-evaluation__head">
+        <div>
+          <p class="eyebrow">提交结果</p>
+          <strong>{{ evaluation.label }}</strong>
+          <p>{{ evaluation.passed ? '这次方案已经达到当前任务的验收线。' : '方案已经保存，下面是下一轮需要补强的地方。' }}</p>
+          <p v-if="evaluationStatus === 'reviewing'" class="practice-evaluation__note"><LoaderCircle class="spin" :size="12" />智能体正在复核这份评价，结果出来会自动更新</p>
+          <p v-else-if="evaluation.source === 'agent'" class="practice-evaluation__note"><CheckCircle2 :size="12" />已由智能体复核</p>
+        </div>
+        <strong class="practice-evaluation__score">{{ evaluation.score }}<small>分</small></strong>
+      </div>
+      <ul v-if="evaluationCriteria.length" class="practice-criteria">
+        <li v-for="item in evaluationCriteria" :key="item.label" :class="{ 'is-passed': item.passed }"><CheckCircle2 v-if="item.passed" :size="13" /><Circle v-else :size="13" />{{ item.label }}</li>
+      </ul>
+      <div class="practice-evaluation__notes">
+        <div v-if="evaluation.strengths?.length"><p class="eyebrow">已经做到</p><ul><li v-for="item in evaluation.strengths" :key="item">{{ item }}</li></ul></div>
+        <div v-if="evaluation.next_steps?.length"><p class="eyebrow">下一步</p><ul><li v-for="item in evaluation.next_steps" :key="item">{{ item }}</li></ul></div>
+      </div>
     </section>
     <p v-if="errorMessage" class="practice-error" role="status">{{ errorMessage }}</p>
     <form v-if="!evaluation" class="practice-composer" @submit.prevent="sendMessage()">
@@ -62,7 +76,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { CheckCircle2, LoaderCircle, Send } from 'lucide-vue-next'
+import { CheckCircle2, Circle, LoaderCircle, Send } from 'lucide-vue-next'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { advancedLearningApi } from '@/shared/api/advancedLearningApi'
 import { renderMarkdown } from '@/shared/lib/markdown'
@@ -94,12 +108,21 @@ const isLoadingSession = ref(false)
 const isSubmitting = ref(false)
 const sessionId = ref('')
 const evaluation = ref(null)
+const evaluationStatus = ref('none')
 const confirmedFacts = ref([])
 const assumptions = ref([])
 const messageList = ref(null)
 let requestController = null
 let sessionLoadVersion = 0
+// 提交后先拿到一份确定性评价（不用等），智能体的复核在后台跑完会覆盖它 ——
+// 判分实测要几十秒，而 httpClient 超时只有 15 秒，所以同步判分必然失败。
+const EVALUATION_POLL_INTERVAL_MS = 3000
+const EVALUATION_POLL_MAX_TRIES = 40
+let evaluationPoll = 0
+let evaluationTries = 0
 const currentPhaseIndex = computed(() => phases.findIndex((phase) => phase.id === currentPhase.value.id))
+// 四个评分维度的 label 由服务端给（判分器只填 passed），前端不自己拼一份
+const evaluationCriteria = computed(() => (Array.isArray(evaluation.value?.criteria) ? evaluation.value.criteria : []))
 const phaseProgress = computed(() => Math.round((completedPhaseIds.value.length / phases.length) * 100))
 const canSubmit = computed(() => messages.value.some((message) => message.role === 'user' && message.text?.trim()))
 
@@ -110,6 +133,7 @@ function createWelcome() {
 function resetConversation() {
   requestController?.abort()
   requestController = null
+  clearEvaluationPoll()
   currentPhase.value = phases[0]
   completedPhaseIds.value = []
   messages.value = [createWelcome()]
@@ -119,8 +143,30 @@ function resetConversation() {
   isSubmitting.value = false
   sessionId.value = ''
   evaluation.value = null
+  evaluationStatus.value = 'none'
   confirmedFacts.value = []
   assumptions.value = []
+}
+
+function clearEvaluationPoll() {
+  if (evaluationPoll) { window.clearTimeout(evaluationPoll); evaluationPoll = 0 }
+}
+
+// 服务端的评价还在复核时轮询它。取不到就等下一轮 —— 界面上那份基线评价一直是有效的，
+// 轮询失败不该把它变成错误态。
+function scheduleEvaluationPoll() {
+  clearEvaluationPoll()
+  if (evaluationStatus.value !== 'reviewing' || !sessionId.value) return
+  if (evaluationTries >= EVALUATION_POLL_MAX_TRIES) return
+  evaluationPoll = window.setTimeout(async () => {
+    evaluationTries += 1
+    try {
+      hydrateSession(unwrap(await advancedLearningApi.getPracticeSession(sessionId.value)))
+    } catch {
+      // 忽略：下一轮再试，或者用户在别处已经看到基线评价
+    }
+    scheduleEvaluationPoll()
+  }, EVALUATION_POLL_INTERVAL_MS)
 }
 
 function unwrap(response) {
@@ -141,6 +187,7 @@ function hydrateSession(session) {
   confirmedFacts.value = Array.isArray(session?.confirmed_facts) ? session.confirmed_facts : []
   assumptions.value = Array.isArray(session?.assumptions) ? session.assumptions : []
   evaluation.value = session?.evaluation || null
+  evaluationStatus.value = session?.evaluation_status || 'none'
 }
 
 async function initializeSession() {
@@ -177,9 +224,22 @@ function sessionPayload() {
   }
 }
 
+// 阶段进度是服务端的账本：`completed_phase_ids` 由智能体回复里的 [[PHASE:done]] 标记
+// 推进，客户端传的值服务端会忽略。这里只做展示同步。
+function applyPhaseState(state) {
+  const ids = Array.isArray(state?.completed_phase_ids)
+    ? state.completed_phase_ids.filter((id) => phases.some((item) => item.id === id))
+    : null
+  if (ids) completedPhaseIds.value = ids
+  const phase = phases.find((item) => item.id === state?.current_phase)
+  if (phase) currentPhase.value = phase
+}
+
 async function saveSessionState() {
   if (!sessionId.value || evaluation.value) return
-  await advancedLearningApi.savePracticeSession(sessionId.value, sessionPayload())
+  const saved = unwrap(await advancedLearningApi.savePracticeSession(sessionId.value, sessionPayload()))
+  // 用服务端返回的状态校准本地：这次回复可能没有触发标记，服务端手里才是真实进度。
+  if (saved?.session_id) applyPhaseState(saved)
 }
 
 function selectPhase(phase) {
@@ -230,19 +290,26 @@ async function sendMessage(forcedText = '', options = { advancesPhase: true }) {
         type: 'practice',
         title: props.task.title,
         phase: currentPhase.value.label,
+        // 请求提示这一轮不该记进度，服务端据此不认这一轮的阶段标记。
+        phase_advance: options.advancesPhase !== false,
         script: [props.task.brief, props.task.problem, `当前阶段：${currentPhase.value.label}`, `重点能力：${props.task.focus}`, `验收标准：${(props.task.criteria || []).join('；')}`, props.chapterContent ? `主讲材料摘要：${props.chapterContent.slice(0, 1200)}` : '当前没有可用主讲材料'].filter(Boolean).join('\n'),
         points: (props.task.constraints || []).slice(0, 6),
         question: { prompt: `请围绕${currentPhase.value.label}推进任务。` },
       },
     }, (event) => {
       if (event?.error) throw new Error(event.error)
+      if (event?.type === 'phase') {
+        applyPhaseState(event)
+        return
+      }
       if ((event?.type === 'chunk' || event?.type === 'content') && event.content) {
         responseMessage.text += String(event.content)
         scrollToLatest()
       }
     }, requestController.signal)
     if (!responseMessage.text.trim()) throw new Error('LearnMate 暂时没有返回有效追问')
-    if (options.advancesPhase !== false) advancePhase()
+    // 阶段推进交给服务端：它读智能体回复末尾的 [[PHASE:done]] 标记（见 applyPhaseState）。
+    // 这里以前会无条件 advancePhase()，等于学生每说一句话就自动过一关。
     await saveSessionState()
   } catch (error) {
     if (error.name === 'AbortError') return
@@ -263,7 +330,8 @@ async function endSession() {
     await saveSessionState()
     const response = await advancedLearningApi.endPracticeSession(sessionId.value)
     hydrateSession(unwrap(response))
-    emit('end')
+    // 带上 session id：父组件要拿它请服务端按会话记录写一份过程小结。
+    emit('end', sessionId.value)
   } catch (error) {
     errorMessage.value = error.response?.data?.detail || error.message || '巩固状态保存失败，请稍后重试。'
   }
@@ -282,6 +350,7 @@ async function submitSolution() {
     const saved = unwrap(response)
     hydrateSession(saved)
     emit('completed', saved?.evaluation || null)
+    scheduleEvaluationPoll()
   } catch (error) {
     errorMessage.value = error.response?.data?.detail || error.message || '方案提交失败，请稍后重试。'
   } finally {
@@ -289,18 +358,11 @@ async function submitSolution() {
   }
 }
 
-function advancePhase() {
-  const index = currentPhaseIndex.value
-  if (index < 0) return
-  if (!completedPhaseIds.value.includes(currentPhase.value.id)) completedPhaseIds.value = [...completedPhaseIds.value, currentPhase.value.id]
-  const nextPhase = phases[index + 1]
-  if (nextPhase) currentPhase.value = nextPhase
-}
-
 watch(() => props.task?.id, () => { void initializeSession() }, { immediate: true })
 onBeforeUnmount(() => {
   sessionLoadVersion += 1
   requestController?.abort()
+  clearEvaluationPoll()
 })
 </script>
 
@@ -341,12 +403,19 @@ onBeforeUnmount(() => {
 .practice-dialogue .button--secondary { border-color: #d5e2c8; background: #eef5e6; color: var(--accent-deep); }
 .practice-dialogue .button--secondary:hover { border-color: #b9c9b2; background: #e3eed9; }
 .practice-session-loading { display: grid; min-height: 280px; place-items: center; color: var(--muted); font-size: 12px; }
-.practice-evaluation { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(180px, .8fr); align-items: center; gap: 18px; padding: 18px 22px; border-top: 1px solid var(--line); background: #f3f8ea; }
+.practice-evaluation { display: grid; gap: 12px; padding: 16px 20px; border-top: 1px solid var(--line); background: #f3f8ea; }
+.practice-evaluation__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .practice-evaluation .eyebrow { margin-bottom: 5px; }
-.practice-evaluation > div > strong { color: var(--accent-deep); font-size: 15px; }
+.practice-evaluation__head > div > strong { color: var(--accent-deep); font-size: 15px; }
 .practice-evaluation p:not(.eyebrow) { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
-.practice-evaluation__score { color: var(--accent-deep); font-size: 30px; line-height: 1; }
+.practice-evaluation__note { display: flex; align-items: center; gap: 5px; }
+.practice-evaluation__score { flex: 0 0 auto; color: var(--accent-deep); font-size: 30px; line-height: 1; }
 .practice-evaluation__score small { margin-left: 3px; font-size: 11px; }
-.practice-evaluation ul { display: grid; gap: 5px; margin: 0; padding-left: 17px; color: var(--muted); font-size: 11px; line-height: 1.5; }
-@media (max-width: 780px) { .practice-evaluation { grid-template-columns: 1fr auto; gap: 12px; padding: 15px 18px; }.practice-evaluation ul { grid-column: 1 / -1; } }
+/* 四个维度的判定：这是判分器真正算出来的东西，之前算完就丢了 */
+.practice-criteria { display: flex; flex-wrap: wrap; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.practice-criteria li { display: flex; align-items: center; gap: 4px; padding: 4px 9px; border: 1px solid #dfe6d8; border-radius: 99px; background: #fff; color: var(--muted); font-size: 11px; }
+.practice-criteria li.is-passed { border-color: #c8d9b7; background: #eef5e6; color: var(--accent-deep); }
+.practice-evaluation__notes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 20px; }
+.practice-evaluation__notes ul { display: grid; gap: 5px; margin: 0; padding-left: 17px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+@media (max-width: 780px) { .practice-evaluation { padding: 15px 18px; }.practice-evaluation__notes { grid-template-columns: 1fr; } }
 </style>

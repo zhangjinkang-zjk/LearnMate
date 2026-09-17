@@ -88,6 +88,10 @@ def _install(monkeypatch, llm):
 
 TITLES = ("语义边界", "窗口重叠", "召回精度")
 
+# 文档生成收尾会固定多花一次 LLM 调用做跨章节交叉验证（ConsistencyReviewer）。
+# 脚本化 LLM 在脚本外用尽就抛，所以凡是不传 skip_review=True 的用例都要给它留一条。
+_NO_CONSISTENCY_ISSUES = '{"has_issues": false, "issues": []}'
+
 
 # ── 单节重写用尽 ──────────────────────────────────────
 
@@ -149,6 +153,7 @@ async def test_chapter_validation_triggers_a_repair_round_that_converges(monkeyp
     llm = _ScriptedLlm([
         *(_short_section(t) for t in TITLES),   # 首轮：每节都合格，但整章够不到 900 字
         *(_section(t) for t in TITLES),          # 重修轮：一次修好
+        _NO_CONSISTENCY_ISSUES,                  # 收尾的跨章节交叉验证
     ])
     _install(monkeypatch, llm)
 
@@ -161,8 +166,9 @@ async def test_chapter_validation_triggers_a_repair_round_that_converges(monkeyp
     )
 
     assert validate_document_chapter(content, _teaching_context()) == []
-    assert len(llm.prompts) == 2 * len(TITLES), "应为 1 轮首轮 + 1 轮重修"
-    assert "整章校验未通过" in llm.prompts[-1], "重修必须带着校验意见，否则等于白重写"
+    assert len(llm.prompts) == 2 * len(TITLES) + 1, "应为 1 轮首轮 + 1 轮重修 + 1 次交叉验证"
+    # 重修意见在第 2 批 prompt 里；最后一条已经是交叉验证了。
+    assert "整章校验未通过" in llm.prompts[len(TITLES)], "重修必须带着校验意见，否则等于白重写"
 
 
 @pytest.mark.asyncio
@@ -172,6 +178,7 @@ async def test_chapter_still_failing_is_reported_not_fatal(monkeypatch):
     llm = _ScriptedLlm([
         *(_short_section(t) for t in TITLES),
         *(_short_section(t) for t in TITLES),
+        _NO_CONSISTENCY_ISSUES,
     ])
     _install(monkeypatch, llm)
 
@@ -195,7 +202,7 @@ async def test_chapter_still_failing_is_reported_not_fatal(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_clean_document_never_spends_a_repair_round(monkeypatch):
-    llm = _ScriptedLlm([_section(t) for t in TITLES])
+    llm = _ScriptedLlm([_section(t) for t in TITLES] + [_NO_CONSISTENCY_ISSUES])
     _install(monkeypatch, llm)
 
     await resource_graph.generate_document_parallel(
@@ -206,8 +213,9 @@ async def test_clean_document_never_spends_a_repair_round(monkeypatch):
         user_id=7,
     )
 
-    # _ScriptedLlm 在脚本外多调一次就抛，所以跑完不报错即证明没有重修轮
-    assert len(llm.prompts) == len(TITLES), "达标时不该多花一次重修"
+    # 每节一次生成 + 收尾一次跨章节交叉验证，没有重修轮。
+    # _ScriptedLlm 在脚本外多调一次就抛，所以跑完不报错即证明没有重修轮。
+    assert len(llm.prompts) == len(TITLES) + 1, "达标时不该多花一次重修"
 
 
 # ── 并行分支互不拖累 ──────────────────────────────────

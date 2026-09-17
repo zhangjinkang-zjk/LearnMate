@@ -65,6 +65,53 @@ _GENERIC_SUFFIX_RE = re.compile(
 )
 _COVERAGE_RATIO = 0.6
 
+# ── 文风观测（只统计，不拦截）────────────────────────────────────────
+# 只覆盖能用正则高置信度识别的几类套话。排比工整、句式单调、段尾强行升华不在
+# 此列：它们靠跨句结构而非字面特征，正则判不准，仍由生成侧提示词约束。
+#
+# 用 ``match``（隐含锚定句首）匹配，不搜索句中 —— "在当今""众所周知"只有出现在
+# 句子/段落开头才是套话开头，出现在句中往往是正常引用或讨论对象。
+_STYLE_SENTENCE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "套话开头",
+        re.compile(
+            r"(?:在当今|在如今|在信息化|在数字化|我们生活在一个|众所周知|"
+            r"随着[^。！？，；]{0,25}的(?:不断)?(?:发展|进步|普及|演进|推进|深入)|"
+            r"在(?:开始|学习)[^。！？]{0,12}之前)"
+        ),
+    ),
+    (
+        "空洞总结",
+        re.compile(r"(?:综上所述|由此可见|总而言之|总的来说|综上而言|总体而言)"),
+    ),
+    (
+        "过渡腔",
+        re.compile(
+            r"(?:那么[，,]?\s*什么是|接下来让我们|下面让我们|"
+            r"让我们一起|让我们一起来|接下来我们(?:将|来))"
+        ),
+    ),
+)
+# 成对出现才算套路：单说一句「最后」不算，得是「首先…其次/最后」这种并列骨架。
+_STYLE_PAIR_PATTERNS: tuple[tuple[str, str, str], ...] = (
+    ("枚举骨架", r"首先", r"其次|再次|最后"),
+    ("两面并列", r"一方面", r"另一方面"),
+)
+# 按出现次数计，不锚定位置。
+_STYLE_ANYWHERE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "副词堆砌",
+        re.compile(
+            r"(?:至关重要|具有(?:深远|重大)意义|具有重要(?:的)?意义|"
+            r"发挥着?重要(?:的)?作用|起到了?关键(?:的)?作用|极大地)"
+        ),
+    ),
+)
+_SENTENCE_SPLIT_RE = re.compile(r"[。！？；\n]+")
+# 引号内的内容多半是在"讨论"这些说法而不是"使用"它们（例如讲解如何避免套话），
+# 匹配前先摘掉，避免把教学对象误判成套话。
+_QUOTED_SPAN_RE = re.compile(r"[「『“\"'][^」』”\"']*[」』”\"']")
+
 
 def _meaningful_length(content: str) -> int:
     return len(_MEANINGFUL_RE.findall(content or ""))
@@ -285,3 +332,55 @@ def evaluate_key_point_coverage(
         if hits < max(1, math.ceil(len(terms) * _COVERAGE_RATIO)):
             missed.append(f"{point}（{hits}/{len(terms)}）")
     return missed
+
+
+def _iter_style_sentences(content: str) -> Iterator[str]:
+    """非代码行按句切开，并摘掉引号内片段，供句首套话匹配使用。"""
+    for line in _iter_non_code_lines(content):
+        normalized = _QUOTED_SPAN_RE.sub("", _normalize_markdown_line(line))
+        for sentence in _SENTENCE_SPLIT_RE.split(normalized):
+            text = sentence.strip()
+            if text:
+                yield text
+
+
+def detect_ai_style_tells(content: str) -> dict[str, int]:
+    """Advisory only: 统计命中的 AI 文风套路，返回 ``{类别: 次数}``。
+
+    刻意**不做成拦截条件**。套话是模型在同一个 prompt 下反复会犯的毛病，一旦拿它
+    否决小节，每轮重写都会撞同一条规则、烧完重试次数再走兜底 —— 比不拦更慢，而且
+    不收敛（与 ``evaluate_key_point_coverage`` 同一个理由，见那里的注释）。
+
+    它的用途是观测：看日志里的实际命中率与类别分布，再决定要不要收紧生成侧提示词。
+    真正约束文风的是 ``resource/document_section.yaml``。
+    """
+    sentences = list(_iter_style_sentences(content))
+    if not sentences:
+        return {}
+
+    tells: dict[str, int] = {}
+    for label, pattern in _STYLE_SENTENCE_PATTERNS:
+        hits = sum(1 for sentence in sentences if pattern.match(sentence))
+        if hits:
+            tells[label] = hits
+
+    joined = "\n".join(sentences)
+    for label, first, second in _STYLE_PAIR_PATTERNS:
+        hits = min(len(re.findall(first, joined)), len(re.findall(second, joined)))
+        if hits:
+            tells[label] = hits
+
+    for label, pattern in _STYLE_ANYWHERE_PATTERNS:
+        hits = len(pattern.findall(joined))
+        if hits:
+            tells[label] = hits
+
+    return tells
+
+
+def format_ai_style_tells(tells: dict[str, int]) -> str:
+    """把 ``detect_ai_style_tells`` 的结果排成一行日志用文案。"""
+    if not tells:
+        return "无"
+    ordered = sorted(tells.items(), key=lambda item: (-item[1], item[0]))
+    return " ".join(f"{label}×{count}" for label, count in ordered)

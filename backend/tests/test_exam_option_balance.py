@@ -14,10 +14,16 @@ def test_choice_answers_are_rebalanced_without_changing_correct_content():
 
     prepared = _prepare_questions_for_storage(questions)
 
-    assert [item["answer"] for item in prepared] == ["A", "B", "C", "D", "A"]
+    answers = [item["answer"] for item in prepared]
+    # 5 道题 4 个选项：正确项要铺满 A/B/C/D 而不是全挤在同一个位置。
+    # 具体顺序是打散的（种子来自题干，避免形成 A/B/C/D 的可预测循环），所以这里只钉分布。
+    assert sorted(answers) == ["A", "A", "B", "C", "D"]
     for item in prepared:
         correct = next(option for option in item["options"] if option.startswith(f"{item['answer']}."))
         assert correct.endswith("正确内容")
+
+    # 同一批题目重复准备必须得到同样的排布，否则每次落库/刷新都会把已存的题重排一遍。
+    assert _prepare_questions_for_storage(questions) == prepared
 
 
 def test_multiple_choice_answer_is_mapped_with_options():

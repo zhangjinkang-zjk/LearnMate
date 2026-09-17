@@ -218,6 +218,22 @@
       overflow-y: auto;
     }
 
+    /* intro 段落锚点：只标出"当前读到哪"，方便目光跟上，不隐藏未读内容。
+       PPT 那套 pending 隐藏 / done 淡出是 .chapter-ppt 作用域内的，这里是长文阅读，
+       刻意不复制那套效果。琥珀色与 .chapter-ppt 的 block-current 保持一致。 */
+    .chapter-intro [data-narration-block] {
+      border-left: 3px solid transparent;
+      padding-left: 14px;
+      margin-left: -17px;
+      transition: border-color 240ms ease, background 240ms ease;
+    }
+
+    .chapter-intro [data-narration-block].block-current {
+      border-left-color: rgba(255, 209, 102, 0.85);
+      background: rgba(255, 209, 102, 0.1);
+      border-radius: 0 4px 4px 0;
+    }
+
     .intro-content {
       max-width: 900px;
       margin: 0 auto;
@@ -1494,6 +1510,11 @@
       fraction = Math.max(0, Math.min(1, fraction));
       var targetMs = fraction * totalMs;
 
+      // 主动跳转是明确的"我要看那里"，立刻恢复跟随，不必等让行窗口过去
+      _lastFollowedKey = '';
+      _followPausedUntil = 0;
+
+
       var accumulated = 0;
       for (var i = 0; i < AUDIO_SEGMENTS.length; i++) {
         var dur = AUDIO_SEGMENTS[i].duration_ms;
@@ -1538,8 +1559,8 @@
               '</div></div>';
           }
           div.innerHTML = slidesHtml;
-          // 将正文文本逐字包装为 kw  span
-          div.querySelectorAll('.slide-container').forEach(function (c) { wrapChars(c); });
+          // 先补段落锚点再逐字包装：锚点决定了"当前读到哪一段"，wrapChars 只碰文本节点
+          div.querySelectorAll('.slide-container').forEach(function (c) { _stampIntroBlocks(c); wrapChars(c); });
         } else if (sec.type === 'mindmap') {
           div.innerHTML = '<h2>思维导图</h2><div id="mindmap-container">' + sec.content_html + '</div>';
         } else if (sec.type === 'ppt') {
@@ -1846,6 +1867,23 @@
         '</div></div>';
     }
 
+    // intro 的正文是服务端把整篇 markdown 渲染出来的一坨 HTML，本来没有任何段落锚点，
+    // 于是 updateNarrationBlocks 拿到 0 个块直接 return —— 既不标"读到哪"也不跟随。
+    // 这里按块级元素顺序补上编号，让 intro 和 PPT 章节共用同一套机制。
+    function _stampIntroBlocks(container) {
+      var content = container.querySelector('.slide-content');
+      if (!content) return;
+      var idx = 0;
+      Array.prototype.forEach.call(
+        content.querySelectorAll('h1, h2, h3, h4, p, li, blockquote, pre, table'),
+        function (el) {
+          // 跳过嵌套在已编号祖先里的元素（如 li > p）：querySelectorAll 是文档序，
+          // 父元素一定先被编号，否则同一段会被拆成两个锚点、切换粒度就乱了。
+          if (el.parentElement && el.parentElement.closest('[data-narration-block]')) return;
+          el.setAttribute('data-narration-block', idx++);
+        });
+    }
+
     function wrapChars(container) {
       var content = container.querySelector('.slide-content');
       if (!content) return;
@@ -2147,6 +2185,58 @@
       return slide && slide.duration_ms ? slide.duration_ms : 0;
     }
 
+    // ══════════════════════════════════════════════
+    //  自动跟随：把当前朗读的块滚进视野
+    // ══════════════════════════════════════════════
+    // 不写死 .slide-container：向上找最近的可滚动祖先。intro 命中 .slide-container
+    // （overflow-y: auto），PPT 章节因为 overflow: hidden 找不到祖先 → 天然 no-op，
+    // 不影响它"压进 16:9 一屏一页"的现有行为。
+    var _FOLLOW_PAUSE_MS = 4000;
+    var _followPausedUntil = 0;   // 用户手动滚动后的让行截止时间
+    var _lastFollowedKey = '';    // 只在"当前块"真正变化时才滚
+
+    function _nearestScroller(el) {
+      var node = el && el.parentElement;
+      while (node && node !== document.body && node !== document.documentElement) {
+        if (/(auto|scroll)/.test(window.getComputedStyle(node).overflowY) &&
+            node.scrollHeight > node.clientHeight + 4) {
+          return node;
+        }
+        node = node.parentElement;
+      }
+      return null;
+    }
+
+    // 用户自己滚的时候先让一让，否则往回翻看会被不断拽回当前段
+    function _bindFollowPause(scroller) {
+      if (scroller.dataset.followBound) return;
+      scroller.dataset.followBound = '1';
+      var pause = function () { _followPausedUntil = Date.now() + _FOLLOW_PAUSE_MS; };
+      scroller.addEventListener('wheel', pause, { passive: true });
+      scroller.addEventListener('touchstart', pause, { passive: true });
+      scroller.addEventListener('mousedown', pause);
+    }
+
+    function _followBlock(block) {
+      if (!block) return;
+      var scroller = _nearestScroller(block);
+      if (!scroller) return;
+      _bindFollowPause(scroller);
+      if (Date.now() < _followPausedUntil) return;
+
+      var sRect = scroller.getBoundingClientRect();
+      var bRect = block.getBoundingClientRect();
+      // 舒适区：容器竖向 20%~80%。块还在里面就不动 —— 既避免每帧抖动，也不跟用户抢滚动条。
+      if (bRect.top >= sRect.top + sRect.height * 0.2 &&
+          bRect.bottom <= sRect.top + sRect.height * 0.8) {
+        return;
+      }
+      scroller.scrollTo({
+        top: Math.max(0, scroller.scrollTop + (bRect.top - sRect.top) - sRect.height * 0.3),
+        behavior: 'smooth',
+      });
+    }
+
     function updateNarrationBlocks(container, slide, currentTimeMs, forceDone) {
       if (!container) return;
       var blocks = Array.prototype.slice.call(container.querySelectorAll('[data-narration-block]'));
@@ -2167,6 +2257,18 @@
         block.classList.toggle('block-done', forceDone || i < activeIndex);
         block.classList.toggle('block-pending', !forceDone && i > activeIndex);
       });
+
+      // ontimeupdate 每秒触发约 4 次，不去重会每帧重启平滑滚动动画，看着就是抖。
+      if (!forceDone) {
+        if (!container.dataset.followKey) {
+          container.dataset.followKey = 'k' + (container.dataset.slide || '0') + '_' + (Math.random() * 1e9 | 0);
+        }
+        var followKey = container.dataset.followKey + ':' + activeIndex;
+        if (followKey !== _lastFollowedKey) {
+          _lastFollowedKey = followKey;
+          _followBlock(blocks[activeIndex]);
+        }
+      }
     }
 
     function updateKaraoke() {
@@ -2215,6 +2317,12 @@
         el.classList.remove('block-current', 'block-done');
         el.classList.add('block-pending');
       });
+      // 切章 / 切页 / 跳页都会走到这里，语义都是"内容换了、从头开始"，
+      // 顺势把滚动位置和跟随状态一起复位，否则会残留上一页的滚动偏移。
+      _lastFollowedKey = '';
+      _followPausedUntil = 0;
+      document.querySelectorAll('.chapter.active .slide-container')
+        .forEach(function (el) { el.scrollTop = 0; });
     }
 
     // ══════════════════════════════════════════════

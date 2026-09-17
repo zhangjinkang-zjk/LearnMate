@@ -352,11 +352,14 @@ async def test_generic_parallel_document_assigns_a_distinct_section_to_each_prom
     monkeypatch.setattr(resource_graph, "llm", FakeLlm())
     monkeypatch.setattr(resource_graph, "kb_search", fake_kb_search)
 
+    # skip_review=True：本用例只关心"每节一个 prompt、内容各自不同"。
+    # 不收尾的话还会多一次跨章节交叉验证，那不是这里要测的东西。
     content = await resource_graph.generate_document_parallel(
         "操作系统调度",
         portrait="计算机专业学生",
         sections=list(section_titles),
         section_count=len(section_titles),
+        skip_review=True,
     )
 
     assert len(prompts) == len(section_titles)
@@ -430,6 +433,7 @@ async def test_document_section_prompts_use_teaching_context_and_call_nodes_sect
         section_count=len(section_titles),
         teaching_context=teaching_context,
         user_id=7,
+        skip_review=True,
     )
 
     assert len(prompts) == len(section_titles)

@@ -20,6 +20,26 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 
+
+# 学习资料生成期间，前端每秒轮询一次任务状态、并长期挂着一条 SSE 长连接。
+# uvicorn 的访问日志会把这些请求按秒打出来 —— 生成一份 PPT 能刷几百行
+# `GET /resource/generate/task/...`，把真正有信息的业务日志（例如审核结果）挤得根本看不见。
+# 这里按路径把这两条静音，其余接口的访问日志照常保留。
+_QUIET_ACCESS_PREFIXES = ("/resource/generate/task/",)
+
+
+class _QuietPollingAccessFilter(logging.Filter):
+    """uvicorn 访问日志的 record.args 是 (client_addr, method, path, http_version, status_code)。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not isinstance(args, tuple) or len(args) < 3:
+            return True
+        return not str(args[2]).startswith(_QUIET_ACCESS_PREFIXES)
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietPollingAccessFilter())
+
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
