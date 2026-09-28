@@ -1,6 +1,6 @@
 <template>
   <div class="library-page">
-    <PageTitle eyebrow="RESOURCE LIBRARY" title="资料库" description="根据当前画像和学习情况结合知识库生成的专属学习资料">
+    <PageTitle eyebrow="RESOURCE LIBRARY" title="资料库" description="搜索外站公开资源，查看个性化推荐，也可以管理你自己的学习资料">
       <template #actions>
         <RouterLink class="button button--quiet" to="/resources/knowledge"><Upload :size="15" />上传知识库</RouterLink>
         <button class="button button--primary" type="button" @click="generationOpen = true"><Sparkles :size="15" />生成资料</button>

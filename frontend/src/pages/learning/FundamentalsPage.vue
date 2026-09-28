@@ -114,10 +114,16 @@
             <h1>{{ activeNode?.title || '选择一个章节' }}</h1>
             <p>基础学习 · {{ learningPath.goal }}<span>第 {{ activeNodeIndex + 1 }} / {{ learningPath.nodes.length }} 章</span><span>{{ activeNode?.summary || '按学习路径逐章补齐知识基础。' }}</span></p>
           </div>
-          <div class="path-progress" aria-label="当前科目学习进度">
-            <div><span>科目进度</span><strong>{{ learningPath.progress }}%</strong></div>
-            <div class="progress-track"><div class="progress-value" :style="{ width: `${learningPath.progress}%` }"></div></div>
-            <small>已完成 {{ completedNodeCount }} / {{ learningPath.nodes.length }} 章</small>
+          <div class="lesson-context__actions">
+            <button class="button button--quiet return-resource-button" type="button" @click="returnToResourcePreview">
+              <ArrowLeft :size="15" />
+              返回资源预览
+            </button>
+            <div class="path-progress" aria-label="当前科目学习进度">
+              <div><span>科目进度</span><strong>{{ learningPath.progress }}%</strong></div>
+              <div class="progress-track"><div class="progress-value" :style="{ width: `${learningPath.progress}%` }"></div></div>
+              <small>已完成 {{ completedNodeCount }} / {{ learningPath.nodes.length }} 章</small>
+            </div>
           </div>
         </header>
 
@@ -680,6 +686,18 @@ function openFoundationResource(node, resource) {
     ...(resourceId ? { resourceId } : {}),
   }
   void router.push({ path: '/learning/fundamentals', query })
+}
+
+function returnToResourcePreview() {
+  void router.push({
+    path: '/learning/fundamentals',
+    query: {
+      ...route.query,
+      node: undefined,
+      resource: undefined,
+      resourceId: undefined,
+    },
+  })
 }
 
 function normalizeResourceId(resource) {
@@ -1694,6 +1712,8 @@ onBeforeUnmount(() => {
 .external-video-fallback .button { display: inline-flex; align-items: center; gap: 7px; margin-top: 5px; }
 .lesson-context { display: flex; align-items: center; justify-content: space-between; gap: 28px; margin-bottom: 12px; padding: 0 0 16px; border-bottom: 1px solid var(--line); }
 .lesson-context__copy { min-width: 0; }
+.lesson-context__actions { display: flex; flex: 0 0 auto; align-items: flex-end; gap: 14px; }
+.return-resource-button { gap: 6px; min-height: 36px; white-space: nowrap; }
 .lesson-context__copy .eyebrow { margin-bottom: 6px; }
 .lesson-context h1 { max-width: 920px; margin: 0; color: var(--ink); font-size: clamp(22px, 2.1vw, 30px); line-height: 1.25; }
 .lesson-context__copy > p:last-child { max-width: 880px; margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
@@ -1782,6 +1802,8 @@ onBeforeUnmount(() => {
   .resource-group__header h2 { max-width: 230px; }
   .resource-card { min-height: 100px; }
   .lesson-context { align-items: stretch; flex-direction: column; gap: 16px; }
+  .lesson-context__actions { width: 100%; align-items: stretch; flex-direction: column-reverse; gap: 9px; }
+  .return-resource-button { align-self: flex-start; }
   .path-progress { flex-basis: auto; width: min(360px, 100%); }
   .path-progress small { text-align: left; }
   .learning-layout { height: auto; grid-template-columns: 1fr; overflow: auto; }
