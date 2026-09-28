@@ -8,7 +8,7 @@
 
     <div v-else-if="pageError" class="page-state page-state--error surface">
       <CircleAlert :size="28" />
-      <strong>基础讲解暂时没有加载成功</strong>
+      <strong>基础学习暂时没有加载成功</strong>
       <p>{{ pageError }}</p>
       <button class="button button--quiet" type="button" @click="loadPage">重新加载</button>
     </div>
@@ -34,12 +34,114 @@
         <button class="button button--primary" type="button" @click="openNavigationDrawer('paths')">选择学习科目</button>
       </div>
 
+      <section v-else-if="!hasActiveLesson" class="foundation-library" aria-labelledby="foundation-library-title">
+        <header class="foundation-library__header">
+          <div>
+            <p class="eyebrow lesson-eyebrow">FOUNDATION LEARNING</p>
+            <h1 id="foundation-library-title">基础学习</h1>
+            <p>先从配套资源开始，再进入对应章节的讲解与练习。</p>
+          </div>
+          <div class="path-progress" aria-label="当前科目学习进度">
+            <div><span>{{ learningPath.goal }}</span><strong>{{ learningPath.progress }}%</strong></div>
+            <div class="progress-track"><div class="progress-value" :style="{ width: `${learningPath.progress}%` }"></div></div>
+            <small>已完成 {{ completedNodeCount }} / {{ learningPath.nodes.length }} 章</small>
+          </div>
+        </header>
+
+        <div v-if="resourceOverviewLoading" class="foundation-library__state surface" aria-live="polite">
+          <LoaderCircle class="spin" :size="22" />
+          <strong>正在整理你的学习资源</strong>
+          <p>正在同步平台生成内容和画像推荐视频。</p>
+        </div>
+        <div v-else-if="!resourceGroups.length && !externalVideoResources.length" class="foundation-library__state surface">
+          <BookOpenText :size="24" />
+          <strong>资源正在准备中</strong>
+          <p>路径已经就绪，打开任一章节后系统会生成对应的基础学习资料。</p>
+          <button class="button button--primary" type="button" @click="openNodeForResource(learningPath.nodes[0])">
+            准备第一章资源
+            <ArrowRight :size="15" />
+          </button>
+        </div>
+        <div v-else class="foundation-library__body">
+          <section v-for="group in resourceGroups" :key="group.node.id" class="resource-group">
+            <header class="resource-group__header">
+              <div>
+                <span class="resource-group__index">{{ String(group.index + 1).padStart(2, '0') }}</span>
+                <div>
+                  <p class="eyebrow">章节资源</p>
+                  <h2>{{ group.node.title }}</h2>
+                </div>
+              </div>
+              <span class="resource-group__status">{{ nodeStatusLabel(group.node.status) }}</span>
+            </header>
+            <div v-if="group.resources.length" class="resource-card-grid">
+              <button
+                v-for="resource in group.resources"
+                :key="`${group.node.id}-${resource.resource_id || resource.id}`"
+                class="resource-card surface"
+                type="button"
+                @click="openFoundationResource(group.node, resource)"
+              >
+                <span class="resource-card__icon" :class="`is-${resource.resource_type}`">
+                  <PlayCircle v-if="resource.resource_type === 'external_video' || resource.resource_type === 'video'" :size="20" />
+                  <Presentation v-else-if="resource.resource_type === 'ppt'" :size="20" />
+                  <Network v-else-if="resource.resource_type === 'mindmap'" :size="20" />
+                  <BookOpenText v-else :size="20" />
+                </span>
+                <span class="resource-card__content">
+                  <strong>{{ resource.title || resource.topic || resourceLabel(resource.resource_type) }}</strong>
+                  <small>{{ resourceTypeLabel(resource.resource_type) }}<span v-if="resource.source_label"> · {{ resource.source_label }}</span></small>
+                  <span v-if="resource.description" class="resource-card__description">{{ resource.description }}</span>
+                </span>
+                <ArrowRight class="resource-card__arrow" :size="17" />
+              </button>
+            </div>
+            <button v-else class="resource-group__empty surface" type="button" @click="openNodeForResource(group.node)">
+              <LoaderCircle v-if="group.node.status !== 'locked'" :size="17" />
+              <LockKeyhole v-else :size="17" />
+              <span>{{ group.node.status === 'locked' ? '完成前置章节后解锁资源' : '打开章节并准备配套资源' }}</span>
+              <ArrowRight :size="15" />
+            </button>
+          </section>
+
+          <section v-if="externalVideoResources.length" class="resource-group resource-group--videos">
+            <header class="resource-group__header">
+              <div>
+                <span class="resource-group__index">AI</span>
+                <div>
+                  <p class="eyebrow">画像推荐</p>
+                  <h2>为你找到的视频</h2>
+                </div>
+              </div>
+              <span class="resource-group__status">{{ externalVideoResources.length }} 个视频</span>
+            </header>
+            <div class="resource-card-grid">
+              <button
+                v-for="resource in externalVideoResources"
+                :key="`video-${resource.resource_id}`"
+                class="resource-card resource-card--video surface"
+                type="button"
+                @click="openFoundationResource(videoNode, resource)"
+              >
+                <span class="resource-card__icon is-external_video"><PlayCircle :size="20" /></span>
+                <span class="resource-card__content">
+                  <strong>{{ resource.title || resource.topic || '推荐视频' }}</strong>
+                  <small>{{ resource.source_label || '外部教学视频' }}</small>
+                  <span v-if="resource.description" class="resource-card__description">{{ resource.description }}</span>
+                </span>
+                <ArrowRight class="resource-card__arrow" :size="17" />
+              </button>
+            </div>
+          </section>
+        </div>
+      </section>
+
       <template v-else>
         <header class="lesson-context">
           <div class="lesson-context__copy">
-            <p class="eyebrow lesson-eyebrow">FOUNDATION LESSON</p>
+            <p class="eyebrow lesson-eyebrow">FOUNDATION LEARNING</p>
             <h1>{{ activeNode?.title || '选择一个章节' }}</h1>
-            <p>基础讲解 · {{ learningPath.goal }}<span>第 {{ activeNodeIndex + 1 }} / {{ learningPath.nodes.length }} 章</span><span>{{ activeNode?.summary || '按学习路径逐章补齐知识基础。' }}</span></p>
+            <p>基础学习 · {{ learningPath.goal }}<span>第 {{ activeNodeIndex + 1 }} / {{ learningPath.nodes.length }} 章</span><span>{{ activeNode?.summary || '按学习路径逐章补齐知识基础。' }}</span></p>
           </div>
           <div class="path-progress" aria-label="当前科目学习进度">
             <div><span>科目进度</span><strong>{{ learningPath.progress }}%</strong></div>
@@ -261,7 +363,23 @@
                 :title="videoResource.topic || learningPath.goal"
               />
 
-              <footer v-if="resourceView !== 'document'" class="chapter-footer surface">
+              <VideoLessonFrame
+                v-else-if="resourceView === 'external_video' && selectedExternalVideo?.embed_url"
+                :src="selectedExternalVideo.embed_url"
+                :title="selectedExternalVideo.title"
+              />
+
+              <section v-else-if="resourceView === 'external_video'" class="external-video-fallback surface">
+                <PlayCircle :size="30" />
+                <strong>{{ selectedExternalVideo?.title || '推荐视频' }}</strong>
+                <p>{{ selectedExternalVideo?.description || '该来源不支持站内嵌入播放，可以跳转到原平台观看。' }}</p>
+                <a v-if="selectedExternalVideo?.page_url" class="button button--primary" :href="selectedExternalVideo.page_url" target="_blank" rel="noreferrer">
+                  打开原平台
+                  <ArrowRight :size="15" />
+                </a>
+              </section>
+
+              <footer v-if="resourceView !== 'document' && resourceView !== 'external_video'" class="chapter-footer surface">
                 <button class="button button--quiet" type="button" :disabled="!previousNode" @click="previousNode && selectNode(previousNode.id)">
                   <ArrowLeft :size="15" />
                   上一章
@@ -350,9 +468,9 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, BookOpenText, CircleAlert, Download, ListTree, LoaderCircle, Network, Presentation, Route, Video, X } from 'lucide-vue-next'
+import { ArrowLeft, ArrowRight, BookOpenText, CircleAlert, Download, ListTree, LoaderCircle, LockKeyhole, Network, PlayCircle, Presentation, Route, Video, X } from 'lucide-vue-next'
 import ChapterCheck from '@/features/fundamentals/ChapterCheck.vue'
 import ChapterRail from '@/features/fundamentals/ChapterRail.vue'
 import LearningAssistant from '@/features/fundamentals/LearningAssistant.vue'
@@ -370,6 +488,9 @@ const route = useRoute()
 const router = useRouter()
 const isPageLoading = ref(true)
 const pageError = ref('')
+const resourceOverviewLoading = ref(false)
+const externalVideoResources = ref([])
+const selectedExternalVideo = ref(null)
 const learningPath = ref(null)
 const pathCatalog = ref([])
 const isPathsLoading = ref(true)
@@ -424,13 +545,26 @@ const VIDEO_RESTART_BACKOFF_MS = 5000
 
 const activeNodeIndex = computed(() => learningPath.value?.nodes.findIndex((node) => node.id === activeNodeId.value) ?? -1)
 const activeNode = computed(() => learningPath.value?.nodes[activeNodeIndex.value] || null)
+const hasActiveLesson = computed(() => Boolean(activeNodeId.value))
+const videoNode = computed(() => {
+  if (!learningPath.value?.nodes?.length) return null
+  return learningPath.value.nodes.find((node) => node.status !== 'locked') || learningPath.value.nodes[0]
+})
+const resourceGroups = computed(() => (learningPath.value?.nodes || [])
+  .map((node, index) => ({
+    node,
+    index,
+    resources: (node.resources || []).filter((resource) => resource?.resource_type !== 'external_video'),
+  }))
+  .filter((group) => group.resources.length || group.node.status !== 'locked'))
 const activeResource = computed(() => ({
   document: documentResource.value,
   ppt: pptResource.value,
   mindmap: mindmapResource.value,
   video: videoResource.value,
+  external_video: selectedExternalVideo.value,
 }[resourceView.value] || null))
-const activeResourceLabel = computed(() => ({ document: '主讲文档', ppt: 'PPT', mindmap: '知识结构', video: '视频讲解' }[resourceView.value] || '学习材料'))
+const activeResourceLabel = computed(() => ({ document: '主讲文档', ppt: 'PPT', mindmap: '知识结构', video: '视频讲解', external_video: '推荐视频' }[resourceView.value] || '学习材料'))
 const completedNodeCount = computed(() => learningPath.value?.nodes.filter((node) => node.status === 'completed').length || 0)
 const previousNode = computed(() => {
   if (!learningPath.value || activeNodeIndex.value <= 0) return null
@@ -488,6 +622,64 @@ function handleGlobalKeydown(event) {
 
 function errorDetail(error, fallback) {
   return error.response?.data?.detail || error.message || fallback
+}
+
+function resourceTypeLabel(type) {
+  return {
+    document: '平台讲解文档',
+    ppt: '平台视觉辅助',
+    mindmap: '平台知识结构',
+    video: '平台视频课件',
+    external_video: '画像推荐视频',
+  }[type] || '学习资源'
+}
+
+function resourceLabel(type) {
+  return resourceTypeLabel(type).replace(/^平台|^画像推荐/, '')
+}
+
+function nodeStatusLabel(status) {
+  return { completed: '已完成', in_progress: '学习中', unlocked: '已解锁', locked: '待解锁' }[status] || '待学习'
+}
+
+function parseExternalVideo(resource) {
+  let payload = { ...(resource || {}) }
+  if (typeof resource?.content === 'string') {
+    try {
+      const parsed = JSON.parse(resource.content)
+      if (parsed && typeof parsed === 'object') payload = { ...parsed, ...payload }
+    } catch {
+      // 旧数据可能只保存了摘要文本，保留资源字段即可。
+    }
+  }
+  return {
+    ...resource,
+    ...payload,
+    resource_id: resource?.resource_id || resource?.id,
+    title: payload.title || resource?.topic || '推荐视频',
+    source_label: payload.source_label || payload.source || '外部教学视频',
+    page_url: payload.page_url || resource?.file_url || resource?.url || '',
+    embed_url: payload.embed_url || '',
+  }
+}
+
+function openNodeForResource(node) {
+  if (!node || node.status === 'locked') return
+  void openFoundationResource(node, { resource_type: 'document' })
+}
+
+function openFoundationResource(node, resource) {
+  if (!node || node.status === 'locked') return
+  const resourceType = resource?.resource_type || 'document'
+  const resourceId = resource?.resource_id || resource?.id || ''
+  const query = {
+    ...route.query,
+    pathId: learningPath.value?.path_id,
+    node: node.id,
+    resource: resourceType,
+    ...(resourceId ? { resourceId } : {}),
+  }
+  void router.push({ path: '/learning/fundamentals', query })
 }
 
 function normalizeResourceId(resource) {
@@ -879,17 +1071,24 @@ async function loadPage() {
   pageError.value = ''
   pathSwitchError.value = ''
   isPathsLoading.value = true
+  resourceOverviewLoading.value = true
   try {
-    const [pathListResult, pathStatsResult, currentResult, portraitResult] = await Promise.allSettled([
+    const [pathListResult, pathStatsResult, currentResult, portraitResult, resourceListResult] = await Promise.allSettled([
       fundamentalsApi.listPaths(),
       fundamentalsApi.getPathStats(),
       fundamentalsApi.getCurrentPath(),
       readPortrait(),
+      resourceApi.list(),
     ])
     const pathList = pathListResult.status === 'fulfilled' && Array.isArray(pathListResult.value) ? pathListResult.value : []
     const pathStats = pathStatsResult.status === 'fulfilled' ? pathStatsResult.value : null
     let current = currentResult.status === 'fulfilled' ? currentResult.value : null
     const portrait = portraitResult.status === 'fulfilled' ? portraitResult.value : null
+    externalVideoResources.value = resourceListResult.status === 'fulfilled'
+      ? resourceListResult.value
+        .filter((resource) => resource?.resource_type === 'external_video')
+        .map(parseExternalVideo)
+      : []
     const relatedSubjects = Array.isArray(portrait?.traits?.learning_direction_subjects)
       ? portrait.traits.learning_direction_subjects
       : []
@@ -912,14 +1111,15 @@ async function loadPage() {
     }
     learningPath.value = current
     syncPathCatalog(current)
-    const initialNode = chooseInitialNode(current, route.query.node)
+    const requestedNodeId = Number(route.query.node)
+    const initialNode = requestedNodeId > 0 ? chooseInitialNode(current, requestedNodeId) : null
     if (selectedPathId && (Number(route.query.pathId) !== Number(selectedPathId)
       || (initialNode && Number(route.query.node) !== Number(initialNode.id)))) {
       await router.replace({
         query: {
           ...route.query,
           pathId: selectedPathId,
-          ...(initialNode ? { node: initialNode.id } : {}),
+          ...(initialNode ? { node: initialNode.id } : { node: undefined, resource: undefined, resourceId: undefined }),
         },
       })
     }
@@ -931,6 +1131,7 @@ async function loadPage() {
     pageError.value = errorDetail(error, '无法读取当前学习路径，请稍后重试。')
   } finally {
     isPathsLoading.value = false
+    resourceOverviewLoading.value = false
     isPageLoading.value = false
   }
 }
@@ -951,17 +1152,9 @@ async function selectPath(pathId) {
     videoResource.value = null
     videoError.value = ''
     activeNodeId.value = null
+    selectedExternalVideo.value = null
     syncPathCatalog(selected)
-    const initialNode = chooseInitialNode(selected)
-    await router.replace({ query: { ...route.query, pathId: nextPathId, node: initialNode?.id } })
-    if (initialNode) {
-      isPageLoading.value = false
-      // Path selection should finish before the potentially slow document
-      // generation begins, so the user can switch to another subject anytime.
-      void selectNode(initialNode.id, false).catch((error) => {
-        if (error?.name !== 'AbortError') pathSwitchError.value = errorDetail(error, '本章材料加载失败，请稍后重试。')
-      })
-    }
+    await router.replace({ query: { ...route.query, pathId: nextPathId, node: undefined, resource: undefined, resourceId: undefined } })
   } catch (error) {
     pathSwitchError.value = errorDetail(error, '无法打开这条学习路径，请稍后重试。')
   } finally {
@@ -982,22 +1175,33 @@ async function selectNodeFromDrawer(nodeId) {
 async function selectNode(nodeId, updateUrl = true) {
   const node = learningPath.value?.nodes.find((item) => item.id === nodeId)
   if (!node || node.status === 'locked') return
+  const selectedResourceType = updateUrl
+    ? 'document'
+    : (['document', 'ppt', 'mindmap', 'external_video'].includes(String(route.query.resource))
+        ? String(route.query.resource)
+        : 'document')
   // Captured before activeNodeId is reassigned below, otherwise it always matches.
   const isSameLoadedNode = activeNodeId.value != null
     && Number(activeNodeId.value) === Number(nodeId)
     && Boolean(documentContent.value)
+  const requestedResourceType = selectedResourceType
+  const requestedResourceReady = requestedResourceType === 'document'
+    || (requestedResourceType === 'ppt' && Boolean(pptContent.value))
+    || (requestedResourceType === 'mindmap' && Boolean(mindmapContent.value))
+    || (requestedResourceType === 'external_video' && Boolean(selectedExternalVideo.value))
   if (activeNodeId.value && activeNodeId.value !== nodeId) await reportReadDuration(true)
   activeNodeId.value = nodeId
-  resourceView.value = 'document'
+  resourceView.value = selectedResourceType
+  selectedExternalVideo.value = null
   resourceDownloadError.value = ''
   isChecking.value = false
-  if (updateUrl) router.replace({ query: { ...route.query, node: nodeId } })
+  if (updateUrl) await router.replace({ query: { ...route.query, node: nodeId, resource: 'document', resourceId: undefined } })
   // Re-selecting the chapter already on screen only needs the view state reset above.
   // Posting generate-resources again would re-run the idempotent backend path for
   // nothing. documentContent is cleared at the start of every loadActiveNode and only
   // refilled on a successful read, so it means "this chapter is already usable".
   // Keeping documentError out of the condition leaves the retry path reachable.
-  if (isSameLoadedNode && !isResourceLoading.value && !documentError.value) return
+  if (isSameLoadedNode && requestedResourceReady && !isResourceLoading.value && !documentError.value) return
   await loadActiveNode()
 }
 
@@ -1012,12 +1216,14 @@ async function loadActiveNode() {
   documentError.value = ''
   mindmapError.value = ''
   pptError.value = ''
+  videoError.value = ''
   resourceGenerationError.value = ''
   resourceDownloadError.value = ''
   nodeDetail.value = null
   documentResource.value = null
   documentContent.value = ''
   documentAnnotations.value = []
+  selectedExternalVideo.value = null
   pptResource.value = null
   pptContent.value = ''
   mindmapResource.value = null
@@ -1043,8 +1249,29 @@ async function loadActiveNode() {
     const documentSummary = findResource(resources, 'document')
     const pptSummary = findResource(resources, 'ppt')
     const mindmapSummary = findResource(resources, 'mindmap')
+    const requestedResourceType = ['ppt', 'mindmap', 'external_video'].includes(String(route.query.resource))
+      ? String(route.query.resource)
+      : 'document'
+    resourceView.value = requestedResourceType
     assignResourceSummary(pptSummary)
     assignResourceSummary(mindmapSummary)
+
+    if (requestedResourceType === 'external_video') {
+      const resourceId = Number(route.query.resourceId)
+      const candidate = externalVideoResources.value.find((item) => Number(item.resource_id) === resourceId)
+      if (candidate) selectedExternalVideo.value = parseExternalVideo(candidate)
+      if (resourceId) {
+        try {
+          selectedExternalVideo.value = parseExternalVideo(await resourceApi.get(resourceId))
+        } catch (error) {
+          videoError.value = errorDetail(error, '推荐视频暂时无法打开。')
+        }
+      }
+      if (!selectedExternalVideo.value && !videoError.value) videoError.value = '未找到这条推荐视频。'
+      isResourceLoading.value = false
+      isResourceGenerating.value = false
+      return
+    }
 
     if (documentSummary) {
       resourceLoadingMessage.value = '正在读取本章文档'
@@ -1052,6 +1279,12 @@ async function loadActiveNode() {
         void refreshDocumentAnnotations()
         markDocumentReady()
       }
+    }
+
+    if (requestedResourceType === 'ppt' && pptSummary) {
+      await hydrateResource('ppt', pptSummary, loadVersion)
+    } else if (requestedResourceType === 'mindmap' && mindmapSummary) {
+      await hydrateResource('mindmap', mindmapSummary, loadVersion)
     }
 
     // Always pass through the idempotent path-node resource endpoint.  The
@@ -1385,6 +1618,23 @@ function handleVisibilityChange() {
   }
 }
 
+watch(
+  () => [route.query.pathId, route.query.node, route.query.resource, route.query.resourceId].join('|'),
+  async () => {
+    if (!learningPath.value) return
+    const nodeId = Number(route.query.node)
+    if (!nodeId) {
+      await reportReadDuration(true)
+      resourceController?.abort()
+      activeNodeId.value = null
+      selectedExternalVideo.value = null
+      return
+    }
+    if (Number(activeNodeId.value) === nodeId && route.query.resource === resourceView.value) return
+    await selectNode(nodeId, false)
+  },
+)
+
 onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange)
   document.addEventListener('keydown', handleGlobalKeydown)
@@ -1403,6 +1653,45 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .fundamentals-page { display: grid; min-width: 0; height: 100%; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+.foundation-library { min-width: 0; min-height: 0; overflow: auto; padding: 6px 2px 26px; }
+.foundation-library__header { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; margin-bottom: 22px; padding-bottom: 18px; border-bottom: 1px solid #dfe5df; }
+.foundation-library__header h1 { margin: 0; color: #1e3c34; font-size: clamp(28px, 3vw, 40px); line-height: 1.15; }
+.foundation-library__header p:last-child { margin: 9px 0 0; color: var(--muted); font-size: 13px; }
+.foundation-library__header .path-progress { flex: 0 0 220px; }
+.foundation-library__state { display: grid; min-height: 270px; place-items: center; align-content: center; gap: 9px; padding: 32px; color: var(--accent-deep); text-align: center; }
+.foundation-library__state strong { color: var(--ink); font-size: 16px; }
+.foundation-library__state p { max-width: 420px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.foundation-library__state .button { display: inline-flex; align-items: center; gap: 7px; margin-top: 7px; }
+.foundation-library__body { display: grid; gap: 22px; }
+.resource-group { min-width: 0; }
+.resource-group__header { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 10px; }
+.resource-group__header > div { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.resource-group__header > div > div { min-width: 0; }
+.resource-group__index { display: grid; width: 38px; height: 38px; place-items: center; border: 1px solid #d8e4cc; border-radius: 11px; background: #edf5e5; color: var(--accent-deep); font-size: 11px; font-weight: 800; }
+.resource-group__header .eyebrow { margin-bottom: 3px; }
+.resource-group__header h2 { margin: 0; overflow: hidden; color: var(--ink); font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
+.resource-group__status { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
+.resource-card-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; }
+.resource-card { position: relative; display: flex; min-width: 0; min-height: 116px; align-items: flex-start; gap: 12px; padding: 16px; border: 1px solid #dfe6da; text-align: left; transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease; }
+.resource-card:hover { border-color: #abc28f; box-shadow: 0 10px 22px rgba(45, 70, 40, .1); transform: translateY(-2px); }
+.resource-card:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
+.resource-card__icon { display: grid; width: 38px; height: 38px; flex: 0 0 38px; place-items: center; border-radius: 11px; background: #edf3e9; color: var(--accent-deep); }
+.resource-card__icon.is-ppt { background: #f6efdf; color: #9b6d32; }
+.resource-card__icon.is-mindmap { background: #e8eff6; color: #47708e; }
+.resource-card__icon.is-external_video, .resource-card__icon.is-video { background: #f7e9e4; color: #a45b45; }
+.resource-card__content { display: grid; min-width: 0; gap: 6px; padding-right: 16px; }
+.resource-card__content strong { overflow: hidden; color: var(--ink); font-size: 13px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.resource-card__content small { color: var(--muted); font-size: 10px; }
+.resource-card__description { display: -webkit-box; overflow: hidden; color: var(--muted); font-size: 11px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.resource-card__arrow { position: absolute; top: 17px; right: 14px; color: #9baa96; transition: color .18s ease, transform .18s ease; }
+.resource-card:hover .resource-card__arrow { color: var(--accent-deep); transform: translateX(2px); }
+.resource-group__empty { display: flex; width: 100%; min-height: 54px; align-items: center; gap: 8px; padding: 0 14px; border: 1px dashed #cbd8c5; color: var(--muted); font-size: 12px; text-align: left; }
+.resource-group__empty:hover { border-color: #9dbb8d; background: #fbfdf9; color: var(--accent-deep); }
+.resource-group__empty span { flex: 1; }
+.external-video-fallback { display: grid; min-height: 360px; place-items: center; align-content: center; gap: 10px; padding: 40px; color: #a45b45; text-align: center; }
+.external-video-fallback strong { color: var(--ink); font-size: 17px; }
+.external-video-fallback p { max-width: 480px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.external-video-fallback .button { display: inline-flex; align-items: center; gap: 7px; margin-top: 5px; }
 .lesson-context { display: flex; align-items: center; justify-content: space-between; gap: 28px; margin-bottom: 12px; padding: 0 0 16px; border-bottom: 1px solid var(--line); }
 .lesson-context__copy { min-width: 0; }
 .lesson-context__copy .eyebrow { margin-bottom: 6px; }
@@ -1477,6 +1766,7 @@ onBeforeUnmount(() => {
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 1120px) {
+  .resource-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .learning-layout { grid-template-columns: 52px minmax(0, 1fr); }
   .learning-layout > :last-child { display: none; }
 }
@@ -1485,6 +1775,12 @@ onBeforeUnmount(() => {
   .navigation-drawer { left: 0; width: min(420px, 100vw); }
 }
 @media (max-width: 680px) {
+  .foundation-library { padding: 0 0 22px; }
+  .foundation-library__header { align-items: stretch; flex-direction: column; gap: 15px; margin-bottom: 17px; padding-bottom: 14px; }
+  .foundation-library__header .path-progress { width: 100%; min-width: 0; }
+  .resource-card-grid { grid-template-columns: 1fr; }
+  .resource-group__header h2 { max-width: 230px; }
+  .resource-card { min-height: 100px; }
   .lesson-context { align-items: stretch; flex-direction: column; gap: 16px; }
   .path-progress { flex-basis: auto; width: min(360px, 100%); }
   .path-progress small { text-align: left; }

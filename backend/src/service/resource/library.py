@@ -21,6 +21,7 @@ from backend.src.service.resource.metadata import (
     extract_ppt_theme_id,
     format_mindmap_content,
     looks_like_ppt_markdown,
+    external_video_metadata,
     resource_to_dict,
 )
 from backend.src.utils.mindmap import parse_mindmap_text
@@ -125,6 +126,7 @@ class ResourceLibraryService:
             "owner_user_id": record.user_id,
             "is_owner": record.user_id == user_id,
         }
+        result.update(external_video_metadata(record))
         if record.file_url:
             result["file_url"] = record.file_url
             result["url"] = record.file_url
@@ -214,6 +216,7 @@ class ResourceLibraryService:
                 "is_owner": record.user_id == user_id,
                 "is_read": read_map.get(record.id, False),
             }
+            item.update(external_video_metadata(record))
             if record.file_url:
                 item["file_url"] = record.file_url
                 item["url"] = record.file_url
