@@ -80,6 +80,7 @@ def _normalize_page(item: dict) -> dict | None:
         # summary 需要请求时开 summary=true 才返回，可能为空
         "summary": " ".join(str(item.get("summary") or "").split()),
         "site_name": str(item.get("siteName") or "").strip(),
+        "thumbnail": str(item.get("thumbnail") or item.get("thumbnailUrl") or item.get("imageUrl") or "").strip(),
         # datePublished 是 UTC+8；dateLastCrawled 的 Z 结尾实为 UTC+8，官方建议优先用前者
         "published_at": str(item.get("datePublished") or "").strip(),
         "favicon": str(item.get("siteIcon") or "").strip(),
