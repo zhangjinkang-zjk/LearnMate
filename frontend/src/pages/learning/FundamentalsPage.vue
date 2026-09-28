@@ -51,9 +51,9 @@
         <div v-if="resourceOverviewLoading" class="foundation-library__state surface" aria-live="polite">
           <LoaderCircle class="spin" :size="22" />
           <strong>正在整理你的学习资源</strong>
-          <p>正在同步平台生成内容和画像推荐视频。</p>
+          <p>正在同步平台生成内容和配套视频。</p>
         </div>
-        <div v-else-if="!resourceGroups.length && !externalVideoResources.length" class="foundation-library__state surface">
+        <div v-else-if="!resourceGroups.length" class="foundation-library__state surface">
           <BookOpenText :size="24" />
           <strong>资源正在准备中</strong>
           <p>路径已经就绪，打开任一章节后系统会生成对应的基础学习资料。</p>
@@ -104,35 +104,6 @@
             </button>
           </section>
 
-          <section v-if="externalVideoResources.length" class="resource-group resource-group--videos">
-            <header class="resource-group__header">
-              <div>
-                <span class="resource-group__index">AI</span>
-                <div>
-                  <p class="eyebrow">画像推荐</p>
-                  <h2>为你找到的视频</h2>
-                </div>
-              </div>
-              <span class="resource-group__status">{{ externalVideoResources.length }} 个视频</span>
-            </header>
-            <div class="resource-card-grid">
-              <button
-                v-for="resource in externalVideoResources"
-                :key="`video-${resource.resource_id}`"
-                class="resource-card resource-card--video surface"
-                type="button"
-                @click="openFoundationResource(videoNode, resource)"
-              >
-                <span class="resource-card__icon is-external_video"><PlayCircle :size="20" /></span>
-                <span class="resource-card__content">
-                  <strong>{{ resource.title || resource.topic || '推荐视频' }}</strong>
-                  <small>{{ resource.source_label || '外部教学视频' }}</small>
-                  <span v-if="resource.description" class="resource-card__description">{{ resource.description }}</span>
-                </span>
-                <ArrowRight class="resource-card__arrow" :size="17" />
-              </button>
-            </div>
-          </section>
         </div>
       </section>
 
@@ -546,17 +517,30 @@ const VIDEO_RESTART_BACKOFF_MS = 5000
 const activeNodeIndex = computed(() => learningPath.value?.nodes.findIndex((node) => node.id === activeNodeId.value) ?? -1)
 const activeNode = computed(() => learningPath.value?.nodes[activeNodeIndex.value] || null)
 const hasActiveLesson = computed(() => Boolean(activeNodeId.value))
-const videoNode = computed(() => {
-  if (!learningPath.value?.nodes?.length) return null
-  return learningPath.value.nodes.find((node) => node.status !== 'locked') || learningPath.value.nodes[0]
+const resourceGroups = computed(() => {
+  const nodes = learningPath.value?.nodes || []
+  const videosByNodeId = new Map(nodes.map((node) => [node.id, []]))
+  const fallbackNode = nodes.find((node) => node.status === 'in_progress' || node.status === 'unlocked') || nodes[0]
+
+  externalVideoResources.value.forEach((video) => {
+    const matchedNode = nodes.find((node) => videoMatchesNode(video, node)) || fallbackNode
+    if (matchedNode) videosByNodeId.get(matchedNode.id)?.push(video)
+  })
+
+  return nodes
+    .map((node, index) => {
+      const boundResources = (node.resources || []).filter((resource) => resource?.resource_type !== 'external_video')
+      const externalVideos = videosByNodeId.get(node.id) || []
+      const resources = [...boundResources]
+      externalVideos.forEach((video) => {
+        if (!resources.some((resource) => Number(resource.resource_id || resource.id) === Number(video.resource_id))) {
+          resources.push(video)
+        }
+      })
+      return { node, index, resources }
+    })
+    .filter((group) => group.resources.length || group.node.status !== 'locked')
 })
-const resourceGroups = computed(() => (learningPath.value?.nodes || [])
-  .map((node, index) => ({
-    node,
-    index,
-    resources: (node.resources || []).filter((resource) => resource?.resource_type !== 'external_video'),
-  }))
-  .filter((group) => group.resources.length || group.node.status !== 'locked'))
 const activeResource = computed(() => ({
   document: documentResource.value,
   ppt: pptResource.value,
@@ -630,16 +614,32 @@ function resourceTypeLabel(type) {
     ppt: '平台视觉辅助',
     mindmap: '平台知识结构',
     video: '平台视频课件',
-    external_video: '画像推荐视频',
+    external_video: '外部教学视频',
   }[type] || '学习资源'
 }
 
 function resourceLabel(type) {
-  return resourceTypeLabel(type).replace(/^平台|^画像推荐/, '')
+  return resourceTypeLabel(type).replace(/^平台|^外部/, '')
 }
 
 function nodeStatusLabel(status) {
   return { completed: '已完成', in_progress: '学习中', unlocked: '已解锁', locked: '待解锁' }[status] || '待学习'
+}
+
+function normalizedMatchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[\s·:：、，,。！？!?/\\_\-()（）\[\]]+/g, '')
+    .replace(/(教学视频|视频教程|学习路径|基础学习|教程|教学)/g, '')
+}
+
+function videoMatchesNode(video, node) {
+  const videoTopic = normalizedMatchText(video?.topic || video?.title)
+  const nodeTopic = normalizedMatchText(node?.title || node?.topic)
+  if (!videoTopic || !nodeTopic) return false
+  return videoTopic === nodeTopic
+    || (nodeTopic.length >= 4 && videoTopic.includes(nodeTopic))
+    || (videoTopic.length >= 4 && nodeTopic.includes(videoTopic))
 }
 
 function parseExternalVideo(resource) {

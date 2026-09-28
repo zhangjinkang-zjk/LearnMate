@@ -73,6 +73,12 @@ export const resourceApi = {
     return unwrap(response)
   },
 
+  async searchExternal(query, count = 8) {
+    const text = String(query || '').trim()
+    if (!text) return []
+    return unwrap(await httpClient.get('/resource/search', { params: { q: text, count } }))
+  },
+
   async favorite(resourceId) {
     return unwrap(await httpClient.post(`/resource/${resourceId}/favorite`))
   },
