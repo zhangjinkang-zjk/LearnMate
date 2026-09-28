@@ -200,7 +200,7 @@ async def _review_transition_content(
                     break
         return {"news": news, "stories": stories or fallback}
     except Exception as exc:
-        # 搜索候选已经过 SearXNG 的结构化过滤。LLM 审核超时不能把用户看到的资讯清空，
+        # 搜索候选已经过规范化过滤。LLM 审核超时不能把用户看到的资讯清空，
         # 降级时只保留候选原文的标题、摘要和链接，不生成任何额外事实。
         news = _candidate_news_fallback(candidates)
         logger.warning(

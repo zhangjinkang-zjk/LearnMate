@@ -9,7 +9,8 @@ from urllib.parse import urlparse
 import httpx
 from langchain_core.tools import tool
 
-from backend.src.ai_core.tools.search import _search_searxng_collect
+from backend.src.ai_core.tools.search import search_collect
+from backend.src.utils.education_sources import label_for
 from backend.src.utils.knowledge_base import (
     delete as kb_delete,
     ingest as kb_ingest,
@@ -263,11 +264,21 @@ async def ingest_document(title: str, content: str, user_id: str):
     return await kb_ingest(title, content, user_id=int(user_id))
 
 
+def _result_body(result: dict, limit: int = 1200) -> str:
+    """检索结果的正文片段：长摘要优先，其次短摘要"""
+    return _compact_text(result.get("summary") or result.get("snippet") or "", limit)
+
+
+def _result_source(result: dict, limit: int = 60) -> str:
+    """来源名：白名单里的中文名优先，其次搜索服务返回的站点名"""
+    return _compact_text(label_for(result.get("url") or "") or result.get("site_name") or "", limit)
+
+
 def _format_web_reference(topic: str, result: dict, source_text: str = "", fetch_note: str = "") -> tuple[str, str]:
     title = _compact_text(result.get("title") or "联网资料", 120)
-    body = _compact_text(result.get("content") or result.get("body") or "", 1200)
-    url = _normalize_source_url(result.get("url") or result.get("href") or "")
-    engine = _compact_text(result.get("engine") or "", 60)
+    body = _result_body(result)
+    url = _normalize_source_url(result.get("url") or "")
+    source = _result_source(result)
 
     kb_title = f"[WEB待审核] {topic} - {title}"
     content_parts = [
@@ -276,8 +287,8 @@ def _format_web_reference(topic: str, result: dict, source_text: str = "", fetch
     ]
     if url:
         content_parts.append(f"来源链接：{url}")
-    if engine:
-        content_parts.append(f"搜索引擎：{engine}")
+    if source:
+        content_parts.append(f"来源站点：{source}")
     content_parts.extend(
         [
             "状态说明：该资料由智能体联网检索自动暂存，需管理员审核后才能进入公共知识库。",
@@ -315,17 +326,17 @@ async def search_web_and_stage_knowledge(topic: str, user_request: str, user_id:
     except Exception:
         limit = 5
 
-    results, suspended_note = await _search_searxng_collect(topic, max_results=max(limit * 3, 12))
+    results, collect_note = await search_collect(topic, max_results=max(limit * 3, 12))
     if not results:
-        extra = f"；当前受限引擎：{suspended_note}" if suspended_note else ""
+        extra = f"；原因：{collect_note}" if collect_note else ""
         return f"未搜索到可暂存的资料：{topic}{extra}"
 
     candidates = []
     seen_urls = set()
     for result in results:
-        url = _normalize_source_url(result.get("url") or result.get("href") or "")
+        url = _normalize_source_url(result.get("url") or "")
         title = _compact_text(result.get("title") or "", 120)
-        body = _compact_text(result.get("content") or result.get("body") or "", 1200)
+        body = _result_body(result)
         if not title and not body:
             continue
         if url and url in seen_urls:

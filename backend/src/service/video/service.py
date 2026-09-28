@@ -13,8 +13,6 @@ from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
 
-import httpx
-
 from backend.src.models.video_model import Video
 from backend.src.models.resource_model import GeneratedResource
 from backend.src.models.notification_model import Notification
@@ -24,8 +22,10 @@ from backend.src.ai_core.agent_names import LEADER_AGENT, SAVER_AGENT, resource_
 from backend.src.utils.prompt_loader import load_prompt, fill_prompt
 from backend.src.utils.exceptions import ServiceError
 from backend.src.utils.chat_utils import allocate_chat_group_id
+from backend.src.utils.education_sources import include_domains, label_for, tier_for
 from backend.src.utils.redis_client import notify_sse as _redis_notify_sse, subscribe_sse, unsubscribe_sse
 from backend.src.utils.constants import AUDIO_DIR, VIDEOS_DIR
+from backend.src.utils.web_search_client import search_web
 
 logger = logging.getLogger(__name__)
 
@@ -313,10 +313,26 @@ def _format_view_count(count: int | float | str | None) -> str:
     return f"{value}次" if value > 0 else ""
 
 
-class ExternalVideoService:
-    """Lightweight online teaching video search, currently backed by Bilibili web search."""
+_BVID_PATTERN = re.compile(r"/video/(BV[0-9A-Za-z]{10})")
 
-    SEARCH_URL = "https://api.bilibili.com/x/web-interface/search/type"
+
+def _extract_bvid(url: str) -> str:
+    """从 B 站视频页 URL 取出 BV 号。
+
+    b23.tv 短链需要跟随跳转才能得到 BV 号，这里不解析 —— 解不出就退化成只给跳转链接。
+    """
+    match = _BVID_PATTERN.search(str(url or ""))
+    return match.group(1) if match else ""
+
+
+def _embed_url_for(page_url: str) -> str:
+    """只有能解出 BV 号的 B 站视频才能内嵌，用官方外链播放器"""
+    bvid = _extract_bvid(page_url)
+    return f"https://player.bilibili.com/player.html?bvid={bvid}" if bvid else ""
+
+
+class ExternalVideoService:
+    """外部教学视频检索 — 走博查搜索，按教育来源白名单限定域名"""
 
     @staticmethod
     async def search(topic: str, max_results: int = 3) -> list[dict]:
@@ -324,46 +340,68 @@ class ExternalVideoService:
         if not query:
             return []
         max_results = max(1, min(int(max_results or 3), 5))
-        params = {
-            "search_type": "video",
-            "keyword": f"{query} 教学",
-            "page": 1,
-        }
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
-            ),
-            "Referer": "https://www.bilibili.com/",
-        }
-        try:
-            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
-                resp = await client.get(ExternalVideoService.SEARCH_URL, params=params, headers=headers)
-                resp.raise_for_status()
-                payload = resp.json()
-        except Exception:
-            logger.info("[ExternalVideo] 视频搜索失败 topic=%s", query, exc_info=True)
-            return []
 
-        items = ((payload or {}).get("data") or {}).get("result") or []
+        # 分两次查：B 站单独查，否则十几个课程站点会把它的名额挤掉。
+        # 实测单次混查时 B 站一条视频页都剩不下。
+        embed_results = await search_web(
+            f"{query} 教学",
+            count=max(max_results * 6, 20),
+            include=include_domains("embed"),
+            summary=True,
+            caller="external_video",
+        )
+        course_results = await search_web(
+            f"{query} 教学",
+            count=max(max_results * 3, 10),
+            include=include_domains("course", "reading"),
+            summary=True,
+            caller="external_video_course",
+        )
+
         videos: list[dict] = []
-        for item in items[:max_results]:
-            bvid = item.get("bvid") or ""
-            page_url = item.get("arcurl") or (f"https://www.bilibili.com/video/{bvid}" if bvid else "")
-            embed_url = f"https://player.bilibili.com/player.html?bvid={bvid}" if bvid else page_url
-            title = re.sub(r"<[^>]+>", "", str(item.get("title") or "")).strip()
+        seen: set[str] = set()
+        # B 站（能内嵌播放）优先占位，课程平台补剩下的
+        for item in [*embed_results, *course_results]:
+            page_url = str(item.get("url") or "").strip()
+            if not page_url.startswith(("http://", "https://")):
+                continue
+            label = label_for(page_url)
+            if not label:
+                # include 只是请求侧的建议，博查可能仍返回名单外的站点；
+                # 落在外面的按非教育来源丢弃，别把它标成教育来源推给用户
+                continue
+
+            embed_url = _embed_url_for(page_url)
+            if tier_for(page_url) == "embed" and not embed_url:
+                # B 站上只有 /video/BVxxx 是能播的单个视频页。
+                # read/ 是图文专栏、cheese/ 是付费课程、medialist/ 是收藏夹、
+                # /video/av... 是未支持的旧格式 —— 都不是"视频"，直接丢掉
+                continue
+            if embed_url:
+                # 有 BV 号时用规范地址，顺便去掉 m. 域名和 ?from=search 这类尾巴
+                page_url = f"https://www.bilibili.com/video/{_extract_bvid(page_url)}"
+
+            if page_url in seen:
+                continue
+            seen.add(page_url)
+
             videos.append({
-                "title": title,
-                "author": item.get("author") or "",
-                "duration": item.get("duration") or 0,
-                "view_count": item.get("play") or 0,
-                "description": item.get("description") or "",
-                "cover_url": item.get("pic") or "",
+                "title": item.get("title") or "",
+                # 博查不返回作者 / 时长 / 播放量 / 视频封面，统一给空值：
+                # 下游 _format_duration(0) / _format_view_count(0) 会渲染成空串
+                "author": "",
+                "duration": 0,
+                "view_count": 0,
+                "description": item.get("summary") or item.get("snippet") or "",
+                "cover_url": "",
                 "page_url": page_url,
                 "embed_url": embed_url,
-                "source": "bilibili",
-                "source_label": "B站",
+                # source 目前没有消费者，source_label 才是展示用的
+                "source": "education",
+                "source_label": label,
             })
+            if len(videos) >= max_results:
+                break
         return videos
 
     @staticmethod

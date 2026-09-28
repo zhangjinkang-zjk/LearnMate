@@ -1,570 +1,335 @@
-"""
-外部视频搜索服务单元测试
+"""外部视频搜索服务单元测试
 
-测试目标：backend/src/service/video/service.py
+测试目标：backend/src/service/video/service.py 的 ExternalVideoService
 覆盖范围：
-- 工具函数（BVID 提取、格式化、HTML 清理）
-- _build_video_item 构建逻辑
-- search() 搜索编排（mock httpx）
+- BVID 提取与内嵌播放地址生成
+- search() 对检索结果的映射（白名单过滤、来源标注、条数截断）
+- search_and_save() 的落库字段契约（上游调用方依赖它不变）
+- 时长 / 播放量格式化
+
+不测真实接口：检索已改为博查，测试全部 mock 掉 search_web。
 """
-import json
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# 本文件测的是模块级的内部小函数（_extract_bvid / _clean_title / _search_bilibili_api /
-# _build_video_item …）。视频服务重构时这些函数被内联进了 ExternalVideoService.search()，
-# 模块里已不再存在，因此下面的 import 必然失败。
-#
-# 保留文件是为了后续按"对外行为"（给定 topic 与 mock 的 HTTP 响应，search() 返回什么）
-# 重写，而不是让它静默消失。在那之前整体跳过 —— 否则 pytest 在**收集阶段**就中断，
-# 整份测试报告和覆盖率都出不来，比这 51 个用例失败严重得多。
-pytest.skip(
-    "待重写：被测的模块级函数已被重构内联进 ExternalVideoService.search()，"
-    "改测对外行为后再启用",
-    allow_module_level=True,
-)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from backend.src.service.video.service import (
+    ExternalVideoService,
+    _embed_url_for,
     _extract_bvid,
-    _clean_title,
-    _strip_em,
     _format_duration,
     _format_view_count,
-    _duration_to_seconds,
-    _ensure_https,
-    _build_video_item,
-    _search_bilibili_api,
-    _search_bilibili_html,
-    _enrich_detail,
-    ExternalVideoService,
 )
+
+VIDEO_MODULE = "backend.src.service.video.service"
+
+BILI_URL = "https://www.bilibili.com/video/BV1xx411c7mD"
+MOOC_URL = "https://www.icourse163.org/course/ZJU-1001"
+WEIBO_URL = "https://weibo.com/1234/abcd"
+
+
+def _result(url: str, title: str = "机械制图基础", **overrides):
+    item = {
+        "title": title,
+        "url": url,
+        "snippet": "短摘要",
+        "summary": "长摘要内容",
+        "site_name": "站点名",
+        "published_at": "2025-02-23T08:18:30+08:00",
+    }
+    item.update(overrides)
+    return item
+
+
+def _patch_search(monkeypatch, embed_results=None, course_results=None):
+    """替换 video.service 里的 search_web，返回 mock 以便断言调用参数。
+
+    视频搜索会分两次调用：caller='external_video' 查 embed 档（B 站），
+    caller='external_video_course' 查课程/图文档。只传一个列表时两次返回同一批。
+    """
+    if course_results is None:
+        course_results = embed_results
+
+    async def _fake(query, *, count=10, include=None, summary=False, freshness="noLimit", caller=""):
+        picked = embed_results if caller == "external_video" else course_results
+        return [dict(item) for item in (picked or [])]
+
+    mock = AsyncMock(side_effect=_fake)
+    monkeypatch.setattr(f"{VIDEO_MODULE}.search_web", mock)
+    return mock
 
 
 # ═══════════════════════════════════════════════
-#  _extract_bvid
+#  BVID 提取
 # ═══════════════════════════════════════════════
 
 class TestExtractBvid:
-    def test_standard_bvid(self):
-        """标准 B站 BV 号"""
-        url = "https://www.bilibili.com/video/BV1xx411c7mD"
-        assert _extract_bvid(url) == "BV1xx411c7mD"
+    def test_standard(self):
+        assert _extract_bvid(BILI_URL) == "BV1xx411c7mD"
 
-    def test_bvid_with_params(self):
-        """带查询参数的 URL"""
+    def test_with_query_params(self):
         url = "https://www.bilibili.com/video/BV1GJ411x7FH?p=2&spm_id_from=333.788"
         assert _extract_bvid(url) == "BV1GJ411x7FH"
 
-    def test_short_url(self):
-        """不带协议的 URL"""
-        url = "//www.bilibili.com/video/BV1eY411Z7TY"
-        assert _extract_bvid(url) == "BV1eY411Z7TY"
+    def test_lowercase_host(self):
+        """带 www 与否、大小写都不影响"""
+        assert _extract_bvid("https://bilibili.com/video/BV1xx411c7mD") == "BV1xx411c7mD"
 
-    def test_no_bvid(self):
-        """不包含 BVID 的 URL"""
-        url = "https://www.bilibili.com/"
-        assert _extract_bvid(url) is None
+    def test_short_link_has_no_bvid(self):
+        """b23.tv 短链要跟随跳转才有 BV 号，这里不解析"""
+        assert _extract_bvid("https://b23.tv/abcdefg") == ""
 
-    def test_empty_string(self):
-        assert _extract_bvid("") is None
+    def test_non_video_page(self):
+        assert _extract_bvid("https://space.bilibili.com/123") == ""
 
-    def test_arcurl_format(self):
-        """arcurl 格式"""
-        url = "https://www.bilibili.com/video/BV1Qa4y1s7QG"
-        assert _extract_bvid(url) == "BV1Qa4y1s7QG"
+    def test_non_bilibili(self):
+        assert _extract_bvid(MOOC_URL) == ""
 
-
-# ═══════════════════════════════════════════════
-#  _clean_title / _strip_em
-# ═══════════════════════════════════════════════
-
-class TestCleanTitle:
-    def test_remove_em_tag(self):
-        """去掉 <em class=\"keyword\"> 标签"""
-        raw = "线性代数<em class=\"keyword\">矩阵</em>教学"
-        assert _clean_title(raw) == "线性代数矩阵教学"
-
-    def test_no_tags(self):
-        raw = "线性代数教程"
-        assert _clean_title(raw) == raw
-
-    def test_empty_string(self):
-        assert _clean_title("") == ""
+    def test_empty_and_none(self):
+        assert _extract_bvid("") == ""
+        assert _extract_bvid(None) == ""
 
 
-class TestStripEm:
-    def test_remove_em(self):
-        assert _strip_em("这是<em>重点</em>内容") == "这是重点内容"
+class TestEmbedUrl:
+    def test_bilibili_gets_official_player(self):
+        assert _embed_url_for(BILI_URL) == "https://player.bilibili.com/player.html?bvid=BV1xx411c7mD"
 
-    def test_no_em(self):
-        text = "普通描述文本"
-        assert _strip_em(text) == text
+    def test_non_bilibili_has_no_embed(self):
+        """白名单里只有 B 站能内嵌播放，其他来源一律不给 embed"""
+        assert _embed_url_for(MOOC_URL) == ""
+
+    def test_short_link_has_no_embed(self):
+        assert _embed_url_for("https://b23.tv/abcdefg") == ""
 
 
 # ═══════════════════════════════════════════════
-#  _duration_to_seconds
-# ═══════════════════════════════════════════════
-
-class TestDurationToSeconds:
-    def test_none(self):
-        assert _duration_to_seconds(None) is None
-
-    def test_int_passthrough(self):
-        """整数秒直接返回"""
-        assert _duration_to_seconds(334) == 334
-
-    def test_mmss_string(self):
-        """MM:SS 格式"""
-        assert _duration_to_seconds("293:4") == 293 * 60 + 4
-
-    def test_hhmmss_string(self):
-        """HH:MM:SS 格式"""
-        assert _duration_to_seconds("1:01:01") == 3661
-
-    def test_numeric_string(self):
-        """纯数字字符串"""
-        assert _duration_to_seconds("1200") == 1200
-
-    def test_empty_string(self):
-        assert _duration_to_seconds("") is None
-
-
-# ═══════════════════════════════════════════════
-#  _ensure_https
-# ═══════════════════════════════════════════════
-
-class TestEnsureHttps:
-    def test_already_https(self):
-        assert _ensure_https("https://example.com") == "https://example.com"
-
-    def test_protocol_relative(self):
-        assert _ensure_https("//i0.hdslb.com/pic.jpg") == "https://i0.hdslb.com/pic.jpg"
-
-    def test_http(self):
-        assert _ensure_https("http://example.com") == "http://example.com"
-
-    def test_empty(self):
-        assert _ensure_https("") == ""
-
-
-# ═══════════════════════════════════════════════
-#  _format_duration
-# ═══════════════════════════════════════════════
-
-class TestFormatDuration:
-    def test_none(self):
-        assert _format_duration(None) == ""
-
-    def test_seconds_only(self):
-        assert _format_duration(45) == "0:45"
-
-    def test_minutes(self):
-        assert _format_duration(125) == "2:05"
-
-    def test_hours(self):
-        assert _format_duration(3661) == "1:01:01"
-
-    def test_exact_hour(self):
-        assert _format_duration(3600) == "1:00:00"
-
-
-# ═══════════════════════════════════════════════
-#  _format_view_count
-# ═══════════════════════════════════════════════
-
-class TestFormatViewCount:
-    def test_none(self):
-        assert _format_view_count(None) == ""
-
-    def test_small_number(self):
-        assert _format_view_count(999) == "999"
-
-    def test_wan(self):
-        assert _format_view_count(10000) == "1.0万"
-
-    def test_wan_with_decimals(self):
-        assert _format_view_count(1234567) == "123.5万"
-
-    def test_zero(self):
-        assert _format_view_count(0) == "0"
-
-
-# ═══════════════════════════════════════════════
-#  _build_video_item
-# ═══════════════════════════════════════════════
-
-class TestBuildVideoItem:
-    def test_full_item(self):
-        """标准 API 响应条目（search/all/v2 格式）"""
-        item = {
-            "bvid": "BV1xx411c7mD",
-            "title": "线性代数<em class=\"keyword\">矩阵</em>",
-            "arcurl": "https://www.bilibili.com/video/BV1xx411c7mD",
-            "description": "详细讲解<em>矩阵乘法</em>",
-            "pic": "//i0.hdslb.com/bfs/archive/abc.jpg",
-            "duration": "3661",
-            "author": "宋浩老师",
-            "play": 1234567,
-        }
-        result = _build_video_item(item)
-        assert result is not None
-        assert result["bvid"] == "BV1xx411c7mD"
-        assert result["title"] == "线性代数矩阵"
-        assert result["source"] == "bilibili"
-        assert result["source_label"] == "B站"
-        assert result["embed_url"] == "//player.bilibili.com/player.html?bvid=BV1xx411c7mD&autoplay=0&high_quality=1"
-        assert result["cover_url"] == "https://i0.hdslb.com/bfs/archive/abc.jpg"
-        assert result["duration"] == 3661
-        assert result["author"] == "宋浩老师"
-        assert result["view_count"] == 1234567
-
-    def test_missing_arcurl_fallback(self):
-        """arcurl 缺失时用 bvid 拼 page_url"""
-        item = {"bvid": "BV1GJ411x7FH"}
-        result = _build_video_item(item)
-        assert result is not None
-        assert result["page_url"] == "https://www.bilibili.com/video/BV1GJ411x7FH"
-
-    def test_no_bvid(self):
-        """没有 bvid 时返回 None"""
-        assert _build_video_item({"title": "no bvid"}) is None
-
-    def test_arcurl_with_bvid(self):
-        """从 arcurl 提取 bvid"""
-        item = {"arcurl": "https://www.bilibili.com/video/BV1Qa4y1s7QG"}
-        result = _build_video_item(item)
-        assert result is not None
-        assert result["bvid"] == "BV1Qa4y1s7QG"
-
-
-# ═══════════════════════════════════════════════
-#  _search_bilibili_api（mock httpx）
-# ═══════════════════════════════════════════════
-
-class TestSearchBilibiliApi:
-    """mock httpx.AsyncClient 测试 B站 search/all/v2"""
-
-    @patch("backend.src.service.video.service.httpx.AsyncClient")
-    async def test_success(self, mock_client_cls):
-        """API 返回正常数据（search/all/v2 分节格式）"""
-        mock_client = AsyncMock()
-        mock_client_cls.return_value.__aenter__.return_value = mock_client
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "code": 0,
-            "data": {
-                "result": [
-                    {
-                        "result_type": "video",
-                        "data": [
-                            {
-                                "bvid": "BV1xx411c7mD",
-                                "title": "线性代数教程",
-                                "arcurl": "https://www.bilibili.com/video/BV1xx411c7mD",
-                                "description": "优质教学视频",
-                                "pic": "//i0.hdslb.com/bfs/archive/a.jpg",
-                                "duration": "1200",
-                                "author": "宋浩老师",
-                                "play": 50000,
-                            }
-                        ],
-                    }
-                ]
-            },
-        }
-        mock_client.get.return_value = mock_resp
-
-        result = await _search_bilibili_api("线性代数", max_results=3)
-        assert len(result) == 1
-        assert result[0]["bvid"] == "BV1xx411c7mD"
-        assert result[0]["title"] == "线性代数教程"
-
-    @patch("backend.src.service.video.service.httpx.AsyncClient")
-    async def test_api_error_code(self, mock_client_cls):
-        """API 返回错误 code"""
-        mock_client = AsyncMock()
-        mock_client_cls.return_value.__aenter__.return_value = mock_client
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"code": -1, "message": "请求太频繁"}
-        mock_client.get.return_value = mock_resp
-
-        result = await _search_bilibili_api("线性代数")
-        assert result == []
-
-    @patch("backend.src.service.video.service.httpx.AsyncClient")
-    async def test_http_error(self, mock_client_cls):
-        """HTTP 非 200"""
-        mock_client = AsyncMock()
-        mock_client_cls.return_value.__aenter__.return_value = mock_client
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 503
-        mock_client.get.return_value = mock_resp
-
-        result = await _search_bilibili_api("线性代数")
-        assert result == []
-
-    @patch("backend.src.service.video.service.httpx.AsyncClient")
-    async def test_request_exception(self, mock_client_cls):
-        """网络异常"""
-        mock_client = AsyncMock()
-        mock_client_cls.return_value.__aenter__.return_value = mock_client
-        mock_client.get.side_effect = Exception("连接超时")
-
-        result = await _search_bilibili_api("线性代数")
-        assert result == []
-
-
-# ═══════════════════════════════════════════════
-#  _search_bilibili_html（mock httpx）
-# ═══════════════════════════════════════════════
-
-class TestSearchBilibiliHtml:
-    """mock httpx 测试兜底 HTML 搜索"""
-
-    @patch("backend.src.service.video.service.httpx.AsyncClient")
-    async def test_success(self, mock_client_cls):
-        """HTML 提取 BVID + 详情 API 补充信息"""
-        # 两次 AsyncClient() 调用：搜索页 → 详情 API
-        search_client = AsyncMock()
-        detail_client = AsyncMock()
-
-        instances = [
-            MagicMock(__aenter__=AsyncMock(return_value=search_client)),
-            MagicMock(__aenter__=AsyncMock(return_value=detail_client)),
-        ]
-        mock_client_cls.side_effect = iter(instances)
-
-        # 搜索页返回含 BVID 的 HTML
-        search_resp = MagicMock()
-        search_resp.status_code = 200
-        search_resp.text = "<html>BV1eY411Z7TY BV1xx411c7mD</html>"
-        search_client.get.return_value = search_resp
-
-        # 详情 API 响应
-        detail_resp = MagicMock()
-        detail_resp.status_code = 200
-        detail_resp.json.return_value = {
-            "code": 0,
-            "data": {
-                "bvid": "BV1eY411Z7TY",
-                "title": "高等数学",
-                "pic": "https://i0.hdslb.com/bfs/archive/b.jpg",
-                "duration": 1800,
-                "owner": {"name": "张宇老师"},
-                "stat": {"view": 200000},
-                "desc": "高等数学教学",
-            },
-        }
-        detail_client.get.return_value = detail_resp
-
-        result = await _search_bilibili_html("高等数学", max_results=3)
-        # HTML 中有 2 个 BVID，各返回一个结果
-        assert len(result) == 2
-        assert result[0]["bvid"] == "BV1eY411Z7TY"
-        assert result[0]["title"] == "高等数学"
-        assert result[0]["author"] == "张宇老师"
-
-    @patch("backend.src.service.video.service.httpx.AsyncClient")
-    async def test_no_bvid_in_html(self, mock_client_cls):
-        """HTML 中没有 BVID"""
-        mock_client = AsyncMock()
-        mock_client_cls.return_value.__aenter__.return_value = mock_client
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = "<html><div>no video here</div></html>"
-        mock_client.get.return_value = mock_resp
-
-        result = await _search_bilibili_html("高等数学")
-        assert result == []
-
-    @patch("backend.src.service.video.service.httpx.AsyncClient")
-    async def test_http_error(self, mock_client_cls):
-        """搜索页 404"""
-        mock_client = AsyncMock()
-        mock_client_cls.return_value.__aenter__.return_value = mock_client
-        mock_resp = MagicMock()
-        mock_resp.status_code = 404
-        mock_client.get.return_value = mock_resp
-
-        result = await _search_bilibili_html("高等数学")
-        assert result == []
-
-
-# ═══════════════════════════════════════════════
-#  _enrich_detail（mock httpx）
-# ═══════════════════════════════════════════════
-
-class TestEnrichDetail:
-    @patch("backend.src.service.video.service.httpx.AsyncClient")
-    async def test_skip_if_already_complete(self, mock_client_cls):
-        """已有封面和时长时跳过 API 调用"""
-        mock_client = AsyncMock()
-        mock_client_cls.return_value.__aenter__.return_value = mock_client
-
-        video = {
-            "bvid": "BV1xx411c7mD",
-            "cover_url": "https://example.com/cover.jpg",
-            "duration": 1200,
-        }
-        result = await _enrich_detail([video])
-        mock_client.get.assert_not_called()
-        assert result[0]["cover_url"] == "https://example.com/cover.jpg"
-        assert result[0]["duration"] == 1200
-
-    @patch("backend.src.service.video.service.httpx.AsyncClient")
-    async def test_enrich_missing_fields(self, mock_client_cls):
-        """补充缺失的字段"""
-        mock_client = AsyncMock()
-        mock_client_cls.return_value.__aenter__.return_value = mock_client
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "code": 0,
-            "data": {
-                "pic": "https://i0.hdslb.com/bfs/archive/c.jpg",
-                "duration": 900,
-                "owner": {"name": "李永乐老师"},
-                "stat": {"view": 888888},
-                "desc": "详细讲解",
-                "title": "概率论",
-            },
-        }
-        mock_client.get.return_value = mock_resp
-
-        video = {"bvid": "BV1xx411c7mD"}
-        result = await _enrich_detail([video])
-        assert result[0]["cover_url"] == "https://i0.hdslb.com/bfs/archive/c.jpg"
-        assert result[0]["duration"] == 900
-        assert result[0]["author"] == "李永乐老师"
-        assert result[0]["view_count"] == 888888
-
-
-# ═══════════════════════════════════════════════
-#  ExternalVideoService.search（完整编排）
+#  ExternalVideoService.search
 # ═══════════════════════════════════════════════
 
 class TestExternalVideoServiceSearch:
-    @patch("backend.src.service.video.service._search_bilibili_api")
-    @patch("backend.src.service.video.service._enrich_detail")
-    async def test_api_success(self, mock_enrich, mock_api):
-        """API 命中 → 不走 HTML 兜底"""
-        mock_api.return_value = [{"bvid": "BV1xx411c7mD", "source": "bilibili"}]
-        mock_enrich.return_value = [{"bvid": "BV1xx411c7mD", "source": "bilibili", "cover_url": "x.jpg"}]
+    @pytest.mark.asyncio
+    async def test_empty_topic_skips_search(self, monkeypatch):
+        mock = _patch_search(monkeypatch, [_result(BILI_URL)])
+        assert await ExternalVideoService.search("   ") == []
+        mock.assert_not_called()
 
-        result = await ExternalVideoService.search("线性代数")
-        assert len(result) == 1
-        mock_api.assert_called_once()
-        mock_enrich.assert_called_once()
+    @pytest.mark.asyncio
+    async def test_bilibili_result_mapped(self, monkeypatch):
+        _patch_search(monkeypatch, [_result(BILI_URL, title="机械制图 教学视频")])
 
-    @patch("backend.src.service.video.service._search_bilibili_api")
-    @patch("backend.src.service.video.service._search_bilibili_html")
-    @patch("backend.src.service.video.service._enrich_detail")
-    async def test_api_empty_fallback_html(self, mock_enrich, mock_html, mock_api):
-        """API 无结果 → 走 HTML 兜底"""
-        mock_api.return_value = []
-        mock_html.return_value = [{"bvid": "BV1eY411Z7TY", "source": "bilibili"}]
-        mock_enrich.return_value = [{"bvid": "BV1eY411Z7TY", "source": "bilibili", "cover_url": "y.jpg"}]
+        videos = await ExternalVideoService.search("机械制图")
 
-        result = await ExternalVideoService.search("高等数学")
-        assert len(result) == 1
-        mock_api.assert_called_once()
-        mock_html.assert_called_once()
+        assert len(videos) == 1
+        video = videos[0]
+        assert video["title"] == "机械制图 教学视频"
+        assert video["page_url"] == BILI_URL
+        assert video["embed_url"] == "https://player.bilibili.com/player.html?bvid=BV1xx411c7mD"
+        assert video["source_label"] == "B站"
 
-    @patch("backend.src.service.video.service._search_bilibili_api")
-    @patch("backend.src.service.video.service._search_bilibili_html")
-    async def test_both_empty(self, mock_html, mock_api):
-        """两个来源都空"""
-        mock_api.return_value = []
-        mock_html.return_value = []
+    @pytest.mark.asyncio
+    async def test_course_platform_has_no_embed(self, monkeypatch):
+        _patch_search(monkeypatch, [_result(MOOC_URL, title="机械制图 国家精品课")])
 
-        result = await ExternalVideoService.search("不存在的内容")
-        assert result == []
+        videos = await ExternalVideoService.search("机械制图")
 
-    @patch("backend.src.service.video.service._search_bilibili_api")
-    @patch("backend.src.service.video.service._search_bilibili_html")
-    async def test_max_results_respected(self, mock_html, mock_api):
-        """返回数量不超过 max_results"""
-        mock_api.return_value = [{"bvid": f"BV1{i:010d}", "source": "bilibili"} for i in range(5)]
+        assert len(videos) == 1
+        assert videos[0]["embed_url"] == ""
+        assert videos[0]["source_label"] == "中国大学MOOC"
 
-        result = await ExternalVideoService.search("python", max_results=2)
-        assert len(result) == 2
+    @pytest.mark.asyncio
+    async def test_non_whitelisted_domain_dropped(self, monkeypatch):
+        """include 只是请求侧建议，博查可能仍返回名单外站点 —— 必须自己再筛一遍"""
+        _patch_search(monkeypatch, [_result(WEIBO_URL), _result(BILI_URL)])
+
+        videos = await ExternalVideoService.search("机械制图")
+
+        assert [v["page_url"] for v in videos] == [BILI_URL]
+
+    @pytest.mark.asyncio
+    async def test_bilibili_non_video_pages_dropped(self, monkeypatch):
+        """B 站上只有 /video/BVxxx 是能播的单个视频页。
+
+        真实抓包里 B 站结果绝大多数是图文专栏（read/）、付费课程（cheese/）、
+        收藏夹（medialist/）和未支持的 AV 号 —— 都不能内嵌，混进"视频"列表是错的。
+        """
+        _patch_search(monkeypatch, [
+            _result("https://www.bilibili.com/read/cv26236201", title="图文专栏"),
+            _result("https://www.bilibili.com/cheese/play/ss31493", title="付费课程"),
+            _result("https://m.bilibili.com/medialist/play/384763561", title="收藏夹"),
+            _result("https://m.bilibili.com/video/av838838220", title="AV 号"),
+            _result(BILI_URL, title="真正的视频"),
+        ])
+
+        videos = await ExternalVideoService.search("机械制图")
+
+        assert [v["title"] for v in videos] == ["真正的视频"]
+
+    @pytest.mark.asyncio
+    async def test_bilibili_url_canonicalized(self, monkeypatch):
+        """移动域名和 query 尾巴都归一到规范地址"""
+        _patch_search(monkeypatch, [_result("https://m.bilibili.com/video/BV1P54y1S7xJ?from=search")])
+
+        video = (await ExternalVideoService.search("机械制图"))[0]
+
+        assert video["page_url"] == "https://www.bilibili.com/video/BV1P54y1S7xJ"
+        assert video["embed_url"] == "https://player.bilibili.com/player.html?bvid=BV1P54y1S7xJ"
+
+    @pytest.mark.asyncio
+    async def test_course_platform_pages_kept(self, monkeypatch):
+        """course 档是课程页不是视频文件，不能按 B 站那套规则被筛掉"""
+        _patch_search(monkeypatch, [_result(MOOC_URL)])
+
+        videos = await ExternalVideoService.search("机械制图")
+
+        assert len(videos) == 1
+        assert videos[0]["page_url"] == MOOC_URL
+
+    @pytest.mark.asyncio
+    async def test_max_results_respected(self, monkeypatch):
+        # BV 号的真实格式是 "BV" + 正好 10 位，构造数据必须合法，
+        # 否则会被规范化成同一个地址、被去重合并掉
+        results = [_result(f"https://www.bilibili.com/video/BV1{i:09d}") for i in range(6)]
+        _patch_search(monkeypatch, results)
+
+        videos = await ExternalVideoService.search("机械制图", max_results=2)
+
+        assert len(videos) == 2
+        assert len({v["page_url"] for v in videos}) == 2
+
+    @pytest.mark.asyncio
+    async def test_same_video_from_different_urls_deduped(self, monkeypatch):
+        """同一集的移动端地址和规范地址指向同一个视频，只应出现一次"""
+        _patch_search(monkeypatch, [
+            _result("https://m.bilibili.com/video/BV1P54y1S7xJ/?from=search", title="移动端"),
+            _result("https://www.bilibili.com/video/BV1P54y1S7xJ", title="网页端"),
+        ])
+
+        videos = await ExternalVideoService.search("机械制图", max_results=3)
+
+        assert len(videos) == 1
+        assert videos[0]["page_url"] == "https://www.bilibili.com/video/BV1P54y1S7xJ"
+
+    @pytest.mark.asyncio
+    async def test_missing_fields_degrade_to_empty(self, monkeypatch):
+        """博查不给作者 / 时长 / 播放量 / 封面，字段必须在但为空，下游才不会炸"""
+        _patch_search(monkeypatch, [_result(BILI_URL)])
+
+        video = (await ExternalVideoService.search("机械制图"))[0]
+
+        for key in ("title", "author", "duration", "view_count", "description",
+                    "cover_url", "page_url", "embed_url", "source", "source_label"):
+            assert key in video, f"缺少字段 {key}"
+        assert video["author"] == ""
+        assert video["view_count"] == 0
+        assert video["cover_url"] == ""
+        # 下游用它渲染时应该得到空串而不是 "0次"
+        assert _format_view_count(video["view_count"]) == ""
+        assert _format_duration(video["duration"]) == ""
+
+    @pytest.mark.asyncio
+    async def test_whitelist_split_between_two_queries(self, monkeypatch):
+        """B 站必须单独查 —— 和十几个课程站点混在一次查询里会被挤掉名额"""
+        mock = _patch_search(monkeypatch, [_result(BILI_URL)])
+
+        await ExternalVideoService.search("机械制图")
+
+        assert mock.await_count == 2
+        embed_include = mock.call_args_list[0].kwargs["include"]
+        course_include = mock.call_args_list[1].kwargs["include"]
+        assert "bilibili.com" in embed_include
+        assert "icourse163.org" not in embed_include
+        assert "icourse163.org" in course_include
+        assert "bilibili.com" not in course_include
+
+    @pytest.mark.asyncio
+    async def test_embedded_videos_rank_before_course_pages(self, monkeypatch):
+        """能播的排前面：先占满 B 站，剩下的位子才给只能跳转的课程页"""
+        _patch_search(
+            monkeypatch,
+            embed_results=[_result(BILI_URL, title="B站视频")],
+            course_results=[_result(MOOC_URL, title="MOOC 课程")],
+        )
+
+        videos = await ExternalVideoService.search("机械制图", max_results=2)
+
+        assert [v["title"] for v in videos] == ["B站视频", "MOOC 课程"]
+
+    @pytest.mark.asyncio
+    async def test_empty_results(self, monkeypatch):
+        _patch_search(monkeypatch, [])
+        assert await ExternalVideoService.search("不存在的内容") == []
 
 
 # ═══════════════════════════════════════════════
-#  ExternalVideoService.search_and_save（mock DB）
+#  ExternalVideoService.search_and_save（契约回归）
 # ═══════════════════════════════════════════════
 
-class TestExternalVideoServiceSearchAndSave:
-    @patch("backend.src.service.video.service.User.filter")
-    @patch("backend.src.service.video.service.ExternalVideoService.search")
-    @patch("backend.src.service.video.service.GeneratedResource.create")
-    async def test_success(self, mock_create, mock_search, mock_user_filter):
-        """搜索并保存"""
-        qs = AsyncMock()
-        qs.first = AsyncMock(return_value=AsyncMock())
-        mock_user_filter.return_value = qs
+class TestSearchAndSaveContract:
+    """上游 resource/service.py 与 tools/video_search.py 依赖这些字段名，改后端不能破坏它"""
 
-        mock_search.return_value = [
-            {
-                "bvid": "BV1xx411c7mD",
-                "title": "线性代数",
-                "page_url": "https://www.bilibili.com/video/BV1xx411c7mD",
-                "description": "教学视频",
-                "source": "bilibili",
-                "source_label": "B站",
-                "embed_url": "//player.bilibili.com/player.html?bvid=BV1xx411c7mD",
-                "cover_url": "https://example.com/cover.jpg",
-                "duration": 1200,
-                "author": "宋浩老师",
-                "view_count": 50000,
-            }
-        ]
+    @pytest.mark.asyncio
+    async def test_saved_shape(self, monkeypatch):
+        _patch_search(monkeypatch, [_result(BILI_URL, title="机械制图基础")])
 
-        mock_record = MagicMock()
-        mock_record.id = 1
-        mock_record.topic = "线性代数"
-        mock_record.resource_type = "external_video"
-        mock_record.file_url = "https://www.bilibili.com/video/BV1xx411c7mD"
-        mock_record.cover_url = "https://example.com/cover.jpg"
-        mock_record.created_at = "2026-06-23 12:00:00"
-        mock_create.return_value = mock_record
+        record = MagicMock()
+        record.id = 7
+        record.topic = "机械制图"
+        record.file_url = BILI_URL
+        monkeypatch.setattr(f"{VIDEO_MODULE}.GeneratedResource.create", AsyncMock(return_value=record))
 
-        result = await ExternalVideoService.search_and_save("线性代数", 1)
-        assert len(result) == 1
-        assert result[0]["resource_id"] == 1
-        assert result[0]["title"] == "线性代数"
-        assert result[0]["source"] == "B站"
-        mock_create.assert_called_once()
+        saved = await ExternalVideoService.search_and_save("机械制图", 1)
 
-    @patch("backend.src.service.video.service.User.filter")
-    @patch("backend.src.service.video.service.ExternalVideoService.search")
-    async def test_no_results(self, mock_search, mock_user_filter):
-        """搜索无结果"""
-        qs = AsyncMock()
-        qs.first = AsyncMock(return_value=AsyncMock())
-        mock_user_filter.return_value = qs
-        mock_search.return_value = []
+        assert len(saved) == 1
+        assert saved[0]["resource_id"] == 7
+        assert saved[0]["resource_type"] == "external_video"
+        assert saved[0]["source_label"] == "B站"
+        assert saved[0]["title"] == "机械制图基础"
+        # 没有播放量时要渲染成空串
+        assert saved[0]["view_count_text"] == ""
 
-        result = await ExternalVideoService.search_and_save("不存在的内容", 1)
-        assert result == []
+    @pytest.mark.asyncio
+    async def test_no_results_saves_nothing(self, monkeypatch):
+        _patch_search(monkeypatch, [])
+        create = AsyncMock()
+        monkeypatch.setattr(f"{VIDEO_MODULE}.GeneratedResource.create", create)
 
-    @patch("backend.src.service.video.service.User.filter")
-    async def test_user_not_found(self, mock_user_filter):
-        """用户不存在"""
-        qs = AsyncMock()
-        qs.first = AsyncMock(return_value=None)
-        mock_user_filter.return_value = qs
+        assert await ExternalVideoService.search_and_save("不存在的内容", 1) == []
+        create.assert_not_awaited()
 
-        with pytest.raises(ValueError, match="用户不存在"):
-            await ExternalVideoService.search_and_save("线性代数", 999)
+
+# ═══════════════════════════════════════════════
+#  格式化
+# ═══════════════════════════════════════════════
+
+class TestFormatDuration:
+    def test_seconds(self):
+        assert _format_duration(90) == "1:30"
+
+    def test_hours(self):
+        assert _format_duration(3725) == "1:02:05"
+
+    def test_colon_string(self):
+        assert _format_duration("12:34") == "12:34"
+
+    def test_zero_and_none(self):
+        assert _format_duration(0) == ""
+        assert _format_duration(None) == ""
+
+    def test_garbage(self):
+        assert _format_duration("abc") == ""
+
+
+class TestFormatViewCount:
+    def test_wan(self):
+        assert _format_view_count(888888) == "88.9万次"
+
+    def test_under_ten_thousand(self):
+        assert _format_view_count(9999) == "9999次"
+
+    def test_zero_and_none(self):
+        assert _format_view_count(0) == ""
+        assert _format_view_count(None) == ""
