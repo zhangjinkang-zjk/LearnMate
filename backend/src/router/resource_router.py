@@ -17,6 +17,7 @@ from backend.src.schemas.response import fail, ok
 from backend.src.schemas.skill import UpsertSkillRequest
 from backend.src.utils.jwt import get_user_id_from_token, JWT_KEY, ALGORITHM
 from backend.src.utils.admin_check import is_admin
+from backend.src.utils.web_search_client import search_web
 from jose import jwt, JWTError
 
 router = APIRouter(prefix = "/resource", tags = ["学习资源生成"])
@@ -238,6 +239,24 @@ async def list_resources(
         raise
     except Exception :
         raise HTTPException(500, "服务器错误")
+
+
+@router.get("/search")
+async def search_external_resources(
+    q: str = Query(..., min_length=2, max_length=120),
+    count: int = Query(8, ge=1, le=12),
+    user_id: int = Depends(get_user_id_from_token),
+):
+    """搜索公开网页，供资料库的外站资源入口使用。"""
+    query = str(q or "").strip()
+    if not query:
+        return ok([])
+    try:
+        results = await search_web(query, count=count, summary=False, caller=f"resource_library:{user_id}")
+        return ok(results)
+    except Exception:
+        logging.getLogger("resource_router").warning("外站资源搜索失败", exc_info=True)
+        return ok([])
 
 
 # ═══════════════════════════════════════
