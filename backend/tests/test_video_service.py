@@ -3,12 +3,17 @@
 测试目标：backend/src/service/video/service.py 的 ExternalVideoService
 覆盖范围：
 - BVID 提取与内嵌播放地址生成
-- search() 对检索结果的映射（白名单过滤、来源标注、条数截断）
+- 检索词构造（节点标签优先于节点标题）
+- search() 的双源编排：B 站优先、课程平台常补、B 站不可用时博查兜底
+- 博查那条链路的映射（白名单过滤、来源标注、条数截断）
+- search_node_videos() 按节点检索
 - search_and_save() 的落库字段契约（上游调用方依赖它不变）
 - 时长 / 播放量格式化
 
-不测真实接口：检索已改为博查，测试全部 mock 掉 search_web。
+**不测真实接口**：两个检索源（B 站接口、博查）在测试里全部 mock，
+一次真实请求都不发。
 """
+import json
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -23,16 +28,24 @@ from backend.src.service.video.service import (
     _extract_bvid,
     _format_duration,
     _format_view_count,
+    _node_query,
+    _parse_tags,
+    _rank_by_relevance,
+    _video_payload,
+    search_node_videos,
 )
+from backend.src.utils.exceptions import ServiceError
 
 VIDEO_MODULE = "backend.src.service.video.service"
 
 BILI_URL = "https://www.bilibili.com/video/BV1xx411c7mD"
+BILI_URL_2 = "https://www.bilibili.com/video/BV1P54y1S7xJ"
 MOOC_URL = "https://www.icourse163.org/course/ZJU-1001"
 WEIBO_URL = "https://weibo.com/1234/abcd"
 
 
 def _result(url: str, title: str = "机械制图基础", **overrides):
+    """博查返回的一条网页结果"""
     item = {
         "title": title,
         "url": url,
@@ -45,22 +58,73 @@ def _result(url: str, title: str = "机械制图基础", **overrides):
     return item
 
 
-def _patch_search(monkeypatch, embed_results=None, course_results=None):
-    """替换 video.service 里的 search_web，返回 mock 以便断言调用参数。
+def _bili_video(bvid="BV1xx411c7mD", title="B站视频", **overrides):
+    """B 站客户端返回的一条视频（已经是内部结构）"""
+    item = {
+        "bvid": bvid,
+        "title": title,
+        "author": "某 UP 主",
+        "duration": "12:34",
+        "view_count": 49927,
+        "description": "课程简介",
+        "cover_url": "https://i2.hdslb.com/x.jpg",
+        "page_url": f"https://www.bilibili.com/video/{bvid}",
+        "embed_url": f"https://player.bilibili.com/player.html?bvid={bvid}",
+        "source": "bilibili",
+        "source_label": "B站",
+    }
+    item.update(overrides)
+    return item
 
-    视频搜索会分两次调用：caller='external_video' 查 embed 档（B 站），
-    caller='external_video_course' 查课程/图文档。只传一个列表时两次返回同一批。
-    """
-    if course_results is None:
-        course_results = embed_results
 
+def _patch_bilibili(monkeypatch, videos=None):
+    """替换 B 站客户端。默认返回空 —— 于是走博查兜底，老用例语义不变。"""
+    mock = AsyncMock(return_value=[dict(v) for v in (videos or [])])
+    monkeypatch.setattr(f"{VIDEO_MODULE}.search_bilibili_videos", mock)
+    return mock
+
+
+def _patch_bocha(monkeypatch, *, course=None, embed=None):
+    """替换博查。按 caller 区分两档：课程/图文档，和 B 站兜底档。"""
     async def _fake(query, *, count=10, include=None, summary=False, freshness="noLimit", caller=""):
-        picked = embed_results if caller == "external_video" else course_results
+        picked = course if caller == "external_video_course" else embed
         return [dict(item) for item in (picked or [])]
 
     mock = AsyncMock(side_effect=_fake)
     monkeypatch.setattr(f"{VIDEO_MODULE}.search_web", mock)
     return mock
+
+
+def _patch_encoder(monkeypatch, scores=None):
+    """替换相关性打分器。
+
+    返回的「向量」故意是 1 维：query 恒为 1.0，所以 np.dot 出来的相似度
+    就等于对应位置的分值 —— 测试可以直接指定每条结果该得多少分。
+    scores 不给时全部返回 1.0（必定过阈值），不关心过滤的用例就不会被拖慢。
+    """
+    import numpy as np
+
+    async def _fake(texts):
+        count = max(0, len(texts) - 1)
+        values = [1.0] * count if scores is None else list(scores)
+        return np.array([[1.0]] + [[float(v)] for v in values], dtype=np.float32)
+
+    mock = AsyncMock(side_effect=_fake)
+    monkeypatch.setattr("backend.src.utils.knowledge_base.encode_many", mock)
+    return mock
+
+
+def _patch_sources(monkeypatch, *, bilibili=None, course=None, embed=None, scores=None):
+    """同时替换两个检索源和相关性打分器，返回 (bilibili_mock, bocha_mock)"""
+    _patch_encoder(monkeypatch, scores)
+    return (
+        _patch_bilibili(monkeypatch, bilibili),
+        _patch_bocha(monkeypatch, course=course, embed=embed),
+    )
+
+
+def _bocha_calls(bocha_mock):
+    return {call.kwargs.get("caller"): call for call in bocha_mock.call_args_list}
 
 
 # ═══════════════════════════════════════════════
@@ -107,19 +171,296 @@ class TestEmbedUrl:
 
 
 # ═══════════════════════════════════════════════
-#  ExternalVideoService.search
+#  检索词构造
 # ═══════════════════════════════════════════════
 
-class TestExternalVideoServiceSearch:
-    @pytest.mark.asyncio
-    async def test_empty_topic_skips_search(self, monkeypatch):
-        mock = _patch_search(monkeypatch, [_result(BILI_URL)])
-        assert await ExternalVideoService.search("   ") == []
-        mock.assert_not_called()
+class TestNodeQuery:
+    def test_tags_take_priority(self):
+        """节点标题是教学描述，标签才是行业通用说法 —— 必须优先用标签"""
+        q = _node_query("上下文组装与Prompt注入设计", ["检索上下文组装", "RAG提示词约束", "切片编号引用"])
+        assert q == "检索上下文组装 RAG提示词约束"
+
+    def test_at_most_two_tags(self):
+        q = _node_query("某主题", ["A", "B", "C", "D"])
+        assert q == "A B"
+
+    def test_blank_tags_ignored(self):
+        assert _node_query("某主题", ["  ", "RAG原理"]) == "RAG原理"
+
+    def test_falls_back_to_topic(self):
+        assert _node_query("大模型应用调用基础：上下文窗口与生成参数") == "大模型应用调用基础 上下文窗口与生成参数"
+
+    def test_no_tags_keeps_topic_without_punctuation(self):
+        assert _node_query("IVF倒排索引：聚类分桶") == "IVF倒排索引 聚类分桶"
+
+    def test_empty_everything(self):
+        assert _node_query("") == ""
+
+    def test_length_capped(self):
+        assert len(_node_query("x" * 200)) <= 60
+
+
+class TestParseTags:
+    def test_json_text_column(self):
+        """knowledge_tags 是 JSON **文本**列 —— 直接下标取值会拿到 '['"""
+        assert _parse_tags('["Token计数", "上下文窗口"]') == ["Token计数", "上下文窗口"]
+
+    def test_already_a_list(self):
+        assert _parse_tags(["A", "B"]) == ["A", "B"]
+
+    def test_broken_json(self):
+        assert _parse_tags("{不是数组") == []
+
+    def test_none_and_empty(self):
+        assert _parse_tags(None) == []
+        assert _parse_tags("") == []
+        assert _parse_tags("[]") == []
+
+    def test_non_list_json(self):
+        assert _parse_tags('{"a": 1}') == []
+
+    def test_blank_entries_dropped(self):
+        assert _parse_tags('["A", "  ", ""]') == ["A"]
+
+
+# ═══════════════════════════════════════════════
+#  _video_payload
+# ═══════════════════════════════════════════════
+
+class TestVideoPayload:
+    def test_formats_duration_and_views(self):
+        payload = _video_payload(_bili_video())
+        assert payload["duration_text"] == "12:34"
+        assert payload["view_count_text"] == "5.0万次"
+        assert payload["source_label"] == "B站"
+        assert payload["preview_url"] == payload["embed_url"]
+
+    def test_missing_values_render_empty(self):
+        payload = _video_payload({"title": "无数据"})
+        assert payload["duration_text"] == ""
+        assert payload["view_count_text"] == ""
+        assert payload["cover_url"] == ""
+        assert payload["embed_url"] == ""
+
+
+class TestRelevanceFilter:
+    """B 站接口永远返回满页，所以"有结果"是假信号 —— 必须按相似度筛一遍"""
 
     @pytest.mark.asyncio
+    async def test_low_similarity_dropped(self, monkeypatch):
+        _patch_encoder(monkeypatch, scores=[0.9, 0.4, 0.7])
+        videos = [_bili_video(title=f"视频{i}") for i in range(3)]
+
+        kept = await _rank_by_relevance(videos, "机械制图")
+
+        assert [v["title"] for v in kept] == ["视频0", "视频2"]
+
+    @pytest.mark.asyncio
+    async def test_sorted_by_similarity(self, monkeypatch):
+        """最相关的排最前面 —— B 站自己的排序里塞了很多噪音"""
+        _patch_encoder(monkeypatch, scores=[0.6, 0.9, 0.7])
+        videos = [_bili_video(title=f"视频{i}") for i in range(3)]
+
+        kept = await _rank_by_relevance(videos, "机械制图")
+
+        assert [v["title"] for v in kept] == ["视频1", "视频2", "视频0"]
+
+    @pytest.mark.asyncio
+    async def test_all_below_threshold(self, monkeypatch):
+        _patch_encoder(monkeypatch, scores=[0.3, 0.2])
+        videos = [_bili_video(title=f"视频{i}") for i in range(2)]
+
+        assert await _rank_by_relevance(videos, "分组聚合与结果导出") == []
+
+    @pytest.mark.asyncio
+    async def test_encoder_failure_keeps_original(self, monkeypatch):
+        """打分是锦上添花，绝不能因为它把已经拿到的结果弄丢"""
+        monkeypatch.setattr(
+            "backend.src.utils.knowledge_base.encode_many",
+            AsyncMock(side_effect=RuntimeError("模型加载失败")),
+        )
+        videos = [_bili_video(title="视频0"), _bili_video(bvid="BV1P54y1S7xJ", title="视频1")]
+
+        kept = await _rank_by_relevance(videos, "机械制图")
+
+        assert [v["title"] for v in kept] == ["视频0", "视频1"]
+
+    @pytest.mark.asyncio
+    async def test_threshold_zero_disables_filter(self, monkeypatch):
+        monkeypatch.setenv("EXTERNAL_VIDEO_MIN_SIMILARITY", "0")
+        _patch_encoder(monkeypatch, scores=[0.01, 0.02])
+        videos = [_bili_video(title="视频0"), _bili_video(bvid="BV1P54y1S7xJ", title="视频1")]
+
+        kept = await _rank_by_relevance(videos, "机械制图")
+
+        assert len(kept) == 2
+
+    @pytest.mark.asyncio
+    async def test_threshold_is_configurable(self, monkeypatch):
+        monkeypatch.setenv("EXTERNAL_VIDEO_MIN_SIMILARITY", "0.85")
+        _patch_encoder(monkeypatch, scores=[0.9, 0.8])
+        videos = [_bili_video(title="视频0"), _bili_video(bvid="BV1P54y1S7xJ", title="视频1")]
+
+        kept = await _rank_by_relevance(videos, "机械制图")
+
+        assert [v["title"] for v in kept] == ["视频0"]
+
+    @pytest.mark.asyncio
+    async def test_empty_input_skips_encoder(self, monkeypatch):
+        encoder = _patch_encoder(monkeypatch, scores=[])
+
+        assert await _rank_by_relevance([], "机械制图") == []
+        encoder.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_blank_query_skips_encoder(self, monkeypatch):
+        encoder = _patch_encoder(monkeypatch, scores=[0.9])
+
+        kept = await _rank_by_relevance([_bili_video()], "   ")
+
+        assert len(kept) == 1
+        encoder.assert_not_awaited()
+
+
+# ═══════════════════════════════════════════════
+#  ExternalVideoService.search 的双源编排
+# ═══════════════════════════════════════════════
+
+class TestSourceOrchestration:
+    @pytest.mark.asyncio
+    async def test_empty_topic_skips_all_sources(self, monkeypatch):
+        bili, bocha = _patch_sources(monkeypatch, bilibili=[_bili_video()])
+
+        assert await ExternalVideoService.search("   ") == []
+        bili.assert_not_awaited()
+        bocha.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_bilibili_is_primary(self, monkeypatch):
+        bili, _ = _patch_sources(monkeypatch, bilibili=[_bili_video(title="B站视频")])
+
+        videos = await ExternalVideoService.search("机械制图", tags=["机械制图基础"])
+
+        assert videos[0]["title"] == "B站视频"
+        assert videos[0]["source_label"] == "B站"
+        # 检索词用标签，不是标题
+        assert bili.call_args_list[0].args[0] == "机械制图基础"
+
+    @pytest.mark.asyncio
+    async def test_bilibili_has_results_skips_bocha_fallback(self, monkeypatch):
+        """有真视频在手就不必再花一次付费调用去查召回很差的 B 站档"""
+        _, bocha = _patch_sources(monkeypatch, bilibili=[_bili_video()])
+
+        await ExternalVideoService.search("机械制图")
+
+        assert "external_video_fallback" not in _bocha_calls(bocha)
+
+    @pytest.mark.asyncio
+    async def test_bocha_fallback_used_when_bilibili_empty(self, monkeypatch):
+        """B 站被限流 / 熔断 / 召回为空时，必须还有东西给用户"""
+        _, bocha = _patch_sources(monkeypatch, bilibili=[], embed=[_result(BILI_URL, title="兜底视频")])
+
+        videos = await ExternalVideoService.search("机械制图")
+
+        assert [v["title"] for v in videos] == ["兜底视频"]
+        assert "external_video_fallback" in _bocha_calls(bocha)
+
+    @pytest.mark.asyncio
+    async def test_irrelevant_bilibili_results_filtered_out(self, monkeypatch):
+        """真实场景：节点「分组聚合与结果导出」在 B 站会召回「origin合并两个文件」"""
+        _patch_sources(
+            monkeypatch,
+            bilibili=[_bili_video(title="origin合并两个文件")],
+            scores=[0.49],
+        )
+
+        assert await ExternalVideoService.search("分组聚合与结果导出") == []
+
+    @pytest.mark.asyncio
+    async def test_filtered_empty_does_not_trigger_bocha_fallback(self, monkeypatch):
+        """被相关性筛空 ≠ B 站没拿到。
+
+        筛空说明这个检索词在 B 站本来就没有好结果，博查的 B 站召回只会更差，
+        不该再花一次付费调用去确认这件事。
+        """
+        _, bocha = _patch_sources(
+            monkeypatch,
+            bilibili=[_bili_video(title="绝不相关")],
+            scores=[0.3],
+        )
+
+        assert await ExternalVideoService.search("分组聚合与结果导出") == []
+        assert "external_video_fallback" not in _bocha_calls(bocha)
+
+    @pytest.mark.asyncio
+    async def test_course_platform_always_queried(self, monkeypatch):
+        """课程平台是博查的长处，B 站覆盖不到，无论 B 站结果如何都要补"""
+        _, bocha = _patch_sources(
+            monkeypatch,
+            bilibili=[_bili_video()],
+            course=[_result(MOOC_URL, title="MOOC 课程")],
+        )
+
+        videos = await ExternalVideoService.search("机械制图", max_results=3)
+
+        assert [v["title"] for v in videos] == ["B站视频", "MOOC 课程"]
+        assert "external_video_course" in _bocha_calls(bocha)
+
+    @pytest.mark.asyncio
+    async def test_query_tiers_do_not_overlap(self, monkeypatch):
+        """B 站档和课程档必须分开查 —— 十几个课程站点混进来会把 B 站名额挤光"""
+        _, bocha = _patch_sources(monkeypatch, bilibili=[])
+
+        await ExternalVideoService.search("机械制图")
+
+        calls = _bocha_calls(bocha)
+        course_include = calls["external_video_course"].kwargs["include"]
+        embed_include = calls["external_video_fallback"].kwargs["include"]
+        assert "icourse163.org" in course_include
+        assert "bilibili.com" not in course_include
+        assert "bilibili.com" in embed_include
+        assert "icourse163.org" not in embed_include
+
+    @pytest.mark.asyncio
+    async def test_all_sources_empty(self, monkeypatch):
+        _patch_sources(monkeypatch, bilibili=[], embed=[], course=[])
+
+        assert await ExternalVideoService.search("不存在的内容") == []
+
+    @pytest.mark.asyncio
+    async def test_max_results_respected(self, monkeypatch):
+        _patch_sources(
+            monkeypatch,
+            bilibili=[_bili_video(bvid=f"BV1{i:09d}") for i in range(6)],
+        )
+
+        videos = await ExternalVideoService.search("机械制图", max_results=2)
+
+        assert len(videos) == 2
+        assert len({v["page_url"] for v in videos}) == 2
+
+    @pytest.mark.asyncio
+    async def test_same_video_deduped_across_sources(self, monkeypatch):
+        """B 站档和博查兜底档可能给出同一个视频，只应出现一次"""
+        _patch_sources(
+            monkeypatch,
+            bilibili=[_bili_video(bvid="BV1P54y1S7xJ")],
+            course=[_result(BILI_URL_2, title="同一个")],
+        )
+
+        videos = await ExternalVideoService.search("机械制图", max_results=3)
+
+        assert len(videos) == 1
+
+
+# ═══════════════════════════════════════════════
+#  博查那条链路的映射
+# ═══════════════════════════════════════════════
+
+class TestBochaMapping:
+    @pytest.mark.asyncio
     async def test_bilibili_result_mapped(self, monkeypatch):
-        _patch_search(monkeypatch, [_result(BILI_URL, title="机械制图 教学视频")])
+        _patch_sources(monkeypatch, bilibili=[], embed=[_result(BILI_URL, title="机械制图 教学视频")])
 
         videos = await ExternalVideoService.search("机械制图")
 
@@ -132,7 +473,7 @@ class TestExternalVideoServiceSearch:
 
     @pytest.mark.asyncio
     async def test_course_platform_has_no_embed(self, monkeypatch):
-        _patch_search(monkeypatch, [_result(MOOC_URL, title="机械制图 国家精品课")])
+        _patch_sources(monkeypatch, bilibili=[], course=[_result(MOOC_URL, title="机械制图 国家精品课")])
 
         videos = await ExternalVideoService.search("机械制图")
 
@@ -143,7 +484,7 @@ class TestExternalVideoServiceSearch:
     @pytest.mark.asyncio
     async def test_non_whitelisted_domain_dropped(self, monkeypatch):
         """include 只是请求侧建议，博查可能仍返回名单外站点 —— 必须自己再筛一遍"""
-        _patch_search(monkeypatch, [_result(WEIBO_URL), _result(BILI_URL)])
+        _patch_sources(monkeypatch, bilibili=[], embed=[_result(WEIBO_URL), _result(BILI_URL)])
 
         videos = await ExternalVideoService.search("机械制图")
 
@@ -156,7 +497,7 @@ class TestExternalVideoServiceSearch:
         真实抓包里 B 站结果绝大多数是图文专栏（read/）、付费课程（cheese/）、
         收藏夹（medialist/）和未支持的 AV 号 —— 都不能内嵌，混进"视频"列表是错的。
         """
-        _patch_search(monkeypatch, [
+        _patch_sources(monkeypatch, bilibili=[], embed=[
             _result("https://www.bilibili.com/read/cv26236201", title="图文专栏"),
             _result("https://www.bilibili.com/cheese/play/ss31493", title="付费课程"),
             _result("https://m.bilibili.com/medialist/play/384763561", title="收藏夹"),
@@ -171,7 +512,11 @@ class TestExternalVideoServiceSearch:
     @pytest.mark.asyncio
     async def test_bilibili_url_canonicalized(self, monkeypatch):
         """移动域名和 query 尾巴都归一到规范地址"""
-        _patch_search(monkeypatch, [_result("https://m.bilibili.com/video/BV1P54y1S7xJ?from=search")])
+        _patch_sources(
+            monkeypatch,
+            bilibili=[],
+            embed=[_result("https://m.bilibili.com/video/BV1P54y1S7xJ?from=search")],
+        )
 
         video = (await ExternalVideoService.search("机械制图"))[0]
 
@@ -179,44 +524,9 @@ class TestExternalVideoServiceSearch:
         assert video["embed_url"] == "https://player.bilibili.com/player.html?bvid=BV1P54y1S7xJ"
 
     @pytest.mark.asyncio
-    async def test_course_platform_pages_kept(self, monkeypatch):
-        """course 档是课程页不是视频文件，不能按 B 站那套规则被筛掉"""
-        _patch_search(monkeypatch, [_result(MOOC_URL)])
-
-        videos = await ExternalVideoService.search("机械制图")
-
-        assert len(videos) == 1
-        assert videos[0]["page_url"] == MOOC_URL
-
-    @pytest.mark.asyncio
-    async def test_max_results_respected(self, monkeypatch):
-        # BV 号的真实格式是 "BV" + 正好 10 位，构造数据必须合法，
-        # 否则会被规范化成同一个地址、被去重合并掉
-        results = [_result(f"https://www.bilibili.com/video/BV1{i:09d}") for i in range(6)]
-        _patch_search(monkeypatch, results)
-
-        videos = await ExternalVideoService.search("机械制图", max_results=2)
-
-        assert len(videos) == 2
-        assert len({v["page_url"] for v in videos}) == 2
-
-    @pytest.mark.asyncio
-    async def test_same_video_from_different_urls_deduped(self, monkeypatch):
-        """同一集的移动端地址和规范地址指向同一个视频，只应出现一次"""
-        _patch_search(monkeypatch, [
-            _result("https://m.bilibili.com/video/BV1P54y1S7xJ/?from=search", title="移动端"),
-            _result("https://www.bilibili.com/video/BV1P54y1S7xJ", title="网页端"),
-        ])
-
-        videos = await ExternalVideoService.search("机械制图", max_results=3)
-
-        assert len(videos) == 1
-        assert videos[0]["page_url"] == "https://www.bilibili.com/video/BV1P54y1S7xJ"
-
-    @pytest.mark.asyncio
     async def test_missing_fields_degrade_to_empty(self, monkeypatch):
         """博查不给作者 / 时长 / 播放量 / 封面，字段必须在但为空，下游才不会炸"""
-        _patch_search(monkeypatch, [_result(BILI_URL)])
+        _patch_sources(monkeypatch, bilibili=[], embed=[_result(BILI_URL)])
 
         video = (await ExternalVideoService.search("机械制图"))[0]
 
@@ -230,42 +540,86 @@ class TestExternalVideoServiceSearch:
         assert _format_view_count(video["view_count"]) == ""
         assert _format_duration(video["duration"]) == ""
 
+
+# ═══════════════════════════════════════════════
+#  search_node_videos
+# ═══════════════════════════════════════════════
+
+class _FakeNodeQuery:
+    def __init__(self, node):
+        self._node = node
+
+    async def first(self):
+        return self._node
+
+
+class _FakePathNode:
+    """替掉 PathNode.filter(...).first()"""
+
+    def __init__(self, node):
+        self.node = node
+        self.filter_calls: list[dict] = []
+
+    def filter(self, **kwargs):
+        self.filter_calls.append(kwargs)
+        return _FakeNodeQuery(self.node)
+
+
+class _Node:
+    def __init__(self, topic, tags):
+        self.topic = topic
+        self.knowledge_tags = tags
+
+
+def _patch_node(monkeypatch, node):
+    fake = _FakePathNode(node)
+    monkeypatch.setattr("backend.src.models.path_model.PathNode", fake)
+    return fake
+
+
+class TestSearchNodeVideos:
     @pytest.mark.asyncio
-    async def test_whitelist_split_between_two_queries(self, monkeypatch):
-        """B 站必须单独查 —— 和十几个课程站点混在一次查询里会被挤掉名额"""
-        mock = _patch_search(monkeypatch, [_result(BILI_URL)])
+    async def test_uses_node_tags_as_query(self, monkeypatch):
+        """检索词取自节点的知识点标签，不是节点标题"""
+        _patch_node(monkeypatch, _Node("上下文组装与Prompt注入设计", json.dumps(["检索上下文组装", "RAG提示词约束"])))
+        bili, _ = _patch_sources(monkeypatch, bilibili=[_bili_video()])
 
-        await ExternalVideoService.search("机械制图")
+        result = await search_node_videos(1, 2, max_results=3)
 
-        assert mock.await_count == 2
-        embed_include = mock.call_args_list[0].kwargs["include"]
-        course_include = mock.call_args_list[1].kwargs["include"]
-        assert "bilibili.com" in embed_include
-        assert "icourse163.org" not in embed_include
-        assert "icourse163.org" in course_include
-        assert "bilibili.com" not in course_include
+        assert bili.call_args_list[0].args[0] == "检索上下文组装 RAG提示词约束"
+        assert result[0]["title"] == "B站视频"
+        assert result[0]["view_count_text"] == "5.0万次"
 
     @pytest.mark.asyncio
-    async def test_embedded_videos_rank_before_course_pages(self, monkeypatch):
-        """能播的排前面：先占满 B 站，剩下的位子才给只能跳转的课程页"""
-        _patch_search(
-            monkeypatch,
-            embed_results=[_result(BILI_URL, title="B站视频")],
-            course_results=[_result(MOOC_URL, title="MOOC 课程")],
-        )
+    async def test_looks_up_node_within_path(self, monkeypatch):
+        fake = _patch_node(monkeypatch, _Node("某主题", "[]"))
+        _patch_sources(monkeypatch, bilibili=[_bili_video()])
 
-        videos = await ExternalVideoService.search("机械制图", max_results=2)
+        await search_node_videos(7, 9, max_results=3)
 
-        assert [v["title"] for v in videos] == ["B站视频", "MOOC 课程"]
+        assert fake.filter_calls == [{"id": 9, "path_id": 7}]
 
     @pytest.mark.asyncio
-    async def test_empty_results(self, monkeypatch):
-        _patch_search(monkeypatch, [])
-        assert await ExternalVideoService.search("不存在的内容") == []
+    async def test_missing_node_raises(self, monkeypatch):
+        _patch_node(monkeypatch, None)
+        _patch_sources(monkeypatch, bilibili=[])
+
+        with pytest.raises(ServiceError):
+            await search_node_videos(1, 2)
+
+    @pytest.mark.asyncio
+    async def test_tags_broken_json_falls_back_to_topic(self, monkeypatch):
+        """标签列坏了也不能让整个接口失败"""
+        _patch_node(monkeypatch, _Node("IVF倒排索引：聚类分桶", "{坏 JSON"))
+        bili, _ = _patch_sources(monkeypatch, bilibili=[_bili_video()])
+
+        await search_node_videos(1, 2)
+
+        assert bili.call_args_list[0].args[0] == "IVF倒排索引 聚类分桶"
 
 
 # ═══════════════════════════════════════════════
-#  ExternalVideoService.search_and_save（契约回归）
+#  search_and_save（契约回归）
 # ═══════════════════════════════════════════════
 
 class TestSearchAndSaveContract:
@@ -273,7 +627,7 @@ class TestSearchAndSaveContract:
 
     @pytest.mark.asyncio
     async def test_saved_shape(self, monkeypatch):
-        _patch_search(monkeypatch, [_result(BILI_URL, title="机械制图基础")])
+        _patch_sources(monkeypatch, bilibili=[_bili_video(title="机械制图基础")])
 
         record = MagicMock()
         record.id = 7
@@ -288,12 +642,12 @@ class TestSearchAndSaveContract:
         assert saved[0]["resource_type"] == "external_video"
         assert saved[0]["source_label"] == "B站"
         assert saved[0]["title"] == "机械制图基础"
-        # 没有播放量时要渲染成空串
-        assert saved[0]["view_count_text"] == ""
+        assert saved[0]["duration_text"] == "12:34"
+        assert saved[0]["view_count_text"] == "5.0万次"
 
     @pytest.mark.asyncio
     async def test_no_results_saves_nothing(self, monkeypatch):
-        _patch_search(monkeypatch, [])
+        _patch_sources(monkeypatch, bilibili=[], embed=[], course=[])
         create = AsyncMock()
         monkeypatch.setattr(f"{VIDEO_MODULE}.GeneratedResource.create", create)
 
@@ -314,6 +668,10 @@ class TestFormatDuration:
 
     def test_colon_string(self):
         assert _format_duration("12:34") == "12:34"
+
+    def test_minutes_over_sixty(self):
+        """B 站把长视频写成 "217:17"（217 分钟），要能进位成 3:37:17"""
+        assert _format_duration("217:17") == "3:37:17"
 
     def test_zero_and_none(self):
         assert _format_duration(0) == ""

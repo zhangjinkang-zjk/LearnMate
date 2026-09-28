@@ -1096,6 +1096,26 @@ def _is_retryable_radar_write_error(error: Exception) -> bool:
     return any(marker in message for marker in ("1213", "deadlock", "1062", "duplicate"))
 
 
+def _active_day(value):
+    """把时间戳归一到"哪一天"（UTC）。naive 时间按 UTC 处理，空值返回 None。"""
+    if not value:
+        return None
+    from datetime import timezone as tz
+    if value.tzinfo is None:
+        return value.replace(tzinfo=tz.utc).date()
+    return value.astimezone(tz.utc).date()
+
+
+def _persistence_score(timestamps, cutoff_date, window_days: int = 30) -> int:
+    """「坚持」维度：近 window_days 天里有学习行为的天数占比（去重、封顶 100）。
+
+    timestamps 可以来自多个来源（答题记录 + learning_events），这里取并集去重 ——
+    同一天做了几件事只算一天。
+    """
+    days = {day for day in (_active_day(ts) for ts in timestamps) if day and day >= cutoff_date}
+    return min(100, round(len(days) / window_days * 100))
+
+
 class PortraitRadarService:
 
     @staticmethod
@@ -1147,19 +1167,20 @@ class PortraitRadarService:
         tag_count = len(mastery_records)
         breadth = min(100, round(tag_count / 50 * 100))
 
-        # 坚持 — 近 30 天活跃天数占比
+        # 坚持 — 近 30 天有学习行为的天数占比。
+        # 只数 ExamRecord 会把"连续看资料 / 做节点测验 / 课堂对话但没考试"的用户算成 0 分，
+        # 所以并上 learning_events：resource_read / node_quiz / classroom_chat / assessment 都在里面。
+        # 两个来源取并集，不是替换 —— 考试一定算活跃，但不该只有考试才算。
         from datetime import timezone as tz
+
         cutoff = datetime.now(tz.utc) - timedelta(days=30)
-        recent_dates = set()
-        for r in records:
-            ct = r.created_at
-            if not ct:
-                continue
-            if ct.tzinfo is None:
-                ct = ct.replace(tzinfo=tz.utc)
-            if ct >= cutoff:
-                recent_dates.add(ct.date())
-        persistence = min(100, round(len(recent_dates) / 30 * 100))
+        event_times = await LearningEvent.filter(
+            user_id=user_id, created_at__gte=cutoff
+        ).values_list("created_at", flat=True)
+        persistence = _persistence_score(
+            [r.created_at for r in records] + list(event_times),
+            cutoff.date(),
+        )
 
         # 写入/更新 Radar 表。不要使用 Tortoise 的 select_for_update + create：
         # 首次并发请求在 MySQL 上可能对用户外键和唯一索引形成死锁。

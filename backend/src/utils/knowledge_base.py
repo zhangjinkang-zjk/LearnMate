@@ -109,6 +109,22 @@ async def _encode_async(text: str):
     return vector
 
 
+async def encode_many(texts: list[str]):
+    """批量编码，返回已归一化的向量矩阵（点积即余弦相似度）。
+
+    比逐条调 _encode_async 快得多：批量只跑一次模型前向，逐条每条都要跑一次。
+    这里**不走 Redis 缓存** —— 调用方多是给一批短文本即时打分，命中率低，
+    而且缓存键按整批算，改一条就整批失效。
+    """
+    import numpy as np
+
+    cleaned = [str(t or "").strip() or " " for t in texts]
+    if not cleaned:
+        return np.zeros((0, 0), dtype=np.float32)
+    model = await _get_embed_model_async()
+    return await asyncio.to_thread(model.encode, cleaned, normalize_embeddings=True)
+
+
 async def search(query: str, top_k: int = 5, user_id: int = None, category: str = None) -> str:
     async with _RAG_SEARCH_SEM:
         return await _search_inner(query, top_k=top_k, user_id=user_id, category=category)
