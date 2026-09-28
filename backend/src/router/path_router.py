@@ -3,14 +3,17 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter, HTTPException, Depends, Body
+from fastapi import APIRouter, HTTPException, Depends, Body, Query
 from starlette.responses import StreamingResponse
 
 from backend.src.service.path.service import PathService
 from backend.src.service.path.classroom import generate_classroom_audio, generate_classroom_lesson, get_saved_classroom_lesson
 from backend.src.service.path.classroom_transition import get_classroom_transition
 from backend.src.service.path.classroom_chat import stream_classroom_chat
+from backend.src.service.video.service import search_node_videos
+from backend.src.utils.exceptions import ServiceError
 from backend.src.utils.jwt import get_user_id_from_token
+from backend.src.utils.redis_client import check_rate_limit
 from backend.src.schemas.path import (
     GeneratePathRequest,
     EnrollPathRequest,
@@ -278,6 +281,35 @@ async def get_node(path_id: int, node_id: int, user_id: int = Depends(get_user_i
     result = await PathService.get_node(path_id, node_id, user_id)
     if not result:
         raise HTTPException(status_code=404, detail="节点不存在")
+    return {"code": 200, "msg": "success", "data": result}
+
+
+@router.get("/{path_id}/node/{node_id}/external-videos")
+async def search_node_external_videos(
+    path_id: int,
+    node_id: int,
+    max_results: int = Query(default=3, ge=1, le=5, description="返回条数"),
+    user_id: int = Depends(get_user_id_from_token),
+):
+    """按当前学习节点检索外部教学视频与资料。
+
+    视频来自 B 站官方搜索接口（带播放量/时长/封面），课程平台与图文来自博查；
+    B 站被限流时会自动退回博查结果，所以这个接口**不会因为单一来源故障而空手**。
+
+    **node_id 必须由调用方传，不要改成服务端自己解析。**
+    服务端的 `current_node_id`（path/service.py 里取"第一个 unlocked/in_progress 的节点"）
+    并不等于"用户正在看的节点"：用户把 3/4/5 章都解锁后翻到第 5 章在读，它仍然返回 3。
+    advanced/service.py 那边就是被这个坑到，才改用"最近完成的节点"当锚点。
+    「正在看哪一章」只有前端知道（`activeNode.id`），所以由前端传最准。
+    """
+    await _assert_path_access(path_id, user_id)
+    # 每次可能触发一次付费搜索，按用户限个速
+    if not await check_rate_limit("node_ext_video", user_id, 10, 60):
+        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
+    try:
+        result = await search_node_videos(path_id, node_id, max_results=max_results)
+    except ServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"code": 200, "msg": "success", "data": result}
 
 

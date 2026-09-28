@@ -25,6 +25,7 @@ from backend.src.utils.chat_utils import allocate_chat_group_id
 from backend.src.utils.education_sources import include_domains, label_for, tier_for
 from backend.src.utils.redis_client import notify_sse as _redis_notify_sse, subscribe_sse, unsubscribe_sse
 from backend.src.utils.constants import AUDIO_DIR, VIDEOS_DIR
+from backend.src.utils.bilibili_client import search_videos as search_bilibili_videos
 from backend.src.utils.web_search_client import search_web
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,13 @@ DEFAULT_VIDEO_VOICE = "zh-CN-XiaoxiaoNeural"
 def _int_env(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
     except (TypeError, ValueError):
         return default
 
@@ -331,78 +339,242 @@ def _embed_url_for(page_url: str) -> str:
     return f"https://player.bilibili.com/player.html?bvid={bvid}" if bvid else ""
 
 
+def _node_query(topic: str, tags: list[str] | None = None) -> str:
+    """把学习节点拼成能用的检索词。
+
+    节点标题是**教学描述**（"上下文组装与Prompt注入设计"、"分组聚合与结果导出"），
+    直接拿去搜召回很差 —— 实测这类句子级标题会搜出 EXAFS 拟合、origin 合并文件
+    这种完全不相关的内容。知识点标签才是行业通用说法（"BM25原理"、"K均值聚类分桶"），
+    所以**优先用标签**；没有标签才退回标题（去标点）。
+    """
+    tag_list = [str(t).strip() for t in (tags or []) if str(t or "").strip()]
+    if tag_list:
+        return " ".join(tag_list[:2])[:60]
+    parts = re.split(r"[：:，,、。？?！!（）()\[\]【】/｜|]+", str(topic or ""))
+    return " ".join(p for p in parts if p)[:60]
+
+
+async def _search_bocha(query: str, *, count: int, include: str, caller: str) -> list[dict]:
+    """博查那条链路：结果要过教育来源白名单，B 站只保留能内嵌播放的单视频页"""
+    results = await search_web(query, count=count, include=include, summary=True, caller=caller)
+    videos: list[dict] = []
+    for item in results:
+        page_url = str(item.get("url") or "").strip()
+        if not page_url.startswith(("http://", "https://")):
+            continue
+        label = label_for(page_url)
+        if not label:
+            # include 只是请求侧的建议，博查可能仍返回名单外的站点；
+            # 落在外面的按非教育来源丢弃，别把它标成教育来源推给用户
+            continue
+
+        embed_url = _embed_url_for(page_url)
+        if tier_for(page_url) == "embed" and not embed_url:
+            # B 站上只有 /video/BVxxx 是能播的单个视频页。
+            # read/ 是图文专栏、cheese/ 是付费课程、medialist/ 是收藏夹、
+            # /video/av... 是未支持的旧格式 —— 都不是"视频"，直接丢掉
+            continue
+        if embed_url:
+            # 有 BV 号时用规范地址，顺便去掉 m. 域名和 ?from=search 这类尾巴
+            page_url = f"https://www.bilibili.com/video/{_extract_bvid(page_url)}"
+
+        videos.append({
+            "title": item.get("title") or "",
+            # 博查不返回作者 / 时长 / 播放量 / 视频封面，统一给空值：
+            # 下游 _format_duration("") / _format_view_count(0) 会渲染成空串
+            "author": "",
+            "duration": "",
+            "view_count": 0,
+            "description": item.get("summary") or item.get("snippet") or "",
+            "cover_url": "",
+            "page_url": page_url,
+            "embed_url": embed_url,
+            # source 目前没有消费者，source_label 才是展示用的
+            "source": "education",
+            "source_label": label,
+        })
+    return videos
+
+
+def _pick_videos(*groups: list[dict], max_results: int) -> list[dict]:
+    """按顺序占位并去重：视频优先，课程平台补剩下的"""
+    picked: list[dict] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group:
+            url = str(item.get("page_url") or "").strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            picked.append(item)
+            if len(picked) >= max_results:
+                return picked
+    return picked
+
+
+def _video_payload(video: dict) -> dict:
+    """转成前端直接可用的结构：时长和播放量在这里就格式化好，页面不用再算"""
+    embed_url = video.get("embed_url", "")
+    return {
+        "title": video.get("title", ""),
+        "author": video.get("author", ""),
+        "duration": video.get("duration"),
+        "duration_text": _format_duration(video.get("duration")),
+        "view_count": video.get("view_count", 0),
+        "view_count_text": _format_view_count(video.get("view_count")),
+        "description": video.get("description", ""),
+        "cover_url": video.get("cover_url", ""),
+        "page_url": video.get("page_url", ""),
+        "embed_url": embed_url,
+        "preview_url": embed_url,
+        # source 目前没有消费者，source_label 才是展示用的
+        "source": video.get("source_label", ""),
+        "source_label": video.get("source_label", ""),
+    }
+
+
+def _parse_tags(raw) -> list[str]:
+    """knowledge_tags 是 JSON **文本**列，不是数组 —— 直接下标取值会拿到 '[' """
+    if isinstance(raw, list):
+        return [str(t).strip() for t in raw if str(t or "").strip()]
+    try:
+        value = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(value, list):
+        return []
+    return [str(t).strip() for t in value if str(t or "").strip()]
+
+
+# B 站搜索结果的相关性下限（余弦相似度）。
+#
+# 必须过滤的原因：B 站接口**永远返回满页**，"返回了 N 条"不代表搜到了东西。
+# 实测节点「分组聚合与结果导出」会召回「origin合并两个文件」，
+# 「Service 层单元测试与数据隔离」会召回「Cr2O3多壳层EXAFS拟合」。
+#
+# 阈值是在 16 组**真实探测配对**上用本地 BGE 模型标定的：
+#     相关   min=0.348  max=0.778
+#     不相关 min=0.385  max=0.541
+# **两个分布是重叠的**，不存在能干净分开的阈值。0.55 在这个样本上恰好
+# 精度 100%、召回 8/9，但最高不相关(0.541)与最低保留相关(0.548)只差 0.007 ——
+# 这点余量是运气不是信号，换个语料就会变。
+#
+# 所以这是一个**偏精度**的过滤：宁可漏掉几条好的，也不要在学习页上推 EXAFS 拟合。
+# 觉得太严就把 EXTERNAL_VIDEO_MIN_SIMILARITY 调低（0 表示不过滤）。
+_EXTERNAL_VIDEO_MIN_SIMILARITY_DEFAULT = 0.55
+
+
+async def _rank_by_relevance(videos: list[dict], query_text: str) -> list[dict]:
+    """按与检索词的语义相似度过滤并重排视频。
+
+    用已经在跑的本地 BGE 模型（CPU，不额外花钱）。**任何意外都原样返回** ——
+    打分是锦上添花，绝不能因为它把已经拿到的结果弄丢。
+    """
+    if not videos or not str(query_text or "").strip():
+        return videos
+
+    try:
+        import numpy as np
+
+        from backend.src.utils.knowledge_base import encode_many
+    except Exception:
+        logger.debug("[ExternalVideo] 相关性打分不可用，跳过过滤", exc_info=True)
+        return videos
+
+    try:
+        # 只比标题：简介往往是一大段，会把短标题的语义稀释掉
+        vectors = await encode_many([query_text, *[str(v.get("title") or "") for v in videos]])
+        query_vec = vectors[0]
+        scores = [float(np.dot(query_vec, vec)) for vec in vectors[1:]]
+    except Exception:
+        logger.warning("[ExternalVideo] 相关性打分失败，保留原结果", exc_info=True)
+        return videos
+
+    threshold = _float_env("EXTERNAL_VIDEO_MIN_SIMILARITY", _EXTERNAL_VIDEO_MIN_SIMILARITY_DEFAULT)
+    if threshold <= 0:
+        return videos
+
+    kept = sorted(
+        ((score, video) for score, video in zip(scores, videos) if score >= threshold),
+        key=lambda pair: -pair[0],
+    )
+    if not kept:
+        best = max(scores) if scores else 0.0
+        logger.info(
+            "[ExternalVideo] 相关性过滤后无结果 query=%r 最高分=%.3f 阈值=%.2f",
+            str(query_text)[:30], best, threshold,
+        )
+    return [video for _, video in kept]
+
+
 class ExternalVideoService:
-    """外部教学视频检索 — 走博查搜索，按教育来源白名单限定域名"""
+    """外部教学视频检索
+
+    视频走 **B 站官方搜索接口**（带播放量 / 时长 / 封面 / UP 主，这些博查拿不到），
+    课程平台与图文走**博查**（B 站覆盖不到中国大学MOOC、学堂在线这些）。
+    两个源各用长处；B 站被限流、熔断或召回为空时，自动退回博查的 B 站结果。
+    """
 
     @staticmethod
-    async def search(topic: str, max_results: int = 3) -> list[dict]:
-        query = str(topic or "").strip()
-        if not query:
+    async def search(topic: str, max_results: int = 3, tags: list[str] | None = None) -> list[dict]:
+        """按节点检索外部视频与资料。
+
+        Args:
+            topic: 节点主题（也兼容直接传一个话题）
+            max_results: 期望条数，夹到 1..5
+            tags: 节点的 knowledge_tags。**强烈建议传** —— 节点标题是教学描述，
+                标签才是能搜到东西的行业通用说法，见 _node_query
+        """
+        query_text = str(topic or "").strip()
+        if not query_text:
             return []
         max_results = max(1, min(int(max_results or 3), 5))
 
-        # 分两次查：B 站单独查，否则十几个课程站点会把它的名额挤掉。
-        # 实测单次混查时 B 站一条视频页都剩不下。
-        embed_results = await search_web(
-            f"{query} 教学",
-            count=max(max_results * 6, 20),
-            include=include_domains("embed"),
-            summary=True,
-            caller="external_video",
-        )
-        course_results = await search_web(
-            f"{query} 教学",
-            count=max(max_results * 3, 10),
-            include=include_domains("course", "reading"),
-            summary=True,
+        keyword = _node_query(query_text, tags)
+        if not keyword:
+            return []
+
+        # 1) 视频首选 B 站接口
+        videos = await search_bilibili_videos(keyword, limit=max(max_results * 2, 6), caller="external_video")
+
+        if videos:
+            # B 站接口永远返回满页，必须按相关性筛一遍再往上给
+            videos = await _rank_by_relevance(videos, keyword)
+        else:
+            # 2) 只有 B 站**真的没拿到**（限流 / 熔断 / 召回归零）才动博查的 B 站档兜底。
+            #    注意是"没拿到"，不是"被相关性筛空了" —— 后者说明这个检索词在 B 站
+            #    本来就没有好结果，博查只会更差，不该再花一次付费调用
+            videos = await _search_bocha(
+                f"{query_text} 教学",
+                count=max(max_results * 6, 20),
+                include=include_domains("embed"),
+                caller="external_video_fallback",
+            )
+
+        # 3) 课程平台**单独查一次** —— 必须和图文分开！
+        #    实测把 course 和 reading 放在一次查询里时，返回的 20 条**全是掘金文章**，
+        #    一条 MOOC 课程都没有；单独查 course 那一档则是 20 条全慕课网。
+        #    这和 B 站那次是同一个病：名额被内容量更大的站点挤光。
+        #    课程平台在 MOOC 上是**视频课程**，是这个功能在 B 站之外的第二个视频来源。
+        #    这一档不做相似度过滤：能进白名单的已经是教育站点，实测召回本就切题。
+        courses = await _search_bocha(
+            f"{query_text} 教学",
+            count=max(max_results * 4, 12),
+            include=include_domains("course"),
             caller="external_video_course",
         )
 
-        videos: list[dict] = []
-        seen: set[str] = set()
-        # B 站（能内嵌播放）优先占位，课程平台补剩下的
-        for item in [*embed_results, *course_results]:
-            page_url = str(item.get("url") or "").strip()
-            if not page_url.startswith(("http://", "https://")):
-                continue
-            label = label_for(page_url)
-            if not label:
-                # include 只是请求侧的建议，博查可能仍返回名单外的站点；
-                # 落在外面的按非教育来源丢弃，别把它标成教育来源推给用户
-                continue
+        # 4) 图文只在"还没凑够"时才查 —— 它是兜底不是主力，省下这次付费调用
+        readings: list[dict] = []
+        if len(videos) + len(courses) < max_results:
+            readings = await _search_bocha(
+                f"{query_text} 教学",
+                count=max(max_results * 3, 10),
+                include=include_domains("reading"),
+                caller="external_video_reading",
+            )
 
-            embed_url = _embed_url_for(page_url)
-            if tier_for(page_url) == "embed" and not embed_url:
-                # B 站上只有 /video/BVxxx 是能播的单个视频页。
-                # read/ 是图文专栏、cheese/ 是付费课程、medialist/ 是收藏夹、
-                # /video/av... 是未支持的旧格式 —— 都不是"视频"，直接丢掉
-                continue
-            if embed_url:
-                # 有 BV 号时用规范地址，顺便去掉 m. 域名和 ?from=search 这类尾巴
-                page_url = f"https://www.bilibili.com/video/{_extract_bvid(page_url)}"
-
-            if page_url in seen:
-                continue
-            seen.add(page_url)
-
-            videos.append({
-                "title": item.get("title") or "",
-                # 博查不返回作者 / 时长 / 播放量 / 视频封面，统一给空值：
-                # 下游 _format_duration(0) / _format_view_count(0) 会渲染成空串
-                "author": "",
-                "duration": 0,
-                "view_count": 0,
-                "description": item.get("summary") or item.get("snippet") or "",
-                "cover_url": "",
-                "page_url": page_url,
-                "embed_url": embed_url,
-                # source 目前没有消费者，source_label 才是展示用的
-                "source": "education",
-                "source_label": label,
-            })
-            if len(videos) >= max_results:
-                break
-        return videos
+        return _pick_videos(videos, courses, readings, max_results=max_results)
 
     @staticmethod
     async def search_and_save(topic: str, user_id: int, max_results: int = 3, chat_group_id: int = 0) -> list[dict]:
@@ -426,18 +598,7 @@ class ExternalVideoService:
                 "file_type": "external_video",
                 "filename": f"推荐视频: {(v.get('title') or '')[:40]}",
                 "file_url": record.file_url,
-                "cover_url": v.get("cover_url", ""),
-                "embed_url": v.get("embed_url", ""),
-                "title": v.get("title", ""),
-                "author": v.get("author", ""),
-                "duration": v.get("duration"),
-                "duration_text": _format_duration(v.get("duration")),
-                "view_count": v.get("view_count", 0),
-                "view_count_text": _format_view_count(v.get("view_count")),
-                "description": v.get("description", ""),
-                "source": v.get("source_label", ""),
-                "source_label": v.get("source_label", ""),
-                "preview_url": v.get("embed_url", ""),
+                **_video_payload(v),
             })
 
         if saved and chat_group_id:
@@ -451,6 +612,26 @@ class ExternalVideoService:
             except Exception:
                 logger.debug("[ExternalVideo] 保存聊天历史失败", exc_info=True)
         return saved
+
+
+async def search_node_videos(path_id: int, node_id: int, max_results: int = 3) -> list[dict]:
+    """按学习节点检索外部视频与资料，供「基础学习」页在每个节点下直接看。
+
+    节点该不该给这个用户看，由路由层的 _assert_path_access 负责；这里只管业务：
+    取出节点的主题和知识点标签，拼检索词，交给 ExternalVideoService。
+    """
+    from backend.src.models.path_model import PathNode
+
+    node = await PathNode.filter(id=node_id, path_id=path_id).first()
+    if not node:
+        raise ServiceError("节点不存在")
+
+    videos = await ExternalVideoService.search(
+        node.topic,
+        max_results=max_results,
+        tags=_parse_tags(node.knowledge_tags),
+    )
+    return [_video_payload(v) for v in videos]
 
 
 # ═══════════════════════════════════════════════
