@@ -80,10 +80,10 @@ class _FakeSnapshotModel:
 
 # ── 夹具 ──────────────────────────────────────────────
 
-PROFILE = {"identity": "在校大学生", "direction": "多智能体协同决策", "goal": "完成一个项目"}
+PROFILE = {"identity": "在校大学生", "direction": "数据结构与算法", "goal": "完成一个项目"}
 PATH = {
     "path_id": 68,
-    "goal": "多智能体协同决策",
+    "goal": "数据结构与算法",
     "current_node_id": 3,
     "nodes": [
         {"id": 1, "title": "智能体基础", "status": "completed", "knowledge_tags": ["职责划分"]},

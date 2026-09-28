@@ -31,7 +31,7 @@ def _path(weak_points=None):
     """
     return {
         "path_id": 12,
-        "goal": "多智能体协同决策",
+        "goal": "数据结构与算法",
         "current_node_id": 3,
         "nodes": [
             {
@@ -62,7 +62,7 @@ def _fresh_path():
     """一个节点都没完成：进阶任务刚解锁、还没有"已完成范围"时的形态。"""
     return {
         "path_id": 12,
-        "goal": "多智能体协同决策",
+        "goal": "数据结构与算法",
         "current_node_id": 3,
         "nodes": [
             {
@@ -158,7 +158,7 @@ def test_classify_goal_supports_existing_onboarding_options():
 def test_task_recommendation_uses_completed_node_and_weak_point():
     profile = {
         "identity": "应届毕业生",
-        "direction": "多智能体协同决策",
+        "direction": "数据结构与算法",
         "goal": "准备相关岗位就业",
     }
     task = build_advanced_task(profile, _path([{"tag": "冲突消解", "accuracy": 0.4}]))
@@ -194,7 +194,7 @@ def test_incomplete_path_still_uses_the_present_tense_copy():
 
 
 def test_advanced_tasks_keep_distinct_practice_entry_points():
-    profile = {"identity": "工程师", "direction": "多智能体协同决策", "goal": "完成一个项目"}
+    profile = {"identity": "工程师", "direction": "数据结构与算法", "goal": "完成一个项目"}
     tasks = build_advanced_tasks(profile, _path())
 
     assert [task["kind"] for task in tasks] == ["transfer", "case", "project"]
@@ -203,7 +203,7 @@ def test_advanced_tasks_keep_distinct_practice_entry_points():
 
 def test_project_task_synthesizes_the_whole_completed_scope():
     """project 的卖点是"综合"，标题和交付物必须真的点名多个已完成标签。"""
-    profile = {"identity": "工程师", "direction": "多智能体协同决策", "goal": "完成一个项目"}
+    profile = {"identity": "工程师", "direction": "数据结构与算法", "goal": "完成一个项目"}
     tasks = build_advanced_tasks(profile, _path())
     project = next(task for task in tasks if task["kind"] == "project")
 
@@ -269,7 +269,7 @@ def test_advanced_tasks_unlock_only_after_ten_completed_nodes():
 
 
 def test_agent_cannot_bypass_server_owned_progression_gate():
-    profile = {"identity": "学生", "direction": "多智能体协同决策", "goal": "完成一个项目"}
+    profile = {"identity": "学生", "direction": "数据结构与算法", "goal": "完成一个项目"}
     # 用"一个节点都没完成"的路径：服务端选 case，智能体要 project 也不给
     fallback = build_advanced_tasks(profile, _fresh_path())
     normalised = _normalise_agent_tasks(

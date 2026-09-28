@@ -119,8 +119,8 @@ async def test_history_keeps_an_unfinished_session_visible(monkeypatch):
 @pytest.mark.asyncio
 async def test_history_is_newest_first(monkeypatch):
     sessions = [
-        _Session("old", updated_at="2026-09-01T00:00:00"),
-        _Session("new", updated_at="2026-09-16T00:00:00"),
+        _Session("old", updated_at="2026-01-01T00:00:00"),
+        _Session("new", updated_at="2026-02-01T00:00:00"),
     ]
 
     history = await _attach(monkeypatch, sessions, [_task("path-48-node-659")])
@@ -140,8 +140,8 @@ async def test_history_is_capped(monkeypatch):
 @pytest.mark.asyncio
 async def test_only_the_latest_session_per_task_key_shows_up(monkeypatch):
     sessions = [
-        _Session("same", session_key="latest", updated_at="2026-09-16T00:00:00"),
-        _Session("same", session_key="older", updated_at="2026-09-01T00:00:00"),
+        _Session("same", session_key="latest", updated_at="2026-02-01T00:00:00"),
+        _Session("same", session_key="older", updated_at="2026-01-01T00:00:00"),
     ]
 
     history = await _attach(monkeypatch, sessions, [_task("path-48-node-659")])

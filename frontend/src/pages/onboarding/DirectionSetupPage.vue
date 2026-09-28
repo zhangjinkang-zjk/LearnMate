@@ -80,7 +80,7 @@ const selectedIdentity = ref(isFreshFlow.value ? '' : (localStorage.getItem('lea
 const storedDirection = localStorage.getItem('learnmate_direction') || ''
 const storedGoal = localStorage.getItem('learnmate_goal') || ''
 // 方向/目标这两项现在由画像访谈问出来（`.direction-fields` 是隐藏的），所以这里
-// **不能**再拿 directionOptions[0] / goalOptions[0] 当默认值：那会把"智能系统与知识工程"
+// **不能**再拿 directionOptions[0] / goalOptions[0] 当默认值：那会把"数据结构与算法"
 // 写进 localStorage，再经 PortraitSummaryPage 传成 onboarding_context.direction；
 // 而 init_from_dialogue 里 `selected_direction or learning_direction` 是请求值优先，
 // 于是访谈真正问出来的方向会被这条写死的默认值盖掉，用户的学习路径就按它生成了。

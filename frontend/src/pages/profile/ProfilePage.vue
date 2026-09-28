@@ -18,7 +18,7 @@
       </section>
 
       <section class="portrait-radar surface" aria-labelledby="radar-title">
-        <div class="section-heading"><div><p class="eyebrow">学习能力</p><h2 id="radar-title">能力画像</h2><p class="radar-method">综合参考练习表现、知识覆盖与学习投入</p></div><span class="radar-updated">{{ radarUpdatedLabel }}</span></div>
+        <div class="section-heading"><div><p class="eyebrow">学习能力</p><h2 id="radar-title">能力画像</h2><p class="radar-method">综合参考练习表现、知识覆盖与学习投入</p></div></div>
         <div v-if="hasRadarData" class="radar-layout">
           <svg class="radar-chart" viewBox="0 0 300 280" role="img" aria-label="六维能力雷达图">
             <polygon v-for="level in radarLevels" :key="level" :points="radarRingPoints(level)" class="radar-ring" />
@@ -189,7 +189,6 @@ const hasRadarData = computed(() => {
   // 兼容尚未升级 answered_count 字段的历史接口，避免已有雷达记录被误判为空。
   return dimensions.some((item) => Number(item.score) > 0) || Boolean(radar.value?.updated_at)
 })
-const radarUpdatedLabel = computed(() => radar.value?.updated_at ? `更新于 ${new Date(radar.value.updated_at).toLocaleDateString('zh-CN')}` : '等待数据')
 const radarCenter = { x: 150, y: 132 }; const radarRadius = 88; const radarLevels = [25, 50, 75, 100]
 const radarVertices = computed(() => radarDimensions.value.map((item, index) => { const angle = -Math.PI / 2 + index * (Math.PI * 2 / 6); const x = radarCenter.x + Math.cos(angle) * radarRadius; const y = radarCenter.y + Math.sin(angle) * radarRadius; const labelRadius = radarRadius + 21; return { ...item, x, y, labelX: radarCenter.x + Math.cos(angle) * labelRadius, labelY: radarCenter.y + Math.sin(angle) * labelRadius + (index === 0 ? -2 : 4), anchor: Math.abs(Math.cos(angle)) < 0.2 ? 'middle' : Math.cos(angle) > 0 ? 'start' : 'end' } }))
 const radarRingPoints = (level) => radarVertices.value.map((point) => `${radarCenter.x + (point.x - radarCenter.x) * level / 100},${radarCenter.y + (point.y - radarCenter.y) * level / 100}`).join(' ')

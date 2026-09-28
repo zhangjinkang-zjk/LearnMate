@@ -101,7 +101,7 @@ def _build_chat_model(**kwargs) -> ChatOpenAI | None:
 _BASE_TEMPERATURE = 0.3
 
 # 叙述类正文（文档/案例/阅读材料）用的温度：比默认档高，用来打散句式套路、减少"AI 味"。
-# 仍受控——评分硬指标要求幻觉率 < 5%，过高会牺牲事实稳定性，故默认 0.7 而非 1.0。
+# 仍受控——正文要经得起事实核查，温度过高会牺牲事实稳定性，故默认 0.7 而非 1.0。
 # 结构化输出（习题/导图/PPT 的 JSON）与审核打分继续用默认档。
 CREATIVE_TEMPERATURE = float(os.getenv("AI_CREATIVE_TEMPERATURE", "0.7"))
 
