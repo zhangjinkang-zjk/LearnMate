@@ -295,6 +295,12 @@ async def search_node_external_videos(
 
     视频来自 B 站官方搜索接口（带播放量/时长/封面），课程平台与图文来自博查；
     B 站被限流时会自动退回博查结果，所以这个接口**不会因为单一来源故障而空手**。
+
+    **node_id 必须由调用方传，不要改成服务端自己解析。**
+    服务端的 `current_node_id`（path/service.py 里取"第一个 unlocked/in_progress 的节点"）
+    并不等于"用户正在看的节点"：用户把 3/4/5 章都解锁后翻到第 5 章在读，它仍然返回 3。
+    advanced/service.py 那边就是被这个坑到，才改用"最近完成的节点"当锚点。
+    「正在看哪一章」只有前端知道（`activeNode.id`），所以由前端传最准。
     """
     await _assert_path_access(path_id, user_id)
     # 每次可能触发一次付费搜索，按用户限个速

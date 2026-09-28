@@ -38,6 +38,13 @@ from backend.src.utils.exceptions import ServiceError
 
 VIDEO_MODULE = "backend.src.service.video.service"
 
+# 博查那三次调用各自的档位，和 service 里的 caller 一一对应
+_BOCHA_CALLER_TIERS = {
+    "external_video_course": "course",
+    "external_video_reading": "reading",
+    "external_video_fallback": "embed",
+}
+
 BILI_URL = "https://www.bilibili.com/video/BV1xx411c7mD"
 BILI_URL_2 = "https://www.bilibili.com/video/BV1P54y1S7xJ"
 MOOC_URL = "https://www.icourse163.org/course/ZJU-1001"
@@ -84,10 +91,12 @@ def _patch_bilibili(monkeypatch, videos=None):
     return mock
 
 
-def _patch_bocha(monkeypatch, *, course=None, embed=None):
-    """替换博查。按 caller 区分两档：课程/图文档，和 B 站兜底档。"""
+def _patch_bocha(monkeypatch, *, course=None, reading=None, embed=None):
+    """替换博查。按 caller 分三档：课程平台 / 图文 / B 站兜底。"""
+    buckets = {"course": course, "reading": reading, "embed": embed}
+
     async def _fake(query, *, count=10, include=None, summary=False, freshness="noLimit", caller=""):
-        picked = course if caller == "external_video_course" else embed
+        picked = buckets.get(_BOCHA_CALLER_TIERS.get(caller, ""))
         return [dict(item) for item in (picked or [])]
 
     mock = AsyncMock(side_effect=_fake)
@@ -114,12 +123,12 @@ def _patch_encoder(monkeypatch, scores=None):
     return mock
 
 
-def _patch_sources(monkeypatch, *, bilibili=None, course=None, embed=None, scores=None):
+def _patch_sources(monkeypatch, *, bilibili=None, course=None, reading=None, embed=None, scores=None):
     """同时替换两个检索源和相关性打分器，返回 (bilibili_mock, bocha_mock)"""
     _patch_encoder(monkeypatch, scores)
     return (
         _patch_bilibili(monkeypatch, bilibili),
-        _patch_bocha(monkeypatch, course=course, embed=embed),
+        _patch_bocha(monkeypatch, course=course, reading=reading, embed=embed),
     )
 
 
@@ -420,6 +429,50 @@ class TestSourceOrchestration:
         assert "bilibili.com" not in course_include
         assert "bilibili.com" in embed_include
         assert "icourse163.org" not in embed_include
+
+    @pytest.mark.asyncio
+    async def test_course_and_reading_queried_separately(self, monkeypatch):
+        """课程平台必须和图文**分开查**（回归）。
+
+        实测把 course 和 reading 放进同一次 include 时，返回的 20 条**全是掘金文章**，
+        一条 MOOC 都没有；单独查 course 则是 20 条全慕课网。名额被内容量更大的
+        图文站点挤光了 —— 和 B 站那次是同一个病。
+        """
+        _, bocha = _patch_sources(monkeypatch, bilibili=[])
+
+        await ExternalVideoService.search("机械制图")
+
+        course_include = _bocha_calls(bocha)["external_video_course"].kwargs["include"]
+        assert "icourse163.org" in course_include, "课程平台不在课程档里"
+        assert "juejin.cn" not in course_include, "图文混进了课程档，会把课程名额挤光"
+
+    @pytest.mark.asyncio
+    async def test_reading_skipped_when_courses_fill_the_slots(self, monkeypatch):
+        """图文是兜底不是主力：课程已经凑够就不查，省一次付费调用"""
+        _, bocha = _patch_sources(
+            monkeypatch,
+            bilibili=[],
+            course=[_result(f"{MOOC_URL}-{i}", title=f"课程{i}") for i in range(3)],
+        )
+
+        videos = await ExternalVideoService.search("机械制图", max_results=3)
+
+        assert len(videos) == 3
+        assert "external_video_reading" not in _bocha_calls(bocha)
+
+    @pytest.mark.asyncio
+    async def test_reading_used_when_slots_remain(self, monkeypatch):
+        _, bocha = _patch_sources(
+            monkeypatch,
+            bilibili=[],
+            course=[_result(MOOC_URL, title="慕课课程")],
+            reading=[_result("https://juejin.cn/post/123", title="掘金文章")],
+        )
+
+        videos = await ExternalVideoService.search("机械制图", max_results=3)
+
+        assert [v["title"] for v in videos] == ["慕课课程", "掘金文章"]
+        assert "external_video_reading" in _bocha_calls(bocha)
 
     @pytest.mark.asyncio
     async def test_all_sources_empty(self, monkeypatch):
