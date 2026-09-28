@@ -6,7 +6,7 @@
       description="用题目测试和费曼反讲确认本章掌握情况，结果会同步到学习概览。"
     >
       <template #actions>
-        <RouterLink class="button button--quiet" to="/learning/fundamentals">回到基础讲解</RouterLink>
+        <RouterLink class="button button--quiet" to="/learning/fundamentals">回到基础学习</RouterLink>
       </template>
     </PageTitle>
 
@@ -92,13 +92,13 @@
         <div>
           <p class="eyebrow">开始测试前</p>
           <h2>先完成本章主讲文档</h2>
-          <p>题目和费曼反讲会根据你实际阅读的内容生成。打开当前章节的基础讲解，读完文档后再回来，系统才能判断你的掌握程度。</p>
+          <p>题目和费曼反讲会根据你实际阅读的内容生成。打开当前章节的基础学习，读完文档后再回来，系统才能判断你的掌握程度。</p>
         </div>
         <RouterLink
           class="button button--primary"
           :to="{ path: '/learning/fundamentals', query: { pathId: learningPath.path_id, node: activeNode.id } }"
         >
-          去基础讲解
+          去基础学习
         </RouterLink>
       </section>
 

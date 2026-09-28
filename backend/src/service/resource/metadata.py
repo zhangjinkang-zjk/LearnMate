@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import re
 
 from backend.src.models.resource_model import GeneratedResource
@@ -80,6 +81,31 @@ def build_cover_url(resource_type: str, file_url: str | None, resource_id: int) 
     return f"/static/covers/default_{resource_type}.svg"
 
 
+def external_video_metadata(record: GeneratedResource) -> dict:
+    """Expose crawler metadata without making callers parse resource content."""
+    if record.resource_type != "external_video" or not record.content:
+        return {}
+    try:
+        payload = json.loads(record.content)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        "title": payload.get("title") or record.topic,
+        "description": payload.get("description") or "",
+        "source": payload.get("source") or "",
+        "source_label": payload.get("source_label") or payload.get("source") or "",
+        "author": payload.get("author") or "",
+        "duration": payload.get("duration") or 0,
+        "duration_text": payload.get("duration_text") or "",
+        "view_count": payload.get("view_count") or 0,
+        "view_count_text": payload.get("view_count_text") or "",
+        "page_url": payload.get("page_url") or record.file_url or "",
+        "embed_url": payload.get("embed_url") or "",
+    }
+
+
 async def resource_to_dict(
     record: GeneratedResource,
     current_user_id: int | None = None,
@@ -117,6 +143,7 @@ async def resource_to_dict(
         "owner_user_id": record.user_id,
         "is_owner": bool(current_user_id and record.user_id == current_user_id),
     }
+    item.update(external_video_metadata(record))
     if record.resource_type == "ppt":
         item["ppt_theme_id"] = extract_ppt_theme_id(record.content)
     if include_content:

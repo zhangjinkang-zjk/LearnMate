@@ -23,8 +23,8 @@
 
     <section v-else-if="!canStartTest" class="quiz-state surface">
       <BookOpenText :size="24" />
-      <div><strong>请先完成本章阅读</strong><p>完成基础讲解后，系统才会开放与当前章节对应的检查题。</p></div>
-      <RouterLink class="button button--primary" :to="backToLesson">前往基础讲解</RouterLink>
+      <div><strong>请先完成本章阅读</strong><p>完成基础学习后，系统才会开放与当前章节对应的检查题。</p></div>
+      <RouterLink class="button button--primary" :to="backToLesson">前往基础学习</RouterLink>
     </section>
 
     <template v-else>

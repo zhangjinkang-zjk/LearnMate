@@ -13,7 +13,7 @@
       <section class="result-card result-list">
         <h2>建议学习顺序</h2>
         <ol>
-          <li><span>01</span><div><strong>基础讲解</strong><small>补齐当前方向的关键概念和方法</small></div></li>
+          <li><span>01</span><div><strong>基础学习</strong><small>补齐当前方向的关键概念和方法</small></div></li>
           <li><span>02</span><div><strong>迁移练习</strong><small>在小任务中验证是否能独立应用</small></div></li>
           <li><span>03</span><div><strong>进阶案例</strong><small>结合你的目标完成可验证的综合任务</small></div></li>
         </ol>

@@ -8,7 +8,7 @@ export const learningNavigationGroups = [
   {
     label: '知识学习',
     items: [
-      { label: '基础讲解', to: '/learning/fundamentals', icon: BookOpen },
+      { label: '基础学习', to: '/learning/fundamentals', icon: BookOpen },
       { label: '学习复盘', to: '/learning/foundation-test', icon: SquareCheck },
     ],
   },
