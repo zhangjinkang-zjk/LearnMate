@@ -101,6 +101,7 @@ def external_video_metadata(record: GeneratedResource) -> dict:
         "duration_text": payload.get("duration_text") or "",
         "view_count": payload.get("view_count") or 0,
         "view_count_text": payload.get("view_count_text") or "",
+        "cover_url": payload.get("cover_url") or record.cover_url or "",
         "page_url": payload.get("page_url") or record.file_url or "",
         "embed_url": payload.get("embed_url") or "",
     }

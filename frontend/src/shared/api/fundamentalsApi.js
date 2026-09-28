@@ -44,6 +44,13 @@ export const fundamentalsApi = {
     return unwrap(await httpClient.get(`/path/${pathId}/node/${nodeId}`))
   },
 
+  async searchNodeExternalVideos(pathId, nodeId, maxResults = 3) {
+    const limit = Math.max(1, Math.min(5, Number(maxResults) || 3))
+    return unwrap(await httpClient.get(`/path/${pathId}/node/${nodeId}/external-videos`, {
+      params: { max_results: limit },
+    }))
+  },
+
   async getResource(resourceId) {
     return unwrap(await httpClient.get(`/resource/${resourceId}`))
   },

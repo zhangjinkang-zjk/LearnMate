@@ -322,6 +322,7 @@ def _format_view_count(count: int | float | str | None) -> str:
 
 
 _BVID_PATTERN = re.compile(r"/video/(BV[0-9A-Za-z]{10})")
+_YOUTUBE_ID_PATTERN = re.compile(r"(?:youtu\.be/|youtube\.com/(?:watch\?v=|embed/|shorts/))([\w-]{6,})", re.IGNORECASE)
 
 
 def _extract_bvid(url: str) -> str:
@@ -337,6 +338,15 @@ def _embed_url_for(page_url: str) -> str:
     """只有能解出 BV 号的 B 站视频才能内嵌，用官方外链播放器"""
     bvid = _extract_bvid(page_url)
     return f"https://player.bilibili.com/player.html?bvid={bvid}" if bvid else ""
+
+
+def _cover_url_for(page_url: str, search_item: dict | None = None) -> str:
+    """优先使用搜索结果缩略图，YouTube 页面再用官方缩略图兜底。"""
+    provided = str((search_item or {}).get("thumbnail") or "").strip()
+    if provided.startswith(("http://", "https://")):
+        return provided
+    match = _YOUTUBE_ID_PATTERN.search(str(page_url or ""))
+    return f"https://i.ytimg.com/vi/{match.group(1)}/hqdefault.jpg" if match else ""
 
 
 def _node_query(topic: str, tags: list[str] | None = None) -> str:
@@ -386,7 +396,7 @@ async def _search_bocha(query: str, *, count: int, include: str, caller: str) ->
             "duration": "",
             "view_count": 0,
             "description": item.get("summary") or item.get("snippet") or "",
-            "cover_url": "",
+                "cover_url": _cover_url_for(page_url, item),
             "page_url": page_url,
             "embed_url": embed_url,
             # source 目前没有消费者，source_label 才是展示用的

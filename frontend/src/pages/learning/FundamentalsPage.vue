@@ -35,6 +35,13 @@
       </div>
 
       <section v-else-if="!hasActiveLesson" class="foundation-library" aria-labelledby="foundation-library-title">
+        <div class="foundation-library__layout">
+          <ChapterRail
+            :nodes="learningPath.nodes"
+            :active-node-id="previewNode?.id"
+            @select="selectPreviewNode"
+          />
+          <div class="foundation-library__main">
         <header class="foundation-library__header">
           <div>
             <p class="eyebrow lesson-eyebrow">FOUNDATION LEARNING</p>
@@ -82,15 +89,19 @@
                 type="button"
                 @click="openFoundationResource(group.node, resource)"
               >
-                <span class="resource-card__icon" :class="`is-${resource.resource_type}`">
-                  <PlayCircle v-if="resource.resource_type === 'external_video' || resource.resource_type === 'video'" :size="20" />
-                  <Presentation v-else-if="resource.resource_type === 'ppt'" :size="20" />
-                  <Network v-else-if="resource.resource_type === 'mindmap'" :size="20" />
-                  <BookOpenText v-else :size="20" />
+                <span class="resource-card__cover">
+                  <img :src="resourceCoverUrl(resource)" :alt="`${resource.title || resource.topic || '学习资源'}封面`" @error="handleCoverError($event, resource)" />
+                  <span class="resource-card__cover-overlay">
+                    <span class="resource-card__type">{{ resourceTypeLabel(resource.resource_type) }}</span>
+                    <PlayCircle v-if="resource.resource_type === 'external_video' || resource.resource_type === 'video'" :size="22" />
+                    <Presentation v-else-if="resource.resource_type === 'ppt'" :size="22" />
+                    <Network v-else-if="resource.resource_type === 'mindmap'" :size="22" />
+                    <BookOpenText v-else :size="22" />
+                  </span>
                 </span>
                 <span class="resource-card__content">
                   <strong>{{ resource.title || resource.topic || resourceLabel(resource.resource_type) }}</strong>
-                  <small>{{ resourceTypeLabel(resource.resource_type) }}<span v-if="resource.source_label"> · {{ resource.source_label }}</span></small>
+                  <small>{{ resourceTypeLabel(resource.resource_type) }}<span v-if="resource.source_label"> · {{ resource.source_label }}</span><span v-if="resource.duration_text"> · {{ resource.duration_text }}</span></small>
                   <span v-if="resource.description" class="resource-card__description">{{ resource.description }}</span>
                 </span>
                 <ArrowRight class="resource-card__arrow" :size="17" />
@@ -104,6 +115,8 @@
             </button>
           </section>
 
+        </div>
+          </div>
         </div>
       </section>
 
@@ -460,6 +473,7 @@ import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { readPortrait } from '@/shared/api/portraitApi'
 import { applyWorkflowEvent, applyWorkflowProgress, finishWorkflow, resetWorkflow } from '@/entities/agent/agentWorkflowState'
 import { resourceApi } from '@/shared/api/resourceApi'
+import { generatedResourceCover, resourceCoverUrl } from '@/utils/resourceCover'
 
 const route = useRoute()
 const router = useRouter()
@@ -467,7 +481,10 @@ const isPageLoading = ref(true)
 const pageError = ref('')
 const resourceOverviewLoading = ref(false)
 const externalVideoResources = ref([])
+const externalVideoLoadedNodeIds = ref({})
+const externalVideoLoadingNodeIds = ref({})
 const selectedExternalVideo = ref(null)
+const previewNodeId = ref(null)
 const learningPath = ref(null)
 const pathCatalog = ref([])
 const isPathsLoading = ref(true)
@@ -522,21 +539,25 @@ const VIDEO_RESTART_BACKOFF_MS = 5000
 
 const activeNodeIndex = computed(() => learningPath.value?.nodes.findIndex((node) => node.id === activeNodeId.value) ?? -1)
 const activeNode = computed(() => learningPath.value?.nodes[activeNodeIndex.value] || null)
+const previewNode = computed(() => {
+  const nodes = learningPath.value?.nodes || []
+  const selected = nodes.find((node) => Number(node.id) === Number(previewNodeId.value) && node.status !== 'locked')
+  return selected || chooseInitialNode(learningPath.value)
+})
 const hasActiveLesson = computed(() => Boolean(activeNodeId.value))
 const resourceGroups = computed(() => {
   const nodes = learningPath.value?.nodes || []
-  const videosByNodeId = new Map(nodes.map((node) => [node.id, []]))
-  const fallbackNode = nodes.find((node) => node.status === 'in_progress' || node.status === 'unlocked') || nodes[0]
+  const videosByNodeId = new Map(nodes.map((node) => [Number(node.id), []]))
 
   externalVideoResources.value.forEach((video) => {
-    const matchedNode = nodes.find((node) => videoMatchesNode(video, node)) || fallbackNode
-    if (matchedNode) videosByNodeId.get(matchedNode.id)?.push(video)
+    const nodeId = Number(video.node_id)
+    if (nodeId && videosByNodeId.has(nodeId)) videosByNodeId.get(nodeId).push(video)
   })
 
   return nodes
     .map((node, index) => {
       const boundResources = (node.resources || []).filter((resource) => resource?.resource_type !== 'external_video')
-      const externalVideos = videosByNodeId.get(node.id) || []
+      const externalVideos = videosByNodeId.get(Number(node.id)) || []
       const resources = [...boundResources]
       externalVideos.forEach((video) => {
         if (!resources.some((resource) => Number(resource.resource_id || resource.id) === Number(video.resource_id))) {
@@ -545,6 +566,7 @@ const resourceGroups = computed(() => {
       })
       return { node, index, resources }
     })
+    .filter((group) => !previewNode.value || Number(group.node.id) === Number(previewNode.value.id))
     .filter((group) => group.resources.length || group.node.status !== 'locked')
 })
 const activeResource = computed(() => ({
@@ -665,8 +687,59 @@ function parseExternalVideo(resource) {
     title: payload.title || resource?.topic || '推荐视频',
     source_label: payload.source_label || payload.source || '外部教学视频',
     page_url: payload.page_url || resource?.file_url || resource?.url || '',
-    embed_url: payload.embed_url || '',
+    embed_url: payload.embed_url || payload.preview_url || '',
   }
+}
+
+function videoMeta(video) {
+  return [video?.author, video?.duration_text, video?.view_count_text].filter(Boolean).join(' · ')
+}
+
+async function loadNodeExternalVideos(node, force = false) {
+  const pathId = Number(learningPath.value?.path_id)
+  const nodeId = Number(node?.id)
+  if (!pathId || !nodeId || node?.status === 'locked') return []
+  if (!force && externalVideoLoadedNodeIds.value[nodeId]) {
+    return externalVideoResources.value.filter((video) => Number(video.node_id) === nodeId)
+  }
+  if (externalVideoLoadingNodeIds.value[nodeId]) return []
+
+  externalVideoLoadingNodeIds.value = { ...externalVideoLoadingNodeIds.value, [nodeId]: true }
+  try {
+    const videos = await fundamentalsApi.searchNodeExternalVideos(pathId, nodeId, 3)
+    const normalized = (Array.isArray(videos) ? videos : []).map((video, index) => {
+      const parsed = parseExternalVideo(video)
+      return {
+        ...parsed,
+        node_id: nodeId,
+        video_index: index,
+        id: `node-${nodeId}-external-video-${index}`,
+        video_meta: videoMeta(parsed),
+      }
+    })
+    externalVideoResources.value = [
+      ...externalVideoResources.value.filter((video) => Number(video.node_id) !== nodeId),
+      ...normalized,
+    ]
+    externalVideoLoadedNodeIds.value = { ...externalVideoLoadedNodeIds.value, [nodeId]: true }
+    return normalized
+  } catch {
+    // Recommendation failure must not prevent the chapter document from loading.
+    externalVideoLoadedNodeIds.value = { ...externalVideoLoadedNodeIds.value, [nodeId]: true }
+    return []
+  } finally {
+    const loading = { ...externalVideoLoadingNodeIds.value }
+    delete loading[nodeId]
+    externalVideoLoadingNodeIds.value = loading
+  }
+}
+
+function handleCoverError(event, resource) {
+  const image = event.currentTarget
+  const fallback = generatedResourceCover(resource)
+  if (!image || image.src === fallback) return
+  image.onerror = null
+  image.src = fallback
 }
 
 function openNodeForResource(node) {
@@ -683,7 +756,11 @@ function openFoundationResource(node, resource) {
     pathId: learningPath.value?.path_id,
     node: node.id,
     resource: resourceType,
-    ...(resourceId ? { resourceId } : {}),
+    resourceId: undefined,
+    videoIndex: undefined,
+    ...(resourceType === 'external_video'
+      ? { videoIndex: Number.isInteger(Number(resource?.video_index)) ? Number(resource.video_index) : 0 }
+      : (resourceId ? { resourceId } : {})),
   }
   void router.push({ path: '/learning/fundamentals', query })
 }
@@ -696,6 +773,7 @@ function returnToResourcePreview() {
       node: undefined,
       resource: undefined,
       resourceId: undefined,
+      videoIndex: undefined,
     },
   })
 }
@@ -1091,22 +1169,19 @@ async function loadPage() {
   isPathsLoading.value = true
   resourceOverviewLoading.value = true
   try {
-    const [pathListResult, pathStatsResult, currentResult, portraitResult, resourceListResult] = await Promise.allSettled([
+    const [pathListResult, pathStatsResult, currentResult, portraitResult] = await Promise.allSettled([
       fundamentalsApi.listPaths(),
       fundamentalsApi.getPathStats(),
       fundamentalsApi.getCurrentPath(),
       readPortrait(),
-      resourceApi.list(),
     ])
     const pathList = pathListResult.status === 'fulfilled' && Array.isArray(pathListResult.value) ? pathListResult.value : []
     const pathStats = pathStatsResult.status === 'fulfilled' ? pathStatsResult.value : null
     let current = currentResult.status === 'fulfilled' ? currentResult.value : null
     const portrait = portraitResult.status === 'fulfilled' ? portraitResult.value : null
-    externalVideoResources.value = resourceListResult.status === 'fulfilled'
-      ? resourceListResult.value
-        .filter((resource) => resource?.resource_type === 'external_video')
-        .map(parseExternalVideo)
-      : []
+    externalVideoResources.value = []
+    externalVideoLoadedNodeIds.value = {}
+    externalVideoLoadingNodeIds.value = {}
     const relatedSubjects = Array.isArray(portrait?.traits?.learning_direction_subjects)
       ? portrait.traits.learning_direction_subjects
       : []
@@ -1131,13 +1206,16 @@ async function loadPage() {
     syncPathCatalog(current)
     const requestedNodeId = Number(route.query.node)
     const initialNode = requestedNodeId > 0 ? chooseInitialNode(current, requestedNodeId) : null
+    const previewNode = initialNode || chooseInitialNode(current)
+    previewNodeId.value = previewNode?.id || null
+    if (!initialNode && previewNode) void loadNodeExternalVideos(previewNode)
     if (selectedPathId && (Number(route.query.pathId) !== Number(selectedPathId)
       || (initialNode && Number(route.query.node) !== Number(initialNode.id)))) {
       await router.replace({
         query: {
           ...route.query,
           pathId: selectedPathId,
-          ...(initialNode ? { node: initialNode.id } : { node: undefined, resource: undefined, resourceId: undefined }),
+          ...(initialNode ? { node: initialNode.id } : { node: undefined, resource: undefined, resourceId: undefined, videoIndex: undefined }),
         },
       })
     }
@@ -1171,8 +1249,12 @@ async function selectPath(pathId) {
     videoError.value = ''
     activeNodeId.value = null
     selectedExternalVideo.value = null
+    previewNodeId.value = chooseInitialNode(selected)?.id || null
+    externalVideoResources.value = []
+    externalVideoLoadedNodeIds.value = {}
+    externalVideoLoadingNodeIds.value = {}
     syncPathCatalog(selected)
-    await router.replace({ query: { ...route.query, pathId: nextPathId, node: undefined, resource: undefined, resourceId: undefined } })
+    await router.replace({ query: { ...route.query, pathId: nextPathId, node: undefined, resource: undefined, resourceId: undefined, videoIndex: undefined } })
   } catch (error) {
     pathSwitchError.value = errorDetail(error, '无法打开这条学习路径，请稍后重试。')
   } finally {
@@ -1188,6 +1270,13 @@ async function selectPathFromDrawer(pathId) {
 async function selectNodeFromDrawer(nodeId) {
   closeNavigationDrawer()
   await selectNode(nodeId)
+}
+
+async function selectPreviewNode(nodeId) {
+  const node = learningPath.value?.nodes.find((item) => Number(item.id) === Number(nodeId))
+  if (!node || node.status === 'locked') return
+  previewNodeId.value = node.id
+  await loadNodeExternalVideos(node)
 }
 
 async function selectNode(nodeId, updateUrl = true) {
@@ -1213,7 +1302,7 @@ async function selectNode(nodeId, updateUrl = true) {
   selectedExternalVideo.value = null
   resourceDownloadError.value = ''
   isChecking.value = false
-  if (updateUrl) await router.replace({ query: { ...route.query, node: nodeId, resource: 'document', resourceId: undefined } })
+  if (updateUrl) await router.replace({ query: { ...route.query, node: nodeId, resource: 'document', resourceId: undefined, videoIndex: undefined } })
   // Re-selecting the chapter already on screen only needs the view state reset above.
   // Posting generate-resources again would re-run the idempotent backend path for
   // nothing. documentContent is cleared at the start of every loadActiveNode and only
@@ -1247,6 +1336,7 @@ async function loadActiveNode() {
   mindmapResource.value = null
   mindmapContent.value = ''
   openedAt = 0
+  const nodeVideosPromise = loadNodeExternalVideos(activeNode.value)
 
   let resolveDocumentReady
   let documentReadyMarked = false
@@ -1276,7 +1366,9 @@ async function loadActiveNode() {
 
     if (requestedResourceType === 'external_video') {
       const resourceId = Number(route.query.resourceId)
-      const candidate = externalVideoResources.value.find((item) => Number(item.resource_id) === resourceId)
+      const nodeVideos = await nodeVideosPromise
+      const videoIndex = Number(route.query.videoIndex)
+      const candidate = nodeVideos[Number.isInteger(videoIndex) && videoIndex >= 0 ? videoIndex : 0]
       if (candidate) selectedExternalVideo.value = parseExternalVideo(candidate)
       if (resourceId) {
         try {
@@ -1637,7 +1729,7 @@ function handleVisibilityChange() {
 }
 
 watch(
-  () => [route.query.pathId, route.query.node, route.query.resource, route.query.resourceId].join('|'),
+  () => [route.query.pathId, route.query.node, route.query.resource, route.query.resourceId, route.query.videoIndex].join('|'),
   async () => {
     if (!learningPath.value) return
     const nodeId = Number(route.query.node)
@@ -1648,7 +1740,9 @@ watch(
       selectedExternalVideo.value = null
       return
     }
-    if (Number(activeNodeId.value) === nodeId && route.query.resource === resourceView.value) return
+    if (Number(activeNodeId.value) === nodeId
+      && route.query.resource === resourceView.value
+      && (resourceView.value !== 'external_video' || selectedExternalVideo.value?.video_index === Number(route.query.videoIndex))) return
     await selectNode(nodeId, false)
   },
 )
@@ -1672,6 +1766,8 @@ onBeforeUnmount(() => {
 <style scoped>
 .fundamentals-page { display: grid; min-width: 0; height: 100%; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
 .foundation-library { min-width: 0; min-height: 0; overflow: auto; padding: 6px 2px 26px; }
+.foundation-library__layout { display: grid; grid-template-columns: minmax(210px, 250px) minmax(0, 1fr); gap: 28px; align-items: start; }
+.foundation-library__main { min-width: 0; }
 .foundation-library__header { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; margin-bottom: 22px; padding-bottom: 18px; border-bottom: 1px solid #dfe5df; }
 .foundation-library__header h1 { margin: 0; color: #1e3c34; font-size: clamp(28px, 3vw, 40px); line-height: 1.15; }
 .foundation-library__header p:last-child { margin: 9px 0 0; color: var(--muted); font-size: 13px; }
@@ -1689,19 +1785,20 @@ onBeforeUnmount(() => {
 .resource-group__header .eyebrow { margin-bottom: 3px; }
 .resource-group__header h2 { margin: 0; overflow: hidden; color: var(--ink); font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
 .resource-group__status { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
-.resource-card-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; }
-.resource-card { position: relative; display: flex; min-width: 0; min-height: 116px; align-items: flex-start; gap: 12px; padding: 16px; border: 1px solid #dfe6da; text-align: left; transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease; }
+.resource-card-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.resource-card { position: relative; display: grid; min-width: 0; min-height: 276px; grid-template-rows: 132px minmax(0, 1fr); overflow: hidden; padding: 0; border: 1px solid #dfe6da; text-align: left; transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease; }
 .resource-card:hover { border-color: #abc28f; box-shadow: 0 10px 22px rgba(45, 70, 40, .1); transform: translateY(-2px); }
 .resource-card:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
-.resource-card__icon { display: grid; width: 38px; height: 38px; flex: 0 0 38px; place-items: center; border-radius: 11px; background: #edf3e9; color: var(--accent-deep); }
-.resource-card__icon.is-ppt { background: #f6efdf; color: #9b6d32; }
-.resource-card__icon.is-mindmap { background: #e8eff6; color: #47708e; }
-.resource-card__icon.is-external_video, .resource-card__icon.is-video { background: #f7e9e4; color: #a45b45; }
-.resource-card__content { display: grid; min-width: 0; gap: 6px; padding-right: 16px; }
+.resource-card__cover { position: relative; display: block; min-width: 0; overflow: hidden; background: #183d34; }
+.resource-card__cover img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .35s ease; }
+.resource-card:hover .resource-card__cover img { transform: scale(1.04); }
+.resource-card__cover-overlay { position: absolute; inset: 0; display: flex; align-items: flex-end; justify-content: space-between; padding: 13px 14px; background: rgba(15, 31, 25, .55); color: #fff; }
+.resource-card__type { overflow: hidden; max-width: 78%; font-size: 10px; font-weight: 800; letter-spacing: .1em; text-overflow: ellipsis; white-space: nowrap; }
+.resource-card__content { display: grid; min-width: 0; align-content: start; gap: 7px; padding: 15px 42px 15px 16px; }
 .resource-card__content strong { overflow: hidden; color: var(--ink); font-size: 13px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .resource-card__content small { color: var(--muted); font-size: 10px; }
 .resource-card__description { display: -webkit-box; overflow: hidden; color: var(--muted); font-size: 11px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.resource-card__arrow { position: absolute; top: 17px; right: 14px; color: #9baa96; transition: color .18s ease, transform .18s ease; }
+.resource-card__arrow { position: absolute; right: 14px; bottom: 16px; color: #9baa96; transition: color .18s ease, transform .18s ease; }
 .resource-card:hover .resource-card__arrow { color: var(--accent-deep); transform: translateX(2px); }
 .resource-group__empty { display: flex; width: 100%; min-height: 54px; align-items: center; gap: 8px; padding: 0 14px; border: 1px dashed #cbd8c5; color: var(--muted); font-size: 12px; text-align: left; }
 .resource-group__empty:hover { border-color: #9dbb8d; background: #fbfdf9; color: var(--accent-deep); }
@@ -1786,6 +1883,7 @@ onBeforeUnmount(() => {
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 1120px) {
+  .foundation-library__layout { grid-template-columns: minmax(170px, 210px) minmax(0, 1fr); gap: 20px; }
   .resource-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .learning-layout { grid-template-columns: 52px minmax(0, 1fr); }
   .learning-layout > :last-child { display: none; }
@@ -1796,11 +1894,12 @@ onBeforeUnmount(() => {
 }
 @media (max-width: 680px) {
   .foundation-library { padding: 0 0 22px; }
+  .foundation-library__layout { grid-template-columns: 1fr; gap: 18px; }
   .foundation-library__header { align-items: stretch; flex-direction: column; gap: 15px; margin-bottom: 17px; padding-bottom: 14px; }
   .foundation-library__header .path-progress { width: 100%; min-width: 0; }
   .resource-card-grid { grid-template-columns: 1fr; }
   .resource-group__header h2 { max-width: 230px; }
-  .resource-card { min-height: 100px; }
+  .resource-card { min-height: 252px; grid-template-rows: 120px minmax(0, 1fr); }
   .lesson-context { align-items: stretch; flex-direction: column; gap: 16px; }
   .lesson-context__actions { width: 100%; align-items: stretch; flex-direction: column-reverse; gap: 9px; }
   .return-resource-button { align-self: flex-start; }
