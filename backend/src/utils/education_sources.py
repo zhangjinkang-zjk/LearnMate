@@ -25,6 +25,12 @@ EDUCATION_SOURCES: list[dict] = [
     {"tier": "reading", "domains": ["developer.mozilla.org"], "label": "MDN"},
     {"tier": "reading", "domains": ["runoob.com"], "label": "菜鸟教程"},
     {"tier": "reading", "domains": ["juejin.cn"], "label": "掘金"},
+    # 知乎：中文技术问答。实测在**大模型/RAG 主题上几乎不被召回**（多轮探测 0 条），
+    # 留着是给传统学科主题用的，别指望它在大模型主题上出东西。
+    {"tier": "reading", "domains": ["zhihu.com"], "label": "知乎"},
+    # 已移除：CSDN（csdn.net）。加进来后大模型主题的 reading 档 20 条**全是 CSDN**
+    # （召回确实上来了），但 AI 水文太多，演示时翻到图文档风险大于收益。
+    # 要加回来先想清楚这个取舍，别只看到召回变多。
     {"tier": "reading", "domains": ["github.com"], "label": "GitHub"},
     {"tier": "reading", "domains": ["arxiv.org"], "label": "arXiv"},
 ]
@@ -58,11 +64,12 @@ def _find_source(url: str) -> dict | None:
 
 
 def include_domains(*tiers: str) -> str:
-    """拼成博查 include 参数（逗号分隔）。共 13 个域名，远低于接口上限。
+    """拼成博查 include 参数（逗号分隔）。共 14 个域名，远低于接口上限。
 
     不传 tiers 时返回全部；传了只返回匹配的档位，例如 include_domains("embed")。
-    分档查询是必要的：embed 档（B 站）的真实视频页在它的结果里只占少数，
-    和十几个课程站点混在一次查询里会被挤掉名额，一条都剩不下。
+    **分档查询是必要的**，混查会被内容量大的站点挤光名额 —— 这个坑踩过两次：
+    一次是 embed 档（B 站真实视频页只占少数，混查时一条都剩不下），
+    一次是 course + reading 混查（20 条全是掘金，一条 MOOC 都没有）。
     """
     wanted = set(tiers)
     return ",".join(
