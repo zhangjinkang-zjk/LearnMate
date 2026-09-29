@@ -11,7 +11,10 @@ class MemoryMessage(Model):
     source_history_id = fields.IntField(null=True, description="对应 chat_history.id")
     role = fields.CharField(max_length=8, default="user", description="user/assistant/pair")
     content = fields.TextField(description="被索引的原文（req+res 或单条 req）")
-    embedding = fields.TextField(description="向量（JSON 数组字符串）")
+    embedding = fields.TextField(description="向量（base64 编码的 float32，见 utils/embeddings/codec.py）")
+    embedding_model = fields.CharField(
+        max_length=64, null=True, description="生成该向量的嵌入模型 id，换模型后可据此检出需重算的行"
+    )
     subjects = fields.JSONField(null=True)
     importance = fields.FloatField(default=0.5)
     created_at = fields.DatetimeField(auto_now_add=True, null=True)

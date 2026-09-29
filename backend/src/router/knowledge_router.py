@@ -7,7 +7,8 @@ import os
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Query, Request
 
 from backend.src.utils.jwt import get_user_id_from_token
-from backend.src.utils.file_processor import extract_text, chunk_text
+from backend.src.utils.embeddings import chunk_sizes, encode_many
+from backend.src.utils.file_processor import apply_context_prefix, chunk_text, extract_text
 from backend.src.utils.knowledge_base import ingest, list_all, list_grouped, get_by_id, update, delete
 from backend.src.utils.admin_check import is_admin
 from backend.src.models.knowledgemodel import KnowledgeVector
@@ -105,7 +106,8 @@ async def upload_document(
                 title=doc_title,
                 category="video",
                 content=video_url,
-                embedding="[]",
+                # 视频没有可检索的正文，留空向量（codec.unpack 会认成"没有向量"跳过）
+                embedding="",
                 visibility=visibility,
                 cover_url=cover_url or "/static/covers/default_video.svg",
                 user_id=user_id,
@@ -139,9 +141,17 @@ async def upload_document(
         doc_title = title.strip() if title else Path(file.filename).stem
 
         # ── 切片 + 逐块入库 ──
-        # 尺寸用 chunk_text 的默认值（与嵌入模型窗口绑定，见 KB_CHUNK_MAX_CHARS）。
-        # 不要在这里写死数字，否则会和 file_processor 里的定义漂移。
-        chunks = chunk_text(raw_text)
+        # 尺寸取自当前嵌入模型（登记在 embeddings/registry.py，含实测来源）。
+        # 换模型时尺寸会跟着变 —— 不要在这里写死数字。
+        max_chars, overlap_chars = chunk_sizes()
+        chunks = chunk_text(raw_text, max_chars=max_chars, overlap_chars=overlap_chars)
+        # 带跨片上下文的那一份只送去编码：写进 content 的话，知识库页面上每段开头
+        # 都会挂着「上文摘要：…」，提示词里也会多一份重复内容。
+        encode_chunks = apply_context_prefix(chunks, overlap_chars)
+        # **一次性批量编码整篇文档**，不要把编码留给下面循环里逐条做。
+        # 逐条编码时切片数就是模型调用次数，CPU 上慢好几倍，日志里还会被
+        # sentence-transformers 的 "Batches" 进度条刷屏（一份文档几百条）。
+        vectors = await encode_many(encode_chunks)
         results = []
         for idx, chunk in enumerate(chunks):
             chunk_title = f"{doc_title} (第{idx+1}部分)" if len(chunks) > 1 else doc_title
@@ -152,6 +162,7 @@ async def upload_document(
                 visibility=visibility,
                 category=category,
                 cover_url=cover_url if idx == 0 else None,
+                vector=vectors[idx],
             )
             results.append(msg)
 

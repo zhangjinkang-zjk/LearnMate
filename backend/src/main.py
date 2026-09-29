@@ -50,6 +50,19 @@ logger = logging.getLogger("api")
 
 # Redis SSE 转发器任务句柄（在 startup 中赋值，shutdown 中清理）
 _redis_forward_task = None
+
+
+def _preload_env() -> str:
+    """启动时预加载嵌入模型的开关值。
+
+    名字里不带模型名 —— 换模型不该让配置项跟着作废。旧的 `PRELOAD_BGE_ON_STARTUP`
+    仍然认，避免已经写在 .env / compose 里的设置被静默忽略。
+    """
+    for name in ("PRELOAD_EMBEDDING_ON_STARTUP", "PRELOAD_BGE_ON_STARTUP"):
+        value = os.getenv(name)
+        if value not in (None, ""):
+            return value
+    return "true"
 from backend.src.router.chat_router import router as chat_router
 from backend.src.router.portrait_router import router as portrait_router
 from backend.src.router.resource_router import router as resource_router
@@ -127,12 +140,18 @@ async def startup():
     # 清理未完成的生成任务
     from backend.src.service.resource.service import ResourceService
     await ResourceService.init_tasks()
-    # 预加载 BGE 模型，避免首次知识库操作时等待下载/加载
-    if os.getenv("PRELOAD_BGE_ON_STARTUP", "true").strip().lower() not in {"0", "false", "no", "off"}:
-        from backend.src.utils.knowledge_base import _get_embed_model_async
-        await _get_embed_model_async()
+    # 预加载嵌入模型，避免首次知识库操作时才等待加载。
+    # 失败只降级（检索不可用），不能让整个后端起不来 —— 权重有 GB 量级，
+    # 下载失败、镜像不通、磁盘不足都可能发生，那时其它功能仍应照常服务。
+    preload = _preload_env()
+    if preload.strip().lower() not in {"0", "false", "no", "off"}:
+        from backend.src.utils.embeddings import get_model
+        try:
+            await get_model()
+        except Exception:
+            logger.exception("嵌入模型预加载失败，知识库检索将不可用；其余功能不受影响")
     else:
-        logger.info("PRELOAD_BGE_ON_STARTUP=false，已跳过 BGE 预加载")
+        logger.info("预加载开关=%s，已跳过嵌入模型预加载", preload)
     # 启动定时任务（周报 + AI 建议）
     from backend.src.utils.scheduler import start
     start()

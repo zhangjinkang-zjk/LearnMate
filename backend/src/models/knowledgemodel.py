@@ -17,7 +17,10 @@ class KnowledgeVector(Model):
     title = fields.CharField(max_length=255, description="标题")
     category = fields.CharField(max_length=32, default="knowledge_point", description=f"分类: {', '.join(KB_CATEGORIES)}")
     content = fields.TextField(description="文本块内容")
-    embedding = fields.TextField(description="向量嵌入，JSON 数组字符串")
+    embedding = fields.TextField(description="向量嵌入，base64 编码的 float32 原始字节（见 utils/embeddings/codec.py）")
+    embedding_model = fields.CharField(
+        max_length=64, null=True, description="生成该向量的嵌入模型 id，换模型后可据此检出需重算的行"
+    )
     visibility = fields.CharField(max_length=10, default="private", description="public=全员可见, private=仅上传者")
     cover_url = fields.CharField(max_length=512, null=True, description="资源封面图URL")
     created_at = fields.DatetimeField(auto_now_add=True, null=True)

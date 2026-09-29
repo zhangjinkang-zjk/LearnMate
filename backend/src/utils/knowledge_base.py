@@ -1,28 +1,25 @@
 """
 知识库 — 向量数据存储于 MySQL，支持用户隔离和公开/私有权限
-BGE 模型仍从本地加载（开源模型，不包含用户数据）
+
+嵌入能力（模型加载、编码、向量缓存）已抽到 `utils/embeddings`，本文件只保留知识库
+自己的业务：检索、入库、CRUD、展示分组。换模型改 `EMBEDDING_MODEL_ID` 即可，不用动这里。
 """
 import os
-import json
 import hashlib
 import asyncio
 import logging
-from pathlib import Path
-
-HF_ENDPOINT = os.getenv("HF_ENDPOINT", "https://hf-mirror.com")
-if HF_ENDPOINT:
-    os.environ.setdefault("HF_ENDPOINT", HF_ENDPOINT)
 
 from tortoise.expressions import Q
 
 from backend.src.models.knowledgemodel import KnowledgeVector
+from backend.src.utils.embeddings import codec, current_spec
+from backend.src.utils.embeddings import encode as _encode_text
+
+# 对外再导出：`service/video/service.py` 和 `tests/test_video_service.py` 都按
+# "backend.src.utils.knowledge_base.encode_many" 这个名字路径引用它，别改名也别移走。
+from backend.src.utils.embeddings import encode_many as encode_many  # noqa: F401
 
 logger = logging.getLogger(__name__)
-
-# BGE 模型本地缓存路径 — 第一次使用时才加载，避免 import 时拖慢启动
-MODEL_DIR = str(Path(__file__).parent.parent / "ai_core" / "knowledge_base" / "bge_model")
-_embed_model = None
-_embed_lock = asyncio.Lock()
 
 
 def _float_env(name: str, default: float) -> float:
@@ -57,72 +54,44 @@ def _make_doc_id(title: str, content: str, scope: str = "") -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
-async def _get_embed_model_async():
-    """异步加载 BGE 模型（首次使用时才 import sentence_transformers，避免拖慢启动）"""
-    global _embed_model
-    if _embed_model is not None:
-        return _embed_model
-
-    async with _embed_lock:
-        if _embed_model is not None:
-            return _embed_model
-        from sentence_transformers import SentenceTransformer
-        local_path = Path(MODEL_DIR)
-        if local_path.exists() and any(local_path.iterdir()):
-            _embed_model = await asyncio.to_thread(SentenceTransformer, str(local_path))
-        else:
-            _embed_model = await asyncio.to_thread(SentenceTransformer, "BAAI/bge-small-zh-v1.5")
-            await asyncio.to_thread(_embed_model.save, str(local_path))
-        return _embed_model
-
-
 async def _encode_async(text: str):
-    """异步编码文本为向量（Redis 缓存 + 线程池降级）"""
-    import numpy as np
+    """编码单条文本为归一化向量。
 
-    # Redis 缓存：相同文本 24 小时内不重复计算向量
-    cache_key = None
-    cache_ttl = None
-    if text and len(text.strip()) > 2:
-        try:
-            from backend.src.utils.redis_client import cache_get, cache_set, _cache_key, _text_hash
-            from backend.src.utils.constants import EMBED_CACHE_TTL
-            cache_key = _cache_key("embed", _text_hash(text.strip()))
-            cache_ttl = EMBED_CACHE_TTL
-            cached = await cache_get(cache_key)
-            if cached is not None and isinstance(cached, list):
-                return np.array(cached, dtype=np.float32)
-        except Exception:
-            logger.debug("已忽略异常 backend/src/utils/knowledge_base.py:85", exc_info=True)
-
-    model = await _get_embed_model_async()
-    vector = await asyncio.to_thread(model.encode, text, normalize_embeddings=True)
-
-    # 异步回填缓存（不阻塞返回）
-    if cache_key and cache_ttl:
-        try:
-            from backend.src.utils.redis_client import cache_set
-            await cache_set(cache_key, vector.tolist(), cache_ttl)
-        except Exception:
-            logger.debug("已忽略异常 backend/src/utils/knowledge_base.py:96", exc_info=True)
-
-    return vector
-
-
-async def encode_many(texts: list[str]):
-    """批量编码，返回已归一化的向量矩阵（点积即余弦相似度）。
-
-    比逐条调 _encode_async 快得多：批量只跑一次模型前向，逐条每条都要跑一次。
-    这里**不走 Redis 缓存** —— 调用方多是给一批短文本即时打分，命中率低，
-    而且缓存键按整批算，改一条就整批失效。
+    实现已移到 `utils/embeddings` —— 模型生命周期不该由知识库业务持有。
+    保留这个名字是因为 `service/memory/embedding.py` 按它引用。
     """
-    import numpy as np
+    return await _encode_text(text)
 
-    cleaned = [str(t or "").strip() or " " for t in texts]
-    if not cleaned:
-        return np.zeros((0, 0), dtype=np.float32)
-    model = await _get_embed_model_async()
-    return await asyncio.to_thread(model.encode, cleaned, normalize_embeddings=True)
+
+_last_mismatch_signature = None
+
+
+def _report_embedding_mismatch(mismatched: int, total: int, stale_models: set[str]) -> None:
+    """向量与当前模型不匹配时**大声报错**，不再静默跳过。
+
+    静默跳过的表现是「检索一直返回『暂无相关内容』」—— 看起来像"知识库是空的"，
+    不像"配置错了"，排查时会往数据方向找很久。这里直接说清是什么、怎么修，
+    并带上这些行自报的 `embedding_model`，省掉一次倒查。
+
+    同一批不匹配只报一次，避免每篇 PPT 触发十几次检索把日志刷爆。
+    """
+    global _last_mismatch_signature
+    import os
+
+    model_id = os.getenv("EMBEDDING_MODEL_ID") or current_spec().id
+    stale = "/".join(sorted(stale_models)) or "未知"
+    signature = (model_id, mismatched, total, stale)
+    if signature == _last_mismatch_signature:
+        return
+    _last_mismatch_signature = signature
+    logger.error(
+        "知识库 %d/%d 条向量的维度与当前嵌入模型 %s 不符，已跳过这些条目"
+        "（这些行记录的生成模型是 %s）。"
+        "这通常是换过模型却没重算向量 —— 请运行 "
+        "`python backend/scripts/reembed_all.py --apply`，"
+        "或把 EMBEDDING_MODEL_ID 改回生成这批向量的那个模型。",
+        mismatched, total, model_id, stale,
+    )
 
 
 async def search(query: str, top_k: int = 5, user_id: int = None, category: str = None) -> str:
@@ -151,27 +120,49 @@ async def _search_inner(query: str, top_k: int = 5, user_id: int = None, categor
         if category:
             qs = qs.filter(category=category)
 
-        records = await qs.values("doc_id", "title", "content", "category", "embedding")
+        records = await qs.values(
+            "doc_id", "title", "content", "category", "embedding", "embedding_model"
+        )
 
         if not records:
             return "知识库中暂无相关内容"
 
-        scored = []
+        # 先把全表向量解出来、滤掉维度不符的，再**一次矩阵乘**算完所有相似度。
+        # 逐行 np.dot 看着自然，但这里 99% 的时间花在解码而不是点积上（实测
+        # 502×1024：解码 120ms、点积 0.4ms），所以解码格式和批量化才是重点。
+        query_dim = query_vec.shape[0]
+        vectors, metas = [], []
+        mismatched = 0
+        stale_models: set[str] = set()
         for r in records:
-            raw_embedding = r.get("embedding") or "[]"
-            try:
-                embedding = json.loads(raw_embedding)
-                if not embedding:
-                    continue
-                vec = np.array(embedding, dtype=np.float32)
-                if vec.shape != query_vec.shape:
-                    continue
-            except Exception:
+            vec = codec.unpack(r.get("embedding"))
+            if vec is None:
                 continue
-            sim = float(np.dot(query_vec, vec))
-            if sim < min_score:
+            if vec.shape[0] != query_dim:
+                mismatched += 1
+                stale_models.add(r.get("embedding_model") or "未知")
                 continue
-            scored.append((sim, r.get("doc_id", ""), r["title"], r["content"], r.get("category", "")))
+            vectors.append(vec)
+            metas.append(r)
+
+        if mismatched:
+            _report_embedding_mismatch(mismatched, len(records), stale_models)
+
+        if not vectors:
+            return "知识库中暂无相关内容"
+
+        similarities = np.vstack(vectors) @ query_vec
+        scored = [
+            (
+                float(similarities[i]),
+                metas[i].get("doc_id", ""),
+                metas[i]["title"],
+                metas[i]["content"],
+                metas[i].get("category", ""),
+            )
+            for i in range(len(metas))
+            if similarities[i] >= min_score
+        ]
 
         scored.sort(key=lambda x: x[0], reverse=True)
         if not scored:
@@ -197,6 +188,7 @@ async def ingest(
     visibility: str = "private",
     category: str = "knowledge_point",
     cover_url: str | None = None,
+    vector=None,
 ) -> str:
     """
     向知识库添加一条资料。
@@ -204,13 +196,20 @@ async def ingest(
     - visibility='public': 全员可见; 'private': 仅上传者可见
     - category: 见 KB_CATEGORIES
     - cover_url: 可选封面图 URL，不传则按 category 使用默认封面
+    - vector: 可选，**调用方已经算好的向量**。批量上传时应当先把整篇文档的切片
+      用 `encode_many` 一次编码好再逐条入库 —— 这里每条单独编码的话，切片数就是
+      模型调用次数，CPU 上慢得多（还要每条一次 Redis 往返）。不传则按 content 现算。
+
+      注意：带跨片上下文前缀的文本只用于编码（见 `apply_context_prefix`），
+      它拼出来的向量从这里传进来，`content` 本身始终按原样入库。
     """
     try:
         if len(content.strip()) < 50:
             return "内容过短（<50字），未入库"
 
         doc_id = _make_doc_id(title, content)
-        vector = await _encode_async(content)
+        if vector is None:
+            vector = await _encode_async(content)
 
         existing = await KnowledgeVector.filter(doc_id=doc_id).first()
         if existing:
@@ -246,7 +245,8 @@ async def ingest(
                 new_content = content or ""
                 if new_content != old_content and len(new_content.strip()) >= len(old_content.strip()):
                     existing.content = new_content
-                    existing.embedding = json.dumps(vector.tolist())
+                    existing.embedding = codec.pack(vector)
+                    existing.embedding_model = current_spec().id
                     updated = True
 
                 if updated:
@@ -285,7 +285,8 @@ async def ingest(
             doc_id=doc_id,
             title=title,
             content=content,
-            embedding=json.dumps(vector.tolist()),
+            embedding=codec.pack(vector),
+            embedding_model=current_spec().id,
             user_id=user_id,
             visibility=visibility,
             category=category,
@@ -335,7 +336,7 @@ def _merge_overlapped_chunks(chunks: list[str]) -> str:
 
 async def list_grouped(user_id: int = None, visibility: str = None) -> list[dict]:
     """
-    按原始文档分组展示，合并 BGE 切片避免前端展示混乱。
+    按原始文档分组展示，合并切片避免前端展示混乱。
     切片标题格式: "文档名 (第N部分)" → 按 "文档名" 合并
     """
     import re
@@ -448,7 +449,8 @@ async def update(
             vector = await _encode_async(content)
             record.doc_id = new_doc_id
             record.content = content
-            record.embedding = json.dumps(vector.tolist())
+            record.embedding = codec.pack(vector)
+            record.embedding_model = current_spec().id
 
         await record.save()
         return f"「{record.title}」已更新"

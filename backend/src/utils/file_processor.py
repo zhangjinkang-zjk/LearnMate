@@ -63,21 +63,19 @@ def _extract_docx(path: Path) -> str:
 
 # ── 文本切片 ──
 
-# 切片尺寸由嵌入模型的窗口反推，不是随便定的：
-# 当前模型 bge-small-zh-v1.5 的 max_position_embeddings = 512 token，实测本语料
-# token/字符 ≈ 0.64，且 _add_overlap 会把上一块尾部以「上文摘要：」前缀注入到本块开头，
-# 因此「正文 + 前缀」的字符预算约 780。取 400 + 100 = 500 字符（约 320 token），留足余量。
-#
-# 实测（对线上 536 个切片重建文档后重新切块；重建文本含已烘进正文的「上文摘要：」前缀，
-# 因此比真实新入库的文本偏长，是保守上界）：
-#   max_chars=1000 + overlap=150 → 中位 600 token，65.4% 超出 512 窗口
-#   max_chars=400  + overlap=80  → 中位 242 token，超窗 0.0%
-#   max_chars=600  + overlap=80  → 中位 344 token，仍超窗 10.2%
-# 旧值 1000 会让超过五分之一的正文字符在生成向量前就被静默截断，即检索永远看不到这部分内容。
-# overlap 取 20%（位于业界推荐的 10~20% 上沿）：重叠并非免费，占比过高会放大索引并伤精度。
-# 调大 max_chars 前必须重新量一次 token 分布，不要凭感觉改。
-KB_CHUNK_MAX_CHARS = 400
+# 这里的默认值只是"通用兜底"，真正入库用的尺寸由嵌入模型决定 ——
+# 每个模型的窗口和 tokenizer 比例不同，尺寸必须跟着模型走，具体值登记在
+# `utils/embeddings/registry.py` 的 EMBEDDING_MODELS 里（含每个值的实测来源）。
+# 知识库入库路径应当显式传入 provider 的尺寸，例如：
+#     max_chars, overlap_chars = chunk_sizes()
+#     chunks = chunk_text(raw_text, max_chars=max_chars, overlap_chars=overlap_chars)
+# 本函数刻意不认识嵌入模型，保持成一个纯粹的文本工具。
+KB_CHUNK_MAX_CHARS = 700
 KB_CHUNK_OVERLAP_CHARS = 80
+
+# 跨片上下文前缀的标记。**它只应该出现在送去编码的文本里**，
+# 不该出现在入库的 content 里 —— 见 apply_context_prefix 的说明。
+CONTEXT_PREFIX = "上文摘要："
 
 
 def chunk_text(
@@ -86,10 +84,14 @@ def chunk_text(
     overlap_chars: int = KB_CHUNK_OVERLAP_CHARS,
 ) -> list[str]:
     """
-    将长文本按语义段落切分成块。
-    策略：保留标题路径，按段落聚合，长段落按句子切分，并给相邻块少量 overlap。
+    将长文本按语义段落切分成块。**返回的是干净正文**，不带跨片上下文前缀。
 
-    默认尺寸与嵌入模型窗口绑定，见 KB_CHUNK_MAX_CHARS 的说明。调用方通常不用传参。
+    策略：保留标题路径，按段落聚合，长段落按句子切分；超长段落内部按 overlap_chars
+    做字符级滑动窗口（那部分是真重叠，不是前缀注入）。
+
+    尺寸请由调用方按当前嵌入模型给出（见模块注释），不要依赖这里的默认值。
+
+    跨片上下文请单独用 `apply_context_prefix()` 生成 —— 那个结果只用于编码。
     """
     paragraphs = _paragraphs_with_heading_path(text)
     chunks = []
@@ -114,7 +116,30 @@ def chunk_text(
     if current:
         chunks.append(current)
 
-    return _add_overlap(chunks, overlap_chars) or [text]
+    return chunks or [text]
+
+
+def apply_context_prefix(chunks: list[str], overlap_chars: int) -> list[str]:
+    """给每片拼上「上一片尾部」作前缀 —— **仅供编码使用，不要入库**。
+
+    跨片上下文只对向量有意义：它把相邻切片在语义空间里拉近，让它们能互相召回。
+    但对读的人（知识库页面、喂给模型的提示词）是纯噪音。
+
+    以前这个前缀是直接拼进 `content` 再入库的，后果是每段正文开头都带着
+    「上文摘要：…」，页面上看得见、提示词里也带着。所以现在拆开：
+    `content` 存干净正文，前缀在送编码前才拼。
+    """
+    if overlap_chars <= 0 or len(chunks) <= 1:
+        return list(chunks)
+
+    prefixed = [chunks[0]]
+    for idx in range(1, len(chunks)):
+        prev_tail = chunks[idx - 1][-overlap_chars:].strip()
+        current = chunks[idx]
+        if prev_tail and prev_tail not in current[: overlap_chars * 2]:
+            current = f"{CONTEXT_PREFIX}{prev_tail}\n{current}"
+        prefixed.append(current)
+    return prefixed
 
 
 def _paragraphs_with_heading_path(text: str) -> list[str]:
@@ -136,6 +161,11 @@ def _paragraphs_with_heading_path(text: str) -> list[str]:
             heading_path.append(title)
             body = "\n".join(lines[1:]).strip()
             if not body:
+                # 只有标题行、没有正文的段落 —— 把切片拼回全文时，切片边界会变成
+                # 段落边界，边界正好落在某行前面时这一行就成了"光杆标题"。
+                # 不能 continue：那会把整行丢掉（实测每轮迁移丢掉 0.16% 的句子）。
+                # 也不拿它当标题正文 —— 原样保留，避免和路径里的同名标题重复。
+                parts.append(part)
                 continue
             part = body
 
@@ -197,17 +227,3 @@ def _split_long_paragraph(text: str, max_chars: int, overlap_chars: int = 150) -
 def _hard_split(text: str, max_chars: int, overlap_chars: int) -> list[str]:
     step = max(1, max_chars - max(0, overlap_chars))
     return [text[start:start + max_chars].strip() for start in range(0, len(text), step) if text[start:start + max_chars].strip()]
-
-
-def _add_overlap(chunks: list[str], overlap_chars: int) -> list[str]:
-    if overlap_chars <= 0 or len(chunks) <= 1:
-        return chunks
-
-    overlapped = [chunks[0]]
-    for idx in range(1, len(chunks)):
-        prev_tail = chunks[idx - 1][-overlap_chars:].strip()
-        current = chunks[idx]
-        if prev_tail and prev_tail not in current[: overlap_chars * 2]:
-            current = f"上文摘要：{prev_tail}\n{current}"
-        overlapped.append(current)
-    return overlapped

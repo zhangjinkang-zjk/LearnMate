@@ -71,8 +71,9 @@ backend/static/covers/
 # === 知识库向量数据（ChromaDB）===
 backend/src/ai_core/knowledge_base/chroma/
 
-# === BGE 嵌入模型（~130MB，运行时自动下载）===
-backend/src/ai_core/knowledge_base/bge_model/
+# === 嵌入模型权重（GB 量级，按模型 id 分目录，运行时自动下载）===
+# 具体模型由 EMBEDDING_MODEL_ID 决定，见 utils/embeddings/registry.py
+backend/embedding_models/
 
 # === 上传临时文件 ===
 uploads/
