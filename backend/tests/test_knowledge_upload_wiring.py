@@ -181,3 +181,43 @@ def test_the_page_is_routed_and_linked_from_the_resource_library():
     library = _read(LIBRARY_PAGE)
     assert 'to="/resources/knowledge"' in library
     assert "上传知识库" in library
+
+
+# ── 编码必须是批量的，且不能在服务端刷进度条 ─────────────────────────────
+#
+# 这两件事**改错了都不报错**，只是慢和吵：
+# - 逐片调用 `encode()`：切片数 = 模型调用次数，CPU 上实测慢 2.7 倍（217ms → 80ms/片）；
+# - 而且 sentence-transformers 在 INFO 级别下**每次调用都打一条** `Batches: 100%|…| 1/1`。
+#   一份 127 片的文档就是 127 条进度条，日志里看着像死循环；每次知识库检索也会再打一条。
+
+def _upload_source() -> str:
+    return inspect.getsource(knowledge_router.upload_document)
+
+
+def test_the_upload_encodes_the_whole_document_in_one_batch():
+    source = _upload_source()
+    assert "encode_many(" in source, "上传没有批量编码，切片数会变成模型调用次数"
+
+    # 逐条编码必须是**没有**的。用负向前瞻避开 encode_many 这个名字本身的干扰。
+    assert not re.search(r"await encode\((?![_a-zA-Z])", source), (
+        "上传路径里出现了逐条 encode()，改回批量 encode_many()"
+    )
+
+
+def test_every_chunk_gets_a_vector_from_that_one_batch():
+    """批量算完之后必须把结果按位置传给 ingest，否则它会自己再编码一遍（等于没批量化）。"""
+    source = _upload_source()
+    assert "vector=vectors[idx]" in source, "ingest 没拿到预算好的向量，会退回逐条编码"
+    assert "encode_text" not in source, "encode_text 已被 vector 取代"
+
+
+def test_the_embedding_layer_does_not_print_progress_bars_on_the_server():
+    from backend.src.utils.embeddings import provider
+
+    single = inspect.getsource(provider.encode)
+    assert "show_progress_bar=False" in single, "单条编码会往服务端日志里刷 Batches 进度条"
+
+    batch = inspect.signature(provider.encode_many)
+    assert batch.parameters["show_progress"].default is False, (
+        "批量编码的进度条默认必须是关的 —— 只有离线脚本才该打开"
+    )

@@ -30,6 +30,14 @@ from backend.src.utils.embeddings import codec
 logger = logging.getLogger(__name__)
 
 MEMORY_CONTEXT_MAX_CHARS = int(os.getenv("MEMORY_CONTEXT_MAX_CHARS", "900"))
+# 记忆相似度下限。**0.30 是针对上一代嵌入模型（bge-small-zh-v1.5）定的，
+# 换成 BAAI/bge-m3 之后它已经低于"不相关"的取值下限，实际上等于没过滤。**
+# 实测（知识库语料，与记忆不是同一分布，只能看量级）：
+#     bge-m3 的相关文本   0.470 ~ 0.736（中位 0.595）
+#     bge-m3 的不相关文本 0.427 ~ 0.608（中位 0.518）
+# 两个分布重叠严重，本来也不存在能干净分开的绝对值。当前库里只有 1 行记忆，
+# **没有数据可以离线重标**，所以数值保持原样，只把失效这件事写在这里。
+# 真要收紧，应当积累一段真实使用数据后按分布重定，而不是随手改个数。
 MEMORY_SIM_THRESHOLD = float(os.getenv("MEMORY_SIM_THRESHOLD", "0.30"))
 SAME_GROUP_BOOST = float(os.getenv("MEMORY_SAME_GROUP_BOOST", "1.35"))
 CONTEXT_TTL_SECONDS = int(os.getenv("MEMORY_CONTEXT_TTL_SECONDS", "5"))
