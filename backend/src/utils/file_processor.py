@@ -63,10 +63,33 @@ def _extract_docx(path: Path) -> str:
 
 # ── 文本切片 ──
 
-def chunk_text(text: str, max_chars: int = 1000, overlap_chars: int = 150) -> list[str]:
+# 切片尺寸由嵌入模型的窗口反推，不是随便定的：
+# 当前模型 bge-small-zh-v1.5 的 max_position_embeddings = 512 token，实测本语料
+# token/字符 ≈ 0.64，且 _add_overlap 会把上一块尾部以「上文摘要：」前缀注入到本块开头，
+# 因此「正文 + 前缀」的字符预算约 780。取 400 + 100 = 500 字符（约 320 token），留足余量。
+#
+# 实测（对线上 536 个切片重建文档后重新切块；重建文本含已烘进正文的「上文摘要：」前缀，
+# 因此比真实新入库的文本偏长，是保守上界）：
+#   max_chars=1000 + overlap=150 → 中位 600 token，65.4% 超出 512 窗口
+#   max_chars=400  + overlap=80  → 中位 242 token，超窗 0.0%
+#   max_chars=600  + overlap=80  → 中位 344 token，仍超窗 10.2%
+# 旧值 1000 会让超过五分之一的正文字符在生成向量前就被静默截断，即检索永远看不到这部分内容。
+# overlap 取 20%（位于业界推荐的 10~20% 上沿）：重叠并非免费，占比过高会放大索引并伤精度。
+# 调大 max_chars 前必须重新量一次 token 分布，不要凭感觉改。
+KB_CHUNK_MAX_CHARS = 400
+KB_CHUNK_OVERLAP_CHARS = 80
+
+
+def chunk_text(
+    text: str,
+    max_chars: int = KB_CHUNK_MAX_CHARS,
+    overlap_chars: int = KB_CHUNK_OVERLAP_CHARS,
+) -> list[str]:
     """
     将长文本按语义段落切分成块。
     策略：保留标题路径，按段落聚合，长段落按句子切分，并给相邻块少量 overlap。
+
+    默认尺寸与嵌入模型窗口绑定，见 KB_CHUNK_MAX_CHARS 的说明。调用方通常不用传参。
     """
     paragraphs = _paragraphs_with_heading_path(text)
     chunks = []

@@ -44,8 +44,6 @@ export default defineConfig({
       '/exam': proxyTarget,
       '/video': proxyTarget,
       '/study': proxyTarget,
-      '/study-room': proxyTarget,
-      '/mock-classroom': proxyTarget,
       '/presentation': proxyTarget,
       '/notification': proxyTarget,
       '/annotation': proxyTarget,

@@ -16,11 +16,11 @@ logger = logging.getLogger(__name__)
 
 # 文本模型的端点和模型名，这里只是没配时的兜底；`.env` 里配了就以 `.env` 为准。
 _TEXT_BASE_URL = os.getenv("AI_BASE_URL") or "https://api.xiaomimimo.com/v1"
-_TEXT_MODEL = os.getenv("AI_MODEL") or "mimo-v2.5"
+_TEXT_MODEL = os.getenv("AI_MODEL") or "mimo-v2.6-flash"
 
 # 视觉模型的端点/模型名（PPT 截图审查等），默认留在 MiMo
 _VISION_BASE_URL = os.getenv("VISION_BASE_URL") or "https://api.xiaomimimo.com/v1"
-_VISION_MODEL = os.getenv("VISION_MODEL") or "mimo-v2.5"
+_VISION_MODEL = os.getenv("VISION_MODEL") or "mimo-v2.6-flash"
 
 
 def _is_deepseek_endpoint(base_url: str | None) -> bool:
