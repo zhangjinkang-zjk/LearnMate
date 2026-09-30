@@ -55,6 +55,10 @@
           </div>
         </header>
 
+        <div class="foundation-library__start-hint" role="note">
+          <BookOpenText :size="16" aria-hidden="true" />
+          <span><strong>建议先从主讲文档开始</strong><small>先读懂核心内容，再用 PPT、知识结构和视频辅助理解。</small></span>
+        </div>
         <div v-if="resourceOverviewLoading" class="foundation-library__state surface" aria-live="polite">
           <LoaderCircle class="spin" :size="22" />
           <strong>正在整理你的学习资源</strong>
@@ -86,6 +90,7 @@
                 v-for="resource in group.resources"
                 :key="`${group.node.id}-${resource.resource_id || resource.id}`"
                 class="resource-card surface"
+                :class="{ 'resource-card--primary': resource.resource_type === 'document' }"
                 type="button"
                 @click="openFoundationResource(group.node, resource)"
               >
@@ -100,6 +105,7 @@
                   </span>
                 </span>
                 <span class="resource-card__content">
+                  <span v-if="resource.resource_type === 'document'" class="resource-card__guide"><BookOpenText :size="13" />建议先阅读</span>
                   <strong>{{ resource.title || resource.topic || resourceLabel(resource.resource_type) }}</strong>
                   <small>{{ resourceTypeLabel(resource.resource_type) }}<span v-if="resource.source_label"> · {{ resource.source_label }}</span><span v-if="resource.duration_text"> · {{ resource.duration_text }}</span></small>
                   <span v-if="resource.description" class="resource-card__description">{{ resource.description }}</span>
@@ -122,16 +128,16 @@
 
       <template v-else>
         <header class="lesson-context">
+          <button class="button button--quiet return-resource-button" type="button" @click="openResourcePreview">
+            <Eye :size="15" />
+            资源预览
+          </button>
           <div class="lesson-context__copy">
             <p class="eyebrow lesson-eyebrow">FOUNDATION LEARNING</p>
             <h1>{{ activeNode?.title || '选择一个章节' }}</h1>
             <p>基础学习 · {{ learningPath.goal }}<span>第 {{ activeNodeIndex + 1 }} / {{ learningPath.nodes.length }} 章</span><span>{{ activeNode?.summary || '按学习路径逐章补齐知识基础。' }}</span></p>
           </div>
           <div class="lesson-context__actions">
-            <button class="button button--quiet return-resource-button" type="button" @click="returnToResourcePreview">
-              <ArrowLeft :size="15" />
-              返回资源预览
-            </button>
             <div class="path-progress" aria-label="当前科目学习进度">
               <div><span>科目进度</span><strong>{{ learningPath.progress }}%</strong></div>
               <div class="progress-track"><div class="progress-value" :style="{ width: `${learningPath.progress}%` }"></div></div>
@@ -460,7 +466,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, BookOpenText, CircleAlert, Download, ListTree, LoaderCircle, LockKeyhole, Network, PlayCircle, Presentation, Route, Video, X } from 'lucide-vue-next'
+import { ArrowLeft, ArrowRight, BookOpenText, CircleAlert, Download, Eye, ListTree, LoaderCircle, LockKeyhole, Network, PlayCircle, Presentation, Route, Video, X } from 'lucide-vue-next'
 import ChapterCheck from '@/features/fundamentals/ChapterCheck.vue'
 import ChapterRail from '@/features/fundamentals/ChapterRail.vue'
 import LearningAssistant from '@/features/fundamentals/LearningAssistant.vue'
@@ -558,7 +564,7 @@ const resourceGroups = computed(() => {
     .map((node, index) => {
       const boundResources = (node.resources || []).filter((resource) => resource?.resource_type !== 'external_video')
       const externalVideos = videosByNodeId.get(Number(node.id)) || []
-      const resources = [...boundResources]
+      const resources = [...boundResources].sort(compareResourcesForLearning)
       externalVideos.forEach((video) => {
         if (!resources.some((resource) => Number(resource.resource_id || resource.id) === Number(video.resource_id))) {
           resources.push(video)
@@ -644,6 +650,11 @@ function resourceTypeLabel(type) {
     video: '平台视频课件',
     external_video: '外部教学视频',
   }[type] || '学习资源'
+}
+
+function compareResourcesForLearning(left, right) {
+  const order = { document: 0, ppt: 1, mindmap: 2, video: 3, external_video: 4 }
+  return (order[left?.resource_type] ?? 99) - (order[right?.resource_type] ?? 99)
 }
 
 function resourceLabel(type) {
@@ -754,6 +765,7 @@ function openFoundationResource(node, resource) {
   const query = {
     ...route.query,
     pathId: learningPath.value?.path_id,
+    view: undefined,
     node: node.id,
     resource: resourceType,
     resourceId: undefined,
@@ -765,11 +777,12 @@ function openFoundationResource(node, resource) {
   void router.push({ path: '/learning/fundamentals', query })
 }
 
-function returnToResourcePreview() {
+function openResourcePreview() {
   void router.push({
     path: '/learning/fundamentals',
     query: {
       ...route.query,
+      view: 'resources',
       node: undefined,
       resource: undefined,
       resourceId: undefined,
@@ -1205,7 +1218,8 @@ async function loadPage() {
     learningPath.value = current
     syncPathCatalog(current)
     const requestedNodeId = Number(route.query.node)
-    const initialNode = requestedNodeId > 0 ? chooseInitialNode(current, requestedNodeId) : null
+    const isResourcePreview = route.query.view === 'resources'
+    const initialNode = isResourcePreview ? null : chooseInitialNode(current, requestedNodeId)
     const previewNode = initialNode || chooseInitialNode(current)
     previewNodeId.value = previewNode?.id || null
     if (!initialNode && previewNode) void loadNodeExternalVideos(previewNode)
@@ -1766,11 +1780,16 @@ onBeforeUnmount(() => {
 <style scoped>
 .fundamentals-page { display: grid; min-width: 0; height: 100%; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
 .foundation-library { min-width: 0; min-height: 0; overflow: auto; padding: 6px 2px 26px; }
-.foundation-library__layout { display: grid; grid-template-columns: minmax(210px, 250px) minmax(0, 1fr); gap: 28px; align-items: start; }
+.foundation-library__layout { position: relative; display: block; }
 .foundation-library__main { min-width: 0; }
 .foundation-library__header { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; margin-bottom: 22px; padding-bottom: 18px; border-bottom: 1px solid #dfe5df; }
 .foundation-library__header h1 { margin: 0; color: #1e3c34; font-size: clamp(28px, 3vw, 40px); line-height: 1.15; }
 .foundation-library__header p:last-child { margin: 9px 0 0; color: var(--muted); font-size: 13px; }
+.foundation-library__start-hint { display: flex; align-items: center; gap: 10px; margin: 0 0 18px; padding: 10px 13px; border-left: 3px solid var(--accent-deep); background: #f1f6eb; color: var(--accent-deep); }
+.foundation-library__start-hint > svg { flex: 0 0 auto; }
+.foundation-library__start-hint > span { display: grid; min-width: 0; gap: 2px; }
+.foundation-library__start-hint strong { font-size: 12px; }
+.foundation-library__start-hint small { color: var(--muted); font-size: 11px; line-height: 1.45; }
 .foundation-library__header .path-progress { flex: 0 0 220px; }
 .foundation-library__state { display: grid; min-height: 270px; place-items: center; align-content: center; gap: 9px; padding: 32px; color: var(--accent-deep); text-align: center; }
 .foundation-library__state strong { color: var(--ink); font-size: 16px; }
@@ -1787,6 +1806,7 @@ onBeforeUnmount(() => {
 .resource-group__status { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
 .resource-card-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .resource-card { position: relative; display: grid; min-width: 0; min-height: 276px; grid-template-rows: 132px minmax(0, 1fr); overflow: hidden; padding: 0; border: 1px solid #dfe6da; text-align: left; transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease; }
+.resource-card--primary { border-color: #b9ce99; box-shadow: 0 8px 20px rgba(63, 91, 49, .08); }
 .resource-card:hover { border-color: #abc28f; box-shadow: 0 10px 22px rgba(45, 70, 40, .1); transform: translateY(-2px); }
 .resource-card:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
 .resource-card__cover { position: relative; display: block; min-width: 0; overflow: hidden; background: #183d34; }
@@ -1795,6 +1815,8 @@ onBeforeUnmount(() => {
 .resource-card__cover-overlay { position: absolute; inset: 0; display: flex; align-items: flex-end; justify-content: space-between; padding: 13px 14px; background: rgba(15, 31, 25, .55); color: #fff; }
 .resource-card__type { overflow: hidden; max-width: 78%; font-size: 10px; font-weight: 800; letter-spacing: .1em; text-overflow: ellipsis; white-space: nowrap; }
 .resource-card__content { display: grid; min-width: 0; align-content: start; gap: 7px; padding: 15px 42px 15px 16px; }
+.resource-card__guide { display: inline-flex; align-items: center; gap: 5px; color: var(--accent-deep); font-size: 10px; font-weight: 800; }
+.resource-card__guide svg { flex: 0 0 auto; }
 .resource-card__content strong { overflow: hidden; color: var(--ink); font-size: 13px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .resource-card__content small { color: var(--muted); font-size: 10px; }
 .resource-card__description { display: -webkit-box; overflow: hidden; color: var(--muted); font-size: 11px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
@@ -1807,10 +1829,10 @@ onBeforeUnmount(() => {
 .external-video-fallback strong { color: var(--ink); font-size: 17px; }
 .external-video-fallback p { max-width: 480px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .external-video-fallback .button { display: inline-flex; align-items: center; gap: 7px; margin-top: 5px; }
-.lesson-context { display: flex; align-items: center; justify-content: space-between; gap: 28px; margin-bottom: 12px; padding: 0 0 16px; border-bottom: 1px solid var(--line); }
+.lesson-context { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 22px; margin-bottom: 12px; padding: 0 0 16px; border-bottom: 1px solid var(--line); }
 .lesson-context__copy { min-width: 0; }
-.lesson-context__actions { display: flex; flex: 0 0 auto; align-items: flex-end; gap: 14px; }
-.return-resource-button { gap: 6px; min-height: 36px; white-space: nowrap; }
+.lesson-context__actions { display: flex; min-width: 0; flex: 0 0 auto; align-items: flex-end; gap: 14px; }
+.return-resource-button { align-self: start; gap: 6px; min-height: 36px; white-space: nowrap; }
 .lesson-context__copy .eyebrow { margin-bottom: 6px; }
 .lesson-context h1 { max-width: 920px; margin: 0; color: var(--ink); font-size: clamp(22px, 2.1vw, 30px); line-height: 1.25; }
 .lesson-context__copy > p:last-child { max-width: 880px; margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
@@ -1883,7 +1905,6 @@ onBeforeUnmount(() => {
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 1120px) {
-  .foundation-library__layout { grid-template-columns: minmax(170px, 210px) minmax(0, 1fr); gap: 20px; }
   .resource-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .learning-layout { grid-template-columns: 52px minmax(0, 1fr); }
   .learning-layout > :last-child { display: none; }
@@ -1894,14 +1915,14 @@ onBeforeUnmount(() => {
 }
 @media (max-width: 680px) {
   .foundation-library { padding: 0 0 22px; }
-  .foundation-library__layout { grid-template-columns: 1fr; gap: 18px; }
+  .foundation-library__layout { display: grid; grid-template-columns: 1fr; gap: 18px; }
   .foundation-library__header { align-items: stretch; flex-direction: column; gap: 15px; margin-bottom: 17px; padding-bottom: 14px; }
   .foundation-library__header .path-progress { width: 100%; min-width: 0; }
   .resource-card-grid { grid-template-columns: 1fr; }
   .resource-group__header h2 { max-width: 230px; }
   .resource-card { min-height: 252px; grid-template-rows: 120px minmax(0, 1fr); }
-  .lesson-context { align-items: stretch; flex-direction: column; gap: 16px; }
-  .lesson-context__actions { width: 100%; align-items: stretch; flex-direction: column-reverse; gap: 9px; }
+  .lesson-context { grid-template-columns: 1fr; gap: 16px; }
+  .lesson-context__actions { width: 100%; align-items: stretch; gap: 9px; }
   .return-resource-button { align-self: flex-start; }
   .path-progress { flex-basis: auto; width: min(360px, 100%); }
   .path-progress small { text-align: left; }

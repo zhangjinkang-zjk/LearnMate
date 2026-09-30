@@ -1,5 +1,6 @@
 <template>
-  <aside class="chapter-rail" :class="{ 'chapter-rail--drawer': drawer }" aria-label="本科目章节">
+  <aside class="chapter-rail" :class="{ 'chapter-rail--drawer': drawer, 'chapter-rail--hover-drawer': !drawer }" aria-label="本科目章节">
+    <span v-if="!drawer" class="chapter-rail__handle" aria-hidden="true"><ListTree :size="16" /></span>
     <div class="chapter-rail__heading">
       <p class="eyebrow">本科目章节</p>
       <span>{{ completedCount }} / {{ nodes.length }}</span>
@@ -43,7 +44,7 @@
 
 <script setup>
 import { computed } from 'vue'
-import { BookOpen, CircleCheck, LockKeyhole } from 'lucide-vue-next'
+import { BookOpen, CircleCheck, ListTree, LockKeyhole } from 'lucide-vue-next'
 
 const props = defineProps({
   nodes: { type: Array, default: () => [] },
@@ -101,4 +102,98 @@ function selectFromMenu(event) {
 .chapter-rail--drawer .chapter-select { display: none; }
 .chapter-rail--drawer .chapter-list { display: grid; }
 .chapter-rail--drawer .chapter-item { min-height: 58px; padding: 8px 10px; }
+
+/* Keep the inline rail as a small floating affordance until the pointer reaches it. */
+.chapter-rail--hover-drawer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 8;
+  display: block;
+  width: 38px;
+  min-width: 38px;
+  max-height: 100%;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  transition: width .55s cubic-bezier(.16, 1, .3, 1), padding .55s ease, background .35s ease, box-shadow .55s ease;
+}
+.chapter-rail__handle {
+  position: absolute;
+  top: 12px;
+  left: 4px;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--accent-deep);
+  box-shadow: 0 6px 16px rgba(24, 56, 45, .14);
+  opacity: .82;
+  transition: opacity .35s ease, transform .55s cubic-bezier(.16, 1, .3, 1), box-shadow .35s ease;
+}
+.chapter-rail--hover-drawer:hover .chapter-rail__handle,
+.chapter-rail--hover-drawer:focus-within .chapter-rail__handle {
+  opacity: 1;
+  transform: translateX(2px);
+  box-shadow: 0 8px 20px rgba(24, 56, 45, .18);
+}
+.chapter-rail--hover-drawer .chapter-rail__heading,
+.chapter-rail--hover-drawer .chapter-rail__progress,
+.chapter-rail--hover-drawer .chapter-list {
+  opacity: 0;
+  transition: opacity .3s ease;
+}
+.chapter-rail--hover-drawer:hover,
+.chapter-rail--hover-drawer:focus-within {
+  width: min(280px, calc(100vw - 32px));
+  padding: 18px 17px 24px 46px;
+  border-right: 1px solid var(--line);
+  background: var(--paper);
+  box-shadow: 14px 10px 30px rgba(24, 56, 45, .14);
+}
+.chapter-rail--hover-drawer:hover .chapter-rail__heading,
+.chapter-rail--hover-drawer:hover .chapter-rail__progress,
+.chapter-rail--hover-drawer:hover .chapter-list,
+.chapter-rail--hover-drawer:focus-within .chapter-rail__heading,
+.chapter-rail--hover-drawer:focus-within .chapter-rail__progress,
+.chapter-rail--hover-drawer:focus-within .chapter-list {
+  opacity: 1;
+  transition-delay: .15s;
+}
+.chapter-rail--hover-drawer:hover,
+.chapter-rail--hover-drawer:focus-within {
+  overflow: hidden auto;
+}
+
+@media (max-width: 1280px) {
+  .chapter-rail--hover-drawer .chapter-list { display: grid; }
+  .chapter-rail--hover-drawer .chapter-rail__progress { display: block; }
+  .chapter-rail--hover-drawer .chapter-select { display: none; }
+}
+
+@media (max-width: 680px) {
+  .chapter-rail--hover-drawer {
+    position: static;
+    width: auto;
+    min-width: 0;
+    max-height: none;
+    overflow: visible;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .chapter-rail--hover-drawer .chapter-rail__handle { display: none; }
+  .chapter-rail--hover-drawer .chapter-rail__heading,
+  .chapter-rail--hover-drawer .chapter-rail__progress,
+  .chapter-rail--hover-drawer .chapter-list { opacity: 1; }
+  .chapter-rail--hover-drawer .chapter-rail__progress,
+  .chapter-rail--hover-drawer .chapter-list { display: none; }
+  .chapter-rail--hover-drawer .chapter-select { display: block; }
+}
 </style>
