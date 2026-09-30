@@ -29,10 +29,19 @@ class PracticeStateRequest(BaseModel):
 
 
 @router.get("/current")
-async def get_current_advanced_task(user_id: int = Depends(get_user_id_from_token)):
-    """Return the task snapshot for the current ten-node learning milestone."""
+async def get_current_advanced_task(
+    refresh: bool = False,
+    user_id: int = Depends(get_user_id_from_token),
+):
+    """Return the task snapshot for the current ten-node learning milestone.
+
+    `refresh=true` 表示这是用户**手点**「重新同步 / 重新生成」发出来的：绕过兜底重试冷却，
+    强制重跑一次生成作业。自动轮询不要带它 —— 每 3 秒一发会白烧调用。
+
+    请求本身照样立刻返回（生成在后台跑），前端按 `task_source` 决定要不要继续轮询。
+    """
     try:
-        result = await AdvancedLearningService.get_current(user_id)
+        result = await AdvancedLearningService.get_current(user_id, refresh=refresh)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"code": 200, "msg": "success", "data": result}

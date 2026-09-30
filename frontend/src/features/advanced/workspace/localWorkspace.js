@@ -182,7 +182,13 @@ export async function deleteEntryOnDisk(rootHandle, path) {
 // ── FSA 分支：能写回磁盘 ─────────────────────────────────────────
 
 export async function openDirectoryFromDisk() {
-  const root = await window.showDirectoryPicker({ mode: 'readwrite' })
+  return readDirectoryFromHandle(await window.showDirectoryPicker({ mode: 'readwrite' }))
+}
+
+// 从一个**已有的**句柄读出整棵树。刷新后恢复上次文件夹走的就是这条 ——
+// 和上面的区别只在于句柄是从 IndexedDB 取回来的、不弹选择器；收集逻辑必须共用，
+// 否则"重开的文件夹"和"刚选的文件夹"会慢慢长出两套不同的过滤规则。
+export async function readDirectoryFromHandle(root) {
   const entries = []
   const budget = { files: 0, bytes: 0, truncated: false }
   // 路径按文件夹**内部**的相对路径存（不带根目录名），这样 FSA 和降级分支的
@@ -190,6 +196,32 @@ export async function openDirectoryFromDisk() {
   await collectDirectory(root, '', entries, budget)
   // 把根句柄一并带出去：新建目录/文件时要靠它落盘（见 createDirectoryOnDisk）。
   return { mode: WORKSPACE_MODE.FSA, rootName: root.name, rootHandle: root, entries, truncated: budget.truncated }
+}
+
+// ── 句柄权限 ─────────────────────────────────────────────────────
+//
+// 句柄能存进 IndexedDB，但**权限不跟着走**：下次打开页面时 queryPermission 返回
+// 'prompt'。而 requestPermission 必须**在用户手势里**调用（浏览器的硬规则，绕不过），
+// 所以页面加载时做不到静默恢复 —— 这里只负责"问状态"，要权限由界面上的按钮去要。
+// Chrome 122+ 的「每次访问都允许」和 PWA 安装态可以省掉这一步，但那是用户或安装
+// 带来的结果，不能当成默认路径来假设。
+
+export async function folderPermission(handle) {
+  if (!handle || typeof handle.queryPermission !== 'function') return 'denied'
+  try {
+    return await handle.queryPermission({ mode: 'readwrite' })
+  } catch {
+    return 'denied'
+  }
+}
+
+export async function requestFolderPermission(handle) {
+  if (!handle || typeof handle.requestPermission !== 'function') return false
+  try {
+    return (await handle.requestPermission({ mode: 'readwrite' })) === 'granted'
+  } catch {
+    return false
+  }
 }
 
 export async function openFilesFromDisk() {

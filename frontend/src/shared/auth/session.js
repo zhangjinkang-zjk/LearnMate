@@ -1,3 +1,5 @@
+import { clearWorkspaceStorage } from '@/shared/storage/workspaceDraftStore'
+
 /**
  * Clear the browser-side authentication state.
  *
@@ -29,4 +31,8 @@ export function clearAuthSession() {
   ]) {
     sessionStorage.removeItem(key)
   }
+  // 进阶学习的工作区草稿（IndexedDB）同理，而且更要紧 —— 里面是学生**自己的代码**。
+  // 不 await：登出不该被一次数据库删除拖住，而且三个调用点全都是同步的、没有接
+  // Promise 的地方。清不掉最坏是留一份草稿，而不是登不出去。
+  clearWorkspaceStorage()
 }

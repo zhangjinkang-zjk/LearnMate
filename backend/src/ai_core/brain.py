@@ -121,18 +121,52 @@ _MANAGE_TRIGGERS = [
 ]
 
 
+_INGEST_TRIGGERS = [
+    "上传", "入库", "补库", "联网补充", "补充知识库", "存到知识库", "收进知识库",
+    "加进知识库", "归到知识库", "我的笔记", "这是我的资料", "帮我存", "题解",
+]
+
+_KB_MANAGE_TRIGGERS = [
+    "有哪些资料", "列出我的资料", "我的资料", "知识库有哪些", "知识库里有",
+    "删除资料", "删掉资料", "修改资料", "改一下资料", "知识库里的资料",
+]
+
+_PORTRAIT_TRIGGERS = [
+    "记住", "帮我记录", "我的目标", "我在学", "最近在学", "我是学生", "已经工作",
+    "学习风格", "我的弱点", "我的强项", "我的基础",
+]
+
+_HISTORY_TRIGGERS = ["之前说过", "上次", "之前聊", "以前说过", "历史记录"]
+
+# 一张表管全部：类别 → (触发词, 提示词文件)。新增一类只加两行，不用碰加载逻辑。
+# 拆开的原因见 _load_tool_guides。
+_TRIGGERS: dict[str, list[str]] = {
+    "create": _CREATE_TRIGGERS,
+    "manage": _MANAGE_TRIGGERS,
+    "ingest": _INGEST_TRIGGERS,
+    "kb_manage": _KB_MANAGE_TRIGGERS,
+    "portrait": _PORTRAIT_TRIGGERS,
+    "history": _HISTORY_TRIGGERS,
+}
+
+_GUIDE_MODULES: dict[str, str] = {
+    "create": "chat/guide_create",
+    "manage": "chat/guide_manage",
+    "ingest": "chat/modules/ingest",
+    "kb_manage": "chat/modules/kb_manage",
+    "portrait": "chat/modules/portrait",
+    "history": "chat/modules/history",
+}
+
+
 def _classify_message(message: str) -> set[str]:
-    """根据用户消息判断需要加载哪些工具行为指南"""
-    cats = set()
-    for t in _CREATE_TRIGGERS:
-        if t in message:
-            cats.add("create")
-            break
-    for t in _MANAGE_TRIGGERS:
-        if t in message:
-            cats.add("manage")
-            break
-    return cats
+    """按触发词判断这轮该加载哪些行为模块。命中多个就都加载。"""
+    text = str(message or "")
+    return {
+        category
+        for category, triggers in _TRIGGERS.items()
+        if any(trigger in text for trigger in triggers)
+    }
 
 
 # ── 工具注册表：工具名 → 工厂函数(uid, gid) → 已注入的 LangChain Tool ──
@@ -172,11 +206,17 @@ class Brain:
     _instances: weakref.WeakSet = weakref.WeakSet()
 
     def __init__(self, user_id: int, chat_group_id: int | None = None,
-                 session_id: str | None = None, agent_id: int | None = None):
+                 session_id: str | None = None, agent_id: int | None = None,
+                 history_turns: int | None = None):
         self.user_id = user_id
         self.chat_group_id = chat_group_id
         self.session_id = session_id or f"brain_{user_id}"
         self.agent_id = agent_id
+        # 记忆深度可以按调用方调。默认锁在 _MAX_HISTORY_TURNS，只有课堂/实践教练那条线
+        # 会调高 —— 一次代码审核要跨几十轮，20 轮会让他"忘了"学生十分钟前说的设计决定。
+        # 不直接改全局默认值：主智能体每轮都要把这批历史重放一遍（ReAct 循环里是每个
+        # 工具步一遍），给它加长是另一笔账，得单独论证。
+        self._history_turns = history_turns if history_turns and history_turns > 0 else _MAX_HISTORY_TURNS
         self._agent_persona: str | None = None
         self._agent_tool_names: set[str] | None = None
         self._agent_memory_text: str = ""
@@ -205,7 +245,7 @@ class Brain:
             )
             if before_id:
                 qs = qs.filter(id__lt=before_id)
-            records = await qs.order_by("-id").limit(_MAX_HISTORY_TURNS).all()
+            records = await qs.order_by("-id").limit(self._history_turns).all()
             for r in reversed(records):
                 if r.req:
                     self._history.append(HumanMessage(content=r.req))
@@ -313,6 +353,13 @@ class Brain:
             f"- Always use this date as reference for time-sensitive queries.\n"
         )
 
+        # 两条路都不在这里拼 `{tool_guides}`：**该不该有它由 persona 自己决定**。
+        # 主智能体那份（chat/unified.yaml）里写着这个占位符，所以吃得到按需模块；
+        # 实践教练那份故意不写 —— 它的工具集是只读的
+        # （search_knowledge_base / web_search / read_portrait / search_memory /
+        # get_used_history，见 classroom_chat._CLASSROOM_TOOLS），而那几个模块讲的
+        # 是 ingest_document / update_portrait / list_knowledge 这类它**没有**的工具。
+        # 注进去只会让它去调不存在的工具。自建智能体想用就自己写上占位符，同样生效。
         if self._agent_persona:
             system_prompt = (
                 self._agent_persona
@@ -358,15 +405,22 @@ class Brain:
             verbose=True, handle_parsing_errors=True, max_iterations=max_iters,
         )
 
-    def _load_tool_guides(self, message: str) -> str:
-        """根据消息内容按需加载工具行为指南；未命中则返回空字符串"""
-        cats = _classify_message(message)
-        parts: list[str] = []
-        if "create" in cats:
-            parts.append(load_prompt("chat/guide_create"))
-        if "manage" in cats:
-            parts.append(load_prompt("chat/guide_manage"))
-        return "\n".join(parts)
+    def _load_tool_guides(self, message: str, *, has_portrait: bool = True) -> str:
+        """按需加载行为模块；没命中的一律不加载。
+
+        这些模块以前全写死在 `chat/unified.yaml` 里，**每一轮都整份注入** —— 于是
+        用户随口闲聊一句，模型也要读一遍「画像构建」那 25 行怎么发起新用户访谈。
+        无关指令不只是浪费 token，它会稀释真正相关的那几条。
+
+        新用户引导是**情境信号而不是消息信号**：画像还空着就该把「画像构建」加载上，
+        否则模型不会主动发起那几个认识对方的问题 —— 这条不能只靠触发词。
+        """
+        categories = _classify_message(message)
+        if not has_portrait:
+            categories.add("portrait")
+        return "\n".join(
+            load_prompt(_GUIDE_MODULES[cat]) for cat in _GUIDE_MODULES if cat in categories
+        )
 
     async def _ensure_action_tools(self):
         """首次调用或 rebuild_for_user 后，异步加载 agent 配置、action tools 并重建 agent"""
@@ -388,7 +442,8 @@ class Brain:
 
     async def chat(self, message: str, resource_context: str = "", path_context: str = "", portrait_context: str = "", memory_context: str = "") -> str:
         await self._ensure_action_tools()
-        tool_guides = self._load_tool_guides(message)
+        # 画像上下文为空 = 还没建立画像，把「新用户引导」那段一起加载上
+        tool_guides = self._load_tool_guides(message, has_portrait=bool(str(portrait_context or "").strip()))
         response = await self._raw_executor.ainvoke({
             "input": message,
             "history": list(self._history),
@@ -401,8 +456,8 @@ class Brain:
         })
         self._history.append(HumanMessage(content=message))
         self._history.append(AIMessage(content=response["output"]))
-        if len(self._history) > _MAX_HISTORY_TURNS * 2:
-            self._history = self._history[-_MAX_HISTORY_TURNS * 2:]
+        if len(self._history) > self._history_turns * 2:
+            self._history = self._history[-self._history_turns * 2:]
         return response["output"]
 
     async def stream(self, message: str, resource_context: str = "", path_context: str = "", portrait_context: str = "", memory_context: str = ""):
@@ -411,7 +466,8 @@ class Brain:
 
         full_response = ""
         tool_running = False
-        tool_guides = self._load_tool_guides(message)
+        # 同 chat()：画像为空说明还没建立画像，把新用户引导那段一起加载上
+        tool_guides = self._load_tool_guides(message, has_portrait=bool(str(portrait_context or "").strip()))
 
         async def _stream_events(version: str):
             nonlocal tool_running
@@ -489,5 +545,5 @@ class Brain:
 
         self._history.append(HumanMessage(content=message))
         self._history.append(AIMessage(content=full_response))
-        if len(self._history) > _MAX_HISTORY_TURNS * 2:
-            self._history = self._history[-_MAX_HISTORY_TURNS * 2:]
+        if len(self._history) > self._history_turns * 2:
+            self._history = self._history[-self._history_turns * 2:]

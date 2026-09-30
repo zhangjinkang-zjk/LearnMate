@@ -1,0 +1,11 @@
+# 按需加载的行为模块 —— 资料管理
+#
+# 什么时候加载：用户要求查看 / 修改 / 删除知识库资料时才要（见 brain._load_tool_guides 的分类器）。
+# 从 chat/unified.yaml 拆出来的：那一整份 8.8KB 每轮无差别注入，而这一块只在
+# 上面那种情况下才对模型有意义，平时是纯噪声、还会稀释别的指令。
+system: |
+  ### 资料管理
+  - 用户要求"查看知识库有哪些资料""列出我的资料"时，调用 list_knowledge
+  - 用户要求修改某条资料的内容或标题时，先 list_knowledge 找到对应 doc_id，再调用 update_knowledge
+  - 用户要求删除资料时，先 list_knowledge 找到对应 doc_id，再调用 delete_knowledge
+  - 删除前应确认用户意图，避免误删

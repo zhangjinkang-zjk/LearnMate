@@ -16,6 +16,20 @@
       <CircleAlert :size="12" />临时入口 · 重新生成
     </button>
 
+    <!-- 任务说明的开关。**这个按钮不是装饰**：教练会拿验收标准和需要交付来提问
+         （"交付物形态是什么"），而那些字段以前在整个界面上一个字都不显示 —— 学生
+         无处可查，只能瞎猜，然后被反复追问同一个问题。 -->
+    <button
+      v-if="hasDetails"
+      class="button button--quiet task-bar__toggle"
+      type="button"
+      :aria-expanded="detailsOpen"
+      @click="detailsOpen = !detailsOpen"
+    >
+      <ClipboardList :size="13" />任务说明
+      <ChevronDown class="task-bar__chevron" :class="{ 'is-open': detailsOpen }" :size="13" />
+    </button>
+
     <div class="task-bar__switch">
       <button
         class="button button--quiet task-bar__switch-button"
@@ -38,12 +52,41 @@
         </li>
       </ul>
     </div>
+
+    <!-- 展开后整行铺满（flex-basis: 100%），不挤压上面那排。用内联展开而不是浮层：
+         浮层要处理层级和裁剪，而这里的内容本来就该被完整读到。 -->
+    <section v-if="detailsOpen && hasDetails" class="task-bar__details">
+      <div v-if="briefText" class="task-bar__field">
+        <span class="task-bar__field-label">任务情境</span>
+        <p>{{ briefText }}</p>
+      </div>
+      <div v-if="problemText" class="task-bar__field">
+        <span class="task-bar__field-label">要解决的问题</span>
+        <p>{{ problemText }}</p>
+      </div>
+      <div v-if="focusText" class="task-bar__field">
+        <span class="task-bar__field-label">能力重点</span>
+        <p>{{ focusText }}</p>
+      </div>
+      <div v-if="deliverables.length" class="task-bar__field">
+        <span class="task-bar__field-label">需要交付</span>
+        <ul>
+          <li v-for="(item, index) in deliverables" :key="index">{{ item }}</li>
+        </ul>
+      </div>
+      <div v-if="criteria.length" class="task-bar__field">
+        <span class="task-bar__field-label">验收标准</span>
+        <ul>
+          <li v-for="(item, index) in criteria" :key="index">{{ item }}</li>
+        </ul>
+      </div>
+    </section>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import { CircleAlert, LoaderCircle, Repeat2 } from 'lucide-vue-next'
+import { computed, ref } from 'vue'
+import { ChevronDown, CircleAlert, ClipboardList, LoaderCircle, Repeat2 } from 'lucide-vue-next'
 
 const props = defineProps({
   task: { type: Object, required: true },
@@ -53,6 +96,38 @@ const props = defineProps({
 const emit = defineEmits(['select', 'regenerate'])
 
 const open = ref(false)
+// **默认收起。** 这一页是全屏工作区，展开的任务说明会把它整块往下挤 ——
+// 试过默认展开，代价是编辑器少一大截，不值得。按钮本身就在那儿，找得到的。
+const detailsOpen = ref(false)
+
+// 任务说明的四段都来自服务端任务负载（router 整体透传）。任何一段缺失就不渲染它，
+// 全缺时连开关都不出现 —— 空荡荡的"任务说明"比没有更让人困惑。
+function text(value) {
+  return String(value || '').trim()
+}
+
+// 交付物在服务端是**对象**数组（`{id, label, completed}`，见
+// advanced/service.py 的 item["deliverables"]），不是字符串数组 ——
+// 直接 String() 会渲染成一排 `[object Object]`。验收标准是纯字符串，
+// 但同样过这个函数，免得以后形状变了再炸一次。
+function label(value) {
+  if (value && typeof value === 'object') return text(value.label || value.title || value.name)
+  return text(value)
+}
+
+function labelList(value) {
+  return Array.isArray(value) ? value.map(label).filter(Boolean) : []
+}
+
+const briefText = computed(() => text(props.task.brief))
+const problemText = computed(() => text(props.task.problem))
+const focusText = computed(() => text(props.task.focus))
+const deliverables = computed(() => labelList(props.task.deliverables))
+const criteria = computed(() => labelList(props.task.criteria))
+const hasDetails = computed(() => Boolean(
+  briefText.value || problemText.value || focusText.value
+  || deliverables.value.length || criteria.value.length,
+))
 
 function choose(taskId) {
   open.value = false
@@ -61,7 +136,8 @@ function choose(taskId) {
 </script>
 
 <style scoped>
-.task-bar { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 9px 14px; border: 1px solid rgba(63, 91, 49, .28); border-radius: 12px; background: var(--paper); box-shadow: 0 8px 24px rgba(45, 40, 92, .07); }
+/* flex-wrap 是为了让展开的任务说明能独占一整行，而不是把标题压扁 */
+.task-bar { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 10px; padding: 9px 14px; border: 1px solid rgba(63, 91, 49, .28); border-radius: 12px; background: var(--paper); box-shadow: 0 8px 24px rgba(45, 40, 92, .07); }
 .task-bar__kind { flex: 0 0 auto; color: var(--accent-deep); font-size: 11px; font-weight: 800; }
 .task-bar__difficulty { flex: 0 0 auto; padding: 3px 8px; border: 1px solid #d5e2c8; border-radius: 99px; background: #f3f8ea; color: var(--accent-deep); font-size: 10px; font-weight: 800; }
 .task-bar__title { min-width: 0; flex: 1; margin: 0; overflow: hidden; color: var(--ink); font-size: 14px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
@@ -79,6 +155,35 @@ function choose(taskId) {
 .task-bar__menu-top strong { color: var(--accent-deep); font-size: 10px; }
 .task-bar__menu-top small { color: var(--muted); font-size: 10px; }
 .task-bar__menu-title { overflow-wrap: anywhere; font-size: 12px; font-weight: 700; line-height: 1.45; }
+.task-bar__toggle { flex: 0 0 auto; gap: 5px; padding: 6px 11px; font-size: 12px; }
+.task-bar__toggle:hover { border-color: #9dbb8d; color: var(--accent-deep); }
+.task-bar__toggle:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
+.task-bar__chevron { transition: transform .2s ease; }
+.task-bar__chevron.is-open { transform: rotate(180deg); }
+/* 整行铺满：flex-basis 100% 让它换到下一行，上面那排的宽度一点都不受影响。
+   `max-height` 是硬的：展开也**绝不能**把下面的编辑器挤没 —— 这一页的主体是工作区，
+   任务说明是附属信息，它该在不看的时候收起、在看的时候滚动，而不是无限长下去。 */
+.task-bar__details {
+  display: grid;
+  flex: 1 1 100%;
+  gap: 10px;
+  max-height: min(32vh, 320px);
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.task-bar__field { display: grid; gap: 4px; }
+.task-bar__field-label { color: var(--accent-deep); font-size: 10px; font-weight: 800; letter-spacing: .04em; }
+.task-bar__field p { margin: 0; color: var(--ink); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.task-bar__field ul { display: grid; gap: 4px; margin: 0; padding-left: 17px; color: var(--ink); font-size: 12px; line-height: 1.7; }
+.task-bar__field li { overflow-wrap: anywhere; }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+/* 窄屏下标题本来就该换行，别跟着挤在一条线上 */
+@media (max-width: 760px) {
+  .task-bar__title { flex: 1 1 100%; order: 3; white-space: normal; }
+  .task-bar__toggle { margin-left: auto; }
+}
 </style>

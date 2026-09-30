@@ -455,26 +455,71 @@ def test_workspace_block_reports_tree_truncation_and_omitted_files_separately():
     assert "文件树较长，这里只显示了前面一部分文件。" in no_omitted
 
 
-def test_workspace_block_stays_bounded_but_keeps_the_end_marker():
-    """超长输入必须被截断到预算内，但结束标记是注入防御的边界，绝不能被截掉。
+def test_workspace_block_is_bounded_by_its_sub_budgets_not_the_global_chop():
+    """超大输入靠单份上限 + 文件合计上限就框住了，够不到最后那一刀。
 
-    这两条一度是互斥的：实现先把正文截到 _WORKSPACE_CONTEXT_MAX_CHARS，**再**补截断提示
-    和结束标记，于是整块恒为 8000 + 18 + 8 —— 一个名字写着"上限"却能被超的常量。
-    现在截断预算里先给那条尾巴留了位置，所以"整体不超过常量"和"标记仍在"能同时成立。
+    预算 2026-09-30 上调之后，子预算之和已经明显小于 _WORKSPACE_CONTEXT_MAX_CHARS，
+    整块兜底从"常用路径"退化成"只防恶意 payload 的保险"。这条钉住那个余量：
+    一旦某段预算被调大到能把总量顶过整块上限，这里就会红。
     """
     workspace = {
         "available": True,
-        "tree": "\n".join(f"pkg{i}/file_{i}.py" for i in range(200)),
+        "tree": "\n".join(f"pkg{i}/file_{i}.py" for i in range(2000)),
         "tree_total_files": 5000,
         "tree_truncated": True,
-        "files": [{"path": f"file_{i}.py", "text": "x" * 5000, "truncated": True} for i in range(12)],
+        "files": [{"path": f"file_{i}.py", "text": "x" * 60000, "truncated": True} for i in range(60)],
     }
     block = cg_chat._render_workspace_block(workspace)
 
-    assert block.endswith("【工作区结束】"), "截断后必须补回结束标记，它是注入防御的边界"
-    assert "（工作区内容过长，这里已经截断。）" in block, "确认这次确实触发了截断，断言才有意义"
-    # 常量说多少就是多少，不留"实际会多 26 个字符"这种只存在于注释里的例外
-    assert len(block) <= cg_chat._WORKSPACE_CONTEXT_MAX_CHARS
+    assert block.endswith("【工作区结束】")
+    assert "（工作区内容过长，这里已经截断。）" not in block, (
+        "子预算够用时不该再触发整块兜底 —— 触发了就说明哪一段预算漏了"
+    )
+    assert len(block) < cg_chat._WORKSPACE_CONTEXT_MAX_CHARS
+    assert "因篇幅没有附上正文" in block
+
+
+def test_workspace_block_drops_whole_files_instead_of_chopping_them(monkeypatch):
+    """装不下的文件**整份跳过**，绝不从中间切一刀。
+
+    半截文件比没有文件更坏：教练会照着前半段下结论，而问题常常正藏在他没看到的那
+    半段里。把合计预算压到只够一份，验证第二份是整份消失、并出现在遗漏声明里，
+    而不是留下开头那一截。
+    """
+    monkeypatch.setattr(cg_chat, "_WORKSPACE_FILES_TOTAL_MAX_CHARS", 100)
+    workspace = {
+        "available": True,
+        "files": [
+            {"path": "small.py", "text": "a" * 80},
+            {"path": "big.py", "text": "b" * 5000},
+        ],
+    }
+    block = cg_chat._render_workspace_block(workspace)
+
+    assert "a" * 80 in block
+    assert "b" * 100 not in block, "不能把开头那一截当成这份文件塞进来"
+    assert "还有 1 个已打开文件因篇幅没有附上正文：big.py。" in block
+
+
+def test_workspace_block_keeps_the_end_marker_even_at_the_global_cap(monkeypatch):
+    """整块兜底那一刀必须给自己留出尾巴，否则常量写着上限却能被超。
+
+    这条回归当年真出过：实现先截正文、**再**补"截断提示 + 结束标记"，整块恒为
+    上限 + 26 —— 一个名字写着"上限"却能被超的常量。上限压小来触发兜底，
+    这样断言不必随预算数值改动，调大调小都还有效。
+    """
+    monkeypatch.setattr(cg_chat, "_WORKSPACE_CONTEXT_MAX_CHARS", 200)
+    workspace = {
+        "available": True,
+        "tree": "\n".join(f"file_{i}.py" for i in range(100)),
+        "tree_truncated": True,
+        "files": [{"path": "a.py", "text": "x" * 500}],
+    }
+    block = cg_chat._render_workspace_block(workspace)
+
+    assert block.endswith("【工作区结束】"), "结束标记是注入防御的边界，绝不能被截掉"
+    assert "（工作区内容过长，这里已经截断。）" in block, "确认这次确实触发了兜底，断言才有意义"
+    assert len(block) <= 200, "常量说多少就是多少，不留'实际会多 26 个字符'这种注释里的例外"
 
 
 def test_workspace_block_degrades_on_dirty_payloads_without_raising():
@@ -519,6 +564,27 @@ def test_render_task_block_absent_when_empty():
         {"criteria": [], "deliverables": ["  "]},
     ):
         assert cg_chat._render_task_block(snapshot) == ""
+
+
+def test_task_block_reads_deliverable_labels_not_their_repr():
+    """`deliverables` 是 {"id","label","completed"} 字典，不是字符串。
+
+    见 service/advanced/service.py:485-492 —— criteria 是字符串列表，deliverables 是字典
+    列表。以前两种条目都直接 `_clip`，字典被 `str()` 成 `{'id': 'deliverable-1', ...}`，
+    教练读的是这段 repr 而不是那句话，跟前端 TaskBar 出过的 [object Object] 是同一类错。
+    """
+    block = cg_chat._render_task_block({
+        "title": "做一个能跑的东西",
+        "deliverables": [
+            {"id": "deliverable-1", "label": "能跑起来的代码", "completed": False},
+            {"id": "deliverable-2", "label": "每个取舍的理由", "completed": False},
+        ],
+        "criteria": ["能运行", "写清理由"],
+    })
+
+    assert "能跑起来的代码；每个取舍的理由" in block
+    assert "deliverable-1" not in block and "completed" not in block
+    assert "能运行；写清理由" in block
 
 
 @pytest.mark.asyncio

@@ -51,48 +51,110 @@ GOAL_MODES = (
 )
 
 
+# 降级文案（AI 任务生成失败时兜底）。
+#
+# **一律说人话。** 这批字符串以前写的是「处理方案与技术说明」「可展示的任务成果」
+# 「结果包含可复查的验证证据」这类咨询黑话 —— 读它的人是一个正在学智能体开发的
+# 开发者，不是评审专家。每条都按"你会怎么当面跟他说这件事"来写：
+# 做个什么东西、跑起来能看到什么、怎么算做完了。
 TASK_TEMPLATES = {
     "job": {
-        "title": "完成一次{topic}岗位情境任务",
-        "brief": "从实际岗位问题出发，说明你的判断、处理方案和验证方法。",
-        "deliverables": ["问题定位记录", "处理方案与技术说明", "验证结果"],
-        "criteria": ["判断能够对应岗位情境", "方案说明关键取舍", "结果包含可复查的验证证据"],
+        "title": "把{topic}用到岗位上的一个真实问题里",
+        "brief": "当作上班时碰到的一个问题：先说你怎么判断，再动手做，最后说清怎么确认做对了。",
+        "deliverables": [
+            "一段说明：问题出在哪、你是怎么定位到的",
+            "改动的代码或配置",
+            "跑一遍的结果",
+        ],
+        "criteria": [
+            "说清了这个问题的来龙去脉",
+            "讲明白为什么这么做、放弃了哪些别的做法",
+            "结果别人照着能跑出一样的",
+        ],
     },
     "competition": {
-        "title": "完成一次{topic}竞赛方案推演",
-        "brief": "围绕竞赛目标提出方案，说明亮点、验证思路和陈述要点。",
-        "deliverables": ["问题拆解", "方案与亮点说明", "验证或指标对比"],
-        "criteria": ["方案紧扣竞赛目标", "亮点有清晰对照", "结论有验证支撑"],
+        "title": "用{topic}做一份参赛作品",
+        "brief": "针对比赛要解决的问题做一个东西，说清它好在哪、怎么证明它有效。",
+        "deliverables": [
+            "你对赛题的理解，以及决定解决哪一块",
+            "做出来的代码或原型",
+            "和别的做法对比的数据或结果",
+        ],
+        "criteria": [
+            "做得确实对着赛题的要求",
+            "说清了你的做法和常见做法差在哪",
+            "有数据或结果支持你的结论",
+        ],
     },
     "exam": {
-        "title": "完成一次{topic}综合应用挑战",
-        "brief": "把多个知识点放进同一问题中，展示推理过程并校验易错环节。",
-        "deliverables": ["完整解题过程", "关键概念说明", "易错点复盘"],
-        "criteria": ["推理过程完整", "概念使用准确", "能够解释错误选项或错误路径"],
+        "title": "用{topic}解一道综合题",
+        "brief": "把几个知识点串到同一道题里，写出完整推理过程，再回头检查容易错的地方。",
+        "deliverables": [
+            "一步步的解题过程",
+            "用到了哪些概念、各自是什么意思",
+            "哪一步最容易错、为什么会错",
+        ],
+        "criteria": [
+            "每一步都看得出依据",
+            "概念用得准确，没有混淆",
+            "能说清错误选项错在哪",
+        ],
     },
     "transition": {
-        "title": "完成一次{topic}能力迁移任务",
-        "brief": "将已有经验映射到新方向，补齐关键差距并形成可展示成果。",
-        "deliverables": ["能力迁移说明", "差距补齐方案", "可展示的任务成果"],
-        "criteria": ["说明已有能力如何迁移", "补强内容对应真实差距", "成果能够独立展示"],
+        "title": "把{topic}用到一个新方向上",
+        "brief": "把你原来会的东西用到新方向上，找出还差什么、补上，再做出一个能拿给别人看的东西。",
+        "deliverables": [
+            "说明你原来的经验怎么用到这里",
+            "列出还缺什么，以及你打算怎么补",
+            "一个能直接拿给别人看的作品",
+        ],
+        "criteria": [
+            "说清了旧经验和新方向的关系",
+            "补的确实是你真正缺的那块",
+            "作品拿出来就能讲，不用你现场解释",
+        ],
     },
     "project": {
-        "title": "完成一次{topic}项目阶段交付",
-        "brief": "围绕当前项目目标完成方案设计，并用材料或运行结果验证可行性。",
-        "deliverables": ["需求与问题分析", "项目方案及关键取舍", "测试或运行证据"],
-        "criteria": ["方案覆盖明确需求", "关键决策有依据", "结果可复现或可验证"],
+        "title": "用{topic}做出能跑的一块",
+        "brief": "接着当前的项目往下做一块，动手实现，然后跑一遍证明它真的能用。",
+        "deliverables": [
+            "写清这一块要解决什么",
+            "实现它的代码",
+            "跑一遍的输入和输出",
+        ],
+        "criteria": [
+            "该做的都做到了",
+            "每个取舍都能说出理由",
+            "别人照着能跑出同样的结果",
+        ],
     },
     "foundation": {
-        "title": "完成一次{topic}跨知识点综合任务",
-        "brief": "连接已经学过的概念，在具体情境中选择方法并解释为什么。",
-        "deliverables": ["知识关系梳理", "情境分析与方案", "结论与复盘"],
-        "criteria": ["知识点之间关系清楚", "方法选择符合情境", "结论能够回到学习目标"],
+        "title": "把{topic}相关的几个概念连起来用一次",
+        "brief": "把学过的几个概念连起来，放到一个具体例子里，说清你选了哪种做法、为什么。",
+        "deliverables": [
+            "画出这几个概念之间关系的图（文字版也行）",
+            "对例子的分析，以及你选的做法",
+            "回头说清哪一步现在有把握、哪一步还没底",
+        ],
+        "criteria": [
+            "能说清这几个概念谁依赖谁",
+            "选的做法确实贴合这个例子",
+            "能对上你原本的学习目标",
+        ],
     },
     "custom": {
-        "title": "围绕“{topic}”完成一次目标验证",
-        "brief": "从你设定的目标反推任务、成果和验证方式，形成一次完整交付。",
-        "deliverables": ["目标与问题拆解", "行动方案与过程记录", "目标达成证据"],
-        "criteria": ["任务与自定义目标直接相关", "过程记录能够说明关键判断", "结果能够证明目标是否达成"],
+        "title": "围绕“{topic}”做一次，看目标达没达到",
+        "brief": "根据你自己定的目标，倒推出这次要做什么、做到什么算完成、怎么验证。",
+        "deliverables": [
+            "把目标拆成几个能动手做的小步",
+            "做的过程记录",
+            "能说明目标达没达到的结果",
+        ],
+        "criteria": [
+            "做的确实对着你自己的目标",
+            "记录里看得出你的关键判断",
+            "结果能说清目标到底达成没有",
+        ],
     },
 }
 
@@ -567,10 +629,9 @@ def build_advanced_task(profile: dict, path: dict, mastery_records: Iterable[Any
         completed_copy = f"已完成 {len(scope)} 个路径节点，最近学的是“{topic}”"
     else:
         completed_copy = "尚未完成完整路径节点"
-    first_deliverable = template["deliverables"][0]
     recommendation = (
         f"你当前以“{identity}”身份学习，目标是“{goal}”，{completed_copy}；{weak_copy}。"
-        f"本次先围绕“{topic}”完成{first_deliverable}，再进入结果验证。"
+        f"这次先围绕“{topic}”动手做一遍，再回来看结果。"
     )
     resources = node.get("resources") or []
     context = _build_learning_context(node, focus, weak, scope, len(path.get("nodes") or []))
@@ -578,10 +639,10 @@ def build_advanced_task(profile: dict, path: dict, mastery_records: Iterable[Any
     # 而 X 明明已经学完了，读起来像系统不知道自己的状态。
     if scope:
         study_copy = f"你已经完成“{topic}”这个节点"
-        scene_copy = f"围绕已经学过的“{topic}”，针对“{focus}”完成一次与“{goal}”直接相关、可被复查的判断。"
+        scene_copy = f"围绕已经学过的“{topic}”，把“{focus}”放到一个具体问题上用一遍 —— 做完能看出你到底会不会用它。"
     else:
         study_copy = f"你正在学习“{topic}”"
-        scene_copy = f"在“{topic}”的学习情境中，针对“{focus}”完成一次与“{goal}”直接相关、可被复查的判断。"
+        scene_copy = f"在“{topic}”里，把“{focus}”放到一个具体问题上用一遍 —— 做完能看出你到底会不会用它。"
 
     return {
         "id": f"path-{path.get('path_id')}-node-{node.get('id', 'current')}",
@@ -589,7 +650,7 @@ def build_advanced_task(profile: dict, path: dict, mastery_records: Iterable[Any
         "title": template["title"].format(topic=topic),
         "brief": template["brief"],
         "problem": scene_copy,
-        "scenario": f"{study_copy}。现在需要把“{focus}”用到一个具体问题中，交付{first_deliverable}。",
+        "scenario": f"{study_copy}。这次把“{focus}”放到一个具体问题里用一遍，要交什么下面写清楚了。",
         "focus": focus,
         "recommendation": recommendation,
         "context": context,
@@ -600,9 +661,9 @@ def build_advanced_task(profile: dict, path: dict, mastery_records: Iterable[Any
         ],
         "criteria": template["criteria"],
         "constraints": [
-            "至少引用一项学习材料或实际数据作为判断依据",
-            "说明为什么选择当前方案，以及放弃了哪些替代方案",
-            "提交能够被他人复查的结果，而不是只写最终结论",
+            "结论要有一处依据：学过的材料、文档，或者你自己跑出来的数据",
+            "说清为什么这么做，以及你考虑过但没选的别的做法",
+            "交出来的东西别人能自己验证，不能只有一句结论",
         ],
         "resources": resources,
         "workspace": {"path_id": path.get("path_id"), "node_id": node.get("id")},
@@ -649,8 +710,8 @@ def build_advanced_tasks(profile: dict, path: dict, mastery_records: Iterable[An
         "difficulty_label": TASK_DIFFICULTY_LABELS["transfer"],
         "status": "pending",
         "support_level": "high",
-        "title": f"把“{topic}”迁移到一个新情境",
-        "brief": "换一个与原例子不同的情境，说明你会如何识别问题、选择方法并验证结果。",
+        "title": f"把“{topic}”换个场景再用一次",
+        "brief": "换一个和原来不一样的场景，自己判断该用哪种做法，做完再验证一下对不对。",
         "why": f"{base['context']['mastery_label']}；换一个情境检查“{base['context']['focus']}”能否迁移。",
     }
     case = {
@@ -663,25 +724,25 @@ def build_advanced_tasks(profile: dict, path: dict, mastery_records: Iterable[An
         "why": base["recommendation"],
     }
     if scope:
-        project_title = f"综合“{scope_copy}”完成一次项目交付"
-        project_brief = f"把已完成的 {len(scope)} 个节点串成一条可交付的方案，独立完成设计、验证和复盘。"
+        project_title = f"用“{scope_copy}”这些内容做出一个完整的东西"
+        project_brief = f"把已经学完的 {len(scope)} 个节点放在一起，做一个真正能跑、能演示的东西 —— 从头设计到跑通，自己完成。"
         project_scenario = (
-            f"你已经完成 {len(scope)} 个节点，覆盖{scope_copy}等内容。"
-            f"现在需要一个把它们放进同一个目标的交付物，而不是只演示其中一个知识点。"
+            f"你已经学完 {len(scope)} 个节点，覆盖{scope_copy}这些内容。"
+            f"这次要把它们放进同一个目标里做出一个东西，而不是只演示其中某一个点。"
         )
         # 交付物要点名覆盖到的标签，否则"综合"只是一句话，学习者不知道该覆盖什么
         project_deliverables = [
-            {"id": "deliverable-1", "label": f"覆盖「{scope_copy}」的方案设计", "completed": False},
-            {"id": "deliverable-2", "label": "关键取舍说明与放弃的替代方案", "completed": False},
-            {"id": "deliverable-3", "label": "可复现的验证或运行证据", "completed": False},
+            {"id": "deliverable-1", "label": f"能跑起来的代码，用到「{scope_copy}」里的东西", "completed": False},
+            {"id": "deliverable-2", "label": "每个取舍的理由，以及你放弃的做法", "completed": False},
+            {"id": "deliverable-3", "label": "跑一遍的输入和输出（截图或日志都行）", "completed": False},
         ]
-        project_why = f"{base['context']['node_status_label']}；已完成 {len(scope)} 个节点，用开放交付检验能否把它们合起来独立完成。"
+        project_why = f"{base['context']['node_status_label']}；已经学完 {len(scope)} 个节点，用一个开放的东西看看能不能把它们合起来自己做完。"
     else:
-        project_title = f"围绕“{topic}”完成一段项目交付"
-        project_brief = "把当前知识点放进一个更开放的项目目标中，独立完成方案、验证和复盘。"
+        project_title = f"围绕“{topic}”做出一个完整的东西"
+        project_brief = "把当前这个知识点放进一个更开放的目标里，自己从头做到跑通。"
         project_scenario = base["scenario"]
         project_deliverables = base["deliverables"]
-        project_why = f"{base['context']['node_status_label']}；当“{base['context']['focus']}”已有足够证据后，用开放交付检验独立完成能力。"
+        project_why = f"{base['context']['node_status_label']}；等“{base['context']['focus']}”有足够证据之后，用一个开放的东西看看能不能自己独立做完。"
     project = {
         **base,
         "id": f"{base['id']}-project",
@@ -778,17 +839,24 @@ def _snapshot_age_seconds(snapshot: Any) -> float:
     return max(0.0, (datetime.now(timezone.utc) - stamp).total_seconds())
 
 
-def _snapshot_action(source: str | None, job_running: bool, age_seconds: float) -> str:
+def _snapshot_action(source: str | None, job_running: bool, age_seconds: float, force: bool = False) -> str:
     """这次请求该怎么处理快照：直接用（serve），还是顺带起一个生成作业（generate）。
 
     抽成纯函数是因为分支全是"状态 + 时间"的组合，而这几个组合正好是最容易写错的地方：
     `pending` 行如果没人接手（进程重启把进程内的作业注册表清空了），页面就永远停在
     "生成中"；`fallback` 行如果不设年龄门槛，每次进页面都会打一发可能失败的生成。
+
+    `force` 来自用户的显式动作（界面上手点的"重新同步 / 重新生成"）。**没有它，那两个
+    按钮其实是空转的**：库里是一行刚写下的 `fallback` 时，冷却期内的每次请求都返回
+    `serve`，按钮点一百次也拿回同一份兜底 —— 而它旁边的文案写的却是"重新生成"。
+    自动轮询**不能**带 force，否则每 3 秒打一发生成。
     """
+    if job_running:
+        return "serve"  # 已经在生成了，等它 —— force 也不该起第二个
+    if force:
+        return "generate"  # 用户明确要求重来一次：不受冷却和 source 限制
     if source == "agent":
         return "serve"
-    if job_running:
-        return "serve"  # 已经在生成了，等它
     if source == "fallback":
         return "generate" if age_seconds >= ADVANCED_FALLBACK_RETRY_SECONDS else "serve"
     # pending 且没人跑 = 陈旧（进程重启过），接手重跑；没有快照时同理
@@ -809,6 +877,24 @@ async def _run_agent_generation(
 
     generated = await generate_agent_task_set(user_id, profile, path, mastery_records, milestone, fallback_tasks)
     completed, _ = completed_node_count(path)
+
+    # **别把一份好任务降级成兜底。** 用户手点"重新生成"时库里可能已经是 `agent` 的结果；
+    # 这一发要是失败了，整行会被覆盖成兜底模板 —— 点一下反而把好东西弄没了，比不给按钮更糟。
+    # 所以：失败且当前行是 `agent` 时保住原来那份，只把失败记进 generation_error。
+    if generated["source"] != "agent":
+        current = await AdvancedTaskSnapshot.filter(
+            user_id=user_id, path_id=path_id, milestone=milestone,
+        ).first()
+        if current and (current.source or "") == "agent":
+            await AdvancedTaskSnapshot.filter(user_id=user_id, path_id=path_id, milestone=milestone).update(
+                generation_error=generated["error"],
+                updated_at=datetime.now(timezone.utc),
+            )
+            logger.warning(
+                "进阶任务重新生成失败，保留原有 agent 结果 user_id=%s milestone=%s", user_id, milestone,
+            )
+            return
+
     # updated_at 必须显式写：QuerySet.update() 不触发 auto_now，不写的话
     # "兜底过了多久才允许重试"的年龄永远不涨，每次进页面都会重发一次生成。
     await AdvancedTaskSnapshot.filter(user_id=user_id, path_id=path_id, milestone=milestone).update(
@@ -886,6 +972,7 @@ async def _get_or_create_snapshot(
     profile: dict,
     path: dict,
     mastery_records: list[Any],
+    force: bool = False,
 ) -> dict:
     """读取这一里程碑的任务快照；没有就**立刻**落一份确定性任务，生成放后台。
 
@@ -893,6 +980,8 @@ async def _get_or_create_snapshot(
     请求阻塞到超时 → 退到确定性兜底 → 兜底被缓存且永不失效。库里就是这么留下
     "09-04 一次 agent，之后 12 天全是 fallback"的。现在请求只等一次 DB 读写，
     智能体在后台跑完写回，前端下一次轮询就接上。
+
+    `force` 见 `_snapshot_action`：只有用户手点的按钮才带它。
     """
     from backend.src.models.advanced_task_model import AdvancedTaskSnapshot
     from backend.src.service.advanced.task_jobs import is_generating
@@ -900,7 +989,7 @@ async def _get_or_create_snapshot(
     row = await AdvancedTaskSnapshot.filter(user_id=user_id, path_id=path_id, milestone=milestone).first()
     existing = _read_snapshot(row)
     job_running = is_generating(user_id, path_id, milestone)
-    action = _snapshot_action(existing.get("source") if existing else None, job_running, _snapshot_age_seconds(row))
+    action = _snapshot_action(existing.get("source") if existing else None, job_running, _snapshot_age_seconds(row), force)
     if existing and action == "serve":
         return existing
 
@@ -919,7 +1008,7 @@ async def _get_or_create_snapshot(
 
 class AdvancedLearningService:
     @staticmethod
-    async def get_current(user_id: int) -> dict:
+    async def get_current(user_id: int, refresh: bool = False) -> dict:
         from backend.src.models.usermodel import User
         from backend.src.service.path.service import PathService
         from backend.src.service.portrait.service import parse_traits
@@ -988,6 +1077,8 @@ class AdvancedLearningService:
                 profile,
                 current_path,
                 mastery_records,
+                # 用户手点"重新同步 / 重新生成"时为 True：绕过冷却，强制重跑一次生成
+                force=refresh,
             )
         except Exception:
             # Keep the page usable during a rolling deploy before the new table is created.

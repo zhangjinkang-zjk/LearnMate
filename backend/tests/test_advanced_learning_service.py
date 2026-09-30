@@ -165,7 +165,9 @@ def test_task_recommendation_uses_completed_node_and_weak_point():
     task = build_advanced_task(profile, _path([{"tag": "冲突消解", "accuracy": 0.4}]))
 
     assert task["mode"] == "job"
-    assert task["title"] == "完成一次协同冲突处理岗位情境任务"
+    # 模板文案 2026-09-30 改成大白话（原来是"完成一次{topic}岗位情境任务"）。
+    # 断言跟随改写，但它守的是**同一件事**：标题里必须带上锚点节点的主题。
+    assert task["title"] == "把协同冲突处理用到岗位上的一个真实问题里"
     assert "应届毕业生" in task["recommendation"]
     assert "已完成 2 个路径节点" in task["recommendation"]
     assert "掌握度约为 40%" in task["recommendation"]
@@ -210,7 +212,7 @@ def test_project_task_synthesizes_the_whole_completed_scope():
 
     assert "职责划分" in project["title"]
     assert "冲突消解" in project["title"], "必须跨节点，不能只围着最近一个节点"
-    assert "你已经完成 2 个节点" in project["scenario"]
+    assert "已经学完 2 个节点" in project["scenario"]
     assert "职责划分" in project["deliverables"][0]["label"]
     assert len(project["title"]) <= 42, "标题要能塞进卡片，别堆成一长串标签"
 
@@ -220,7 +222,7 @@ def test_project_task_falls_back_to_a_single_topic_without_completed_nodes():
     tasks = build_advanced_tasks(profile, _fresh_path())
     project = next(task for task in tasks if task["kind"] == "project")
 
-    assert project["title"] == "围绕“多智能体调度”完成一段项目交付"
+    assert project["title"] == "围绕“多智能体调度”做出一个完整的东西"
 
 
 def test_completed_scope_unlocks_project_as_the_recommended_entry():
@@ -329,6 +331,33 @@ def test_snapshot_action_only_retries_a_fallback_row_after_the_cooldown():
 
 def test_snapshot_action_generates_when_there_is_no_row_at_all():
     assert _snapshot_action(None, job_running=False, age_seconds=float("inf")) == "generate"
+
+
+# ── force：用户手点的按钮（重新同步 / 重新生成）──
+#
+# 没有 force 的时候那两个按钮是**空转**的：库里是一行刚写下的 fallback 时，冷却期内的
+# 每次请求都返回 serve，按钮点一百次也拿回同一份兜底 —— 而它旁边写的却是"重新生成"。
+
+def test_force_regenerates_even_a_finished_agent_snapshot():
+    """用户对生成结果不满意（比如文风不对）时要能重来一次。"""
+    assert _snapshot_action("agent", job_running=False, age_seconds=0, force=True) == "generate"
+
+
+def test_force_ignores_the_fallback_cooldown():
+    """这正是按钮无效的那个场景：刚落下的 fallback 行会挡住一切重新生成。"""
+    assert _snapshot_action("fallback", job_running=False, age_seconds=0) == "serve"
+    assert _snapshot_action("fallback", job_running=False, age_seconds=0, force=True) == "generate"
+
+
+def test_force_does_not_start_a_second_job():
+    """已经在跑了就等它 —— force 也不该把同一次生成打成两发。"""
+    assert _snapshot_action("agent", job_running=True, age_seconds=0, force=True) == "serve"
+
+
+def test_force_defaults_to_off_so_polling_never_regenerates():
+    """自动轮询每 3 秒一发；它要是能 force，页面开着就把调用烧光了。"""
+    assert _snapshot_action("fallback", job_running=False, age_seconds=0) == "serve"
+    assert _snapshot_action("agent", job_running=False, age_seconds=999) == "serve"
 
 
 # ── 失败留痕 ──────────────────────────────────────────

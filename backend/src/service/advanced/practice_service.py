@@ -7,10 +7,13 @@
 
 1. **没有任何界面在读它们。** 前端的实践对话页只读 `messages` / `opening_pending` /
    `status`，阶段列表、交付物勾选、提交评价一个都不渲染 —— 提交入口早就没了。
-2. **它们会反过来污染对话。** 阶段文案随任务快照存进会话，而历史消息又原样回放给
-   模型，于是教练一直追一个**已经不存在的议程**：学生问"看看我的代码"，它回"我们先
-   完成「定义交付」这一步"。删掉阶段机不会自动清掉那些历史措辞（它们在 chat_history
-   里），但至少不再有新的话术被生产出来。
+2. **它们会反过来污染对话，而且是双份的。** 阶段名当初随任务快照存进会话，又被拼进
+   每一轮的提示词（`当前阶段是「定义交付」…不要跳到后续阶段`），于是模型每轮都被告知
+   一个**已经不存在的议程**：学生问"看看你的代码"，它回"我们先完成「定义交付」这一步"。
+   更糟的是这句还被写进两份历史 —— 学生看得见的 `messages` 和喂给模型的 `chat_history` ——
+   模型回放自己的上一句，一路加倍坚持，学生追问到第五次也出不来。
+   删掉阶段机只保证**不再生产新的话术**，旧会话里已经写下的那几句不会自己消失：
+   清了 `chat_history` 还得重置 `messages`，否则界面上那一段照旧显示。
 3. **判分口径是死代码里最贵的那种。** 一条同时含「依据/验证/方案」的消息就能到 60 分
    通过线 —— 它量的不是方案好坏，是有没有出现这几个词。留着它只会让人以为这里有评价。
 
@@ -23,6 +26,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from datetime import datetime
 from typing import Any
@@ -142,11 +146,25 @@ def _welcome_message(snapshot: Any = None) -> dict[str, str]:
     return {"role": "assistant", "text": text}
 
 
-# 改动之前种下的那两句开场。留着它们是为了**认得老会话**，不是为了让新代码再产生
-# 它们：`_opening_pending` 要靠它判断"这个会话还没真正开过头"。
-_LEGACY_OPENINGS = frozenset({
-    "我们从“理解问题”开始。先说说这个任务要解决的核心问题，以及你准备依据哪些信息判断。",
-})
+# 改动之前种下的开场。留着它们是为了**认得老会话**，不是为了让新代码再产生它们：
+# `_opening_pending` 要靠它判断"这个会话还没真正开过头"。
+#
+# ⚠️ **必须按形状匹配，不能登记字面量。** 阶段机时代那句话是
+# `我们先从「{阶段名}」开始：…`，而阶段名取自会话自己的阶段词汇
+# （`snapshot_phases(snapshot)[0][1]` —— 项目实训是「定义交付」，竞赛/迁移各自不同）。
+# 曾经这里只写了一种固定句子（更早那句不带任务名的），于是**所有阶段机时代开的会话
+# 都被判成"开场已经生成过"**，永远拿不到教练那次真正读过任务的开场 —— 学生就一直
+# 停在「定义交付」这种凭空出现的术语上，而那正是 `_welcome_message` 想摆脱的东西。
+_LEGACY_OPENING_PATTERNS = (
+    # 阶段机时代：`我们先从「定义交付」开始：这个任务要你产出的是「…」。先说说…`
+    re.compile(r"^我们先从「[^」]{1,30}」开始[：:]"),
+    # 更早那句不带任务名的：`我们从“理解问题”开始。先说说…`（中英文引号都收）
+    re.compile(r"^我们从[“\"'][^”\"']{1,30}[”\"']开始[。：:]"),
+)
+
+
+def _is_legacy_opening(text: str) -> bool:
+    return any(pattern.match(text) for pattern in _LEGACY_OPENING_PATTERNS)
 
 
 def _opening_pending(session: AdvancedPracticeSession) -> bool:
@@ -163,7 +181,8 @@ def _opening_pending(session: AdvancedPracticeSession) -> bool:
         if not text:
             continue
         # 学生说过话就说明对话已经开起来了；助手说过别的话就说明开场已经生成过。
-        if message.get("role") == "user" or (text != seed and text not in _LEGACY_OPENINGS):
+        # 旧开场（含阶段名那种）不算"说过别的话" —— 它没读过任务，要重开。
+        if message.get("role") == "user" or (text != seed and not _is_legacy_opening(text)):
             return False
     return True
 
