@@ -86,8 +86,13 @@ const stageTitle = computed(() => nodeStageLabel(activeNode.value || {}))
 
 function nodeStage(node) {
   if (node.status === 'completed') return 4
-  if (node.resources_viewed) return 3
-  if (node.status === 'in_progress') return 2
+  const progress = node.garden_progress
+  if (progress?.total_tasks > 0) {
+    if (progress.completed_tasks <= 0) return 1
+    if (progress.quiz_answered > 0 || progress.completed_tasks >= progress.total_tasks) return 3
+    return 2
+  }
+  if (node.resources_viewed || node.status === 'in_progress') return 2
   if (node.status === 'unlocked') return 1
   return 0
 }

@@ -71,8 +71,13 @@ defineEmits(['back', 'quiz', 'feynman', 'learn'])
 
 const stage = computed(() => {
   if (props.node.status === 'completed') return 4
-  if (props.node.resources_viewed) return 3
-  if (props.node.status === 'in_progress') return 2
+  const progress = props.node.garden_progress
+  if (progress?.total_tasks > 0) {
+    if (progress.completed_tasks <= 0) return 1
+    if (progress.quiz_answered > 0 || progress.completed_tasks >= progress.total_tasks) return 3
+    return 2
+  }
+  if (props.node.resources_viewed || props.node.status === 'in_progress') return 2
   return 1
 })
 const variant = computed(() => ['round', 'pine', 'willow'][Math.abs(Number(props.node.id) || 0) % 3])

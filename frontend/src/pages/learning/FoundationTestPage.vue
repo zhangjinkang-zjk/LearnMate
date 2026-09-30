@@ -67,7 +67,7 @@
           :knowledge-tags="activeNode.knowledge_tags || []"
           :resource-id="documentResource?.resource_id || documentResource?.id"
           @end="leaveTest"
-          @recorded="refreshInsights"
+          @recorded="loadNode"
         />
       </template>
 
@@ -85,7 +85,6 @@ import StudyGarden from '@/features/fundamentals/StudyGarden.vue'
 import TreeReviewScene from '@/features/fundamentals/TreeReviewScene.vue'
 import PageTitle from '@/shared/ui/PageTitle.vue'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
-import { learningApi } from '@/shared/api/learningApi'
 
 const route = useRoute()
 const router = useRouter()
@@ -102,8 +101,7 @@ const nodeDetail = ref(null)
 const documentResource = ref(null)
 const chapterContent = ref('')
 const activeTab = ref('')
-const latestResult = ref(null)
-const testInsights = ref({ totalAnswered: 0, totalCorrect: 0, masteryScore: null, weakPoints: [], recommendation: null })
+const testInsights = ref(createEmptyInsights())
 
 const testableNodes = computed(() => (learningPath.value?.nodes || []).filter((node) => node.status !== 'locked'))
 
@@ -134,41 +132,63 @@ function resolveFallbackNode(nodes) {
 
 const activeNode = computed(() => testableNodes.value.find((node) => String(node.id) === String(activeNodeId.value)) || resolveFallbackNode(testableNodes.value) || null)
 const canStartTest = computed(() => Boolean(activeNode.value?.resources_viewed))
-const latestScore = computed(() => latestResult.value?.score ?? testInsights.value.masteryScore)
+const latestScore = computed(() => testInsights.value.masteryScore)
 const latestScoreLabel = computed(() => latestScore.value === null || latestScore.value === undefined ? '--' : `${Math.round(Number(latestScore.value))}%`)
 const answerSummary = computed(() => {
-  const total = latestResult.value?.total_questions ?? testInsights.value.totalAnswered
-  const correct = latestResult.value?.correct_count ?? testInsights.value.totalCorrect
-  if (latestResult.value && total) return `${correct} / ${total} 题正确`
-  return total ? `${total} 题已记录` : '完成一次题目测试后显示'
+  const { totalAnswered, totalCorrect, totalQuestions } = testInsights.value
+  if (totalAnswered) return `${totalCorrect} / ${totalAnswered} 题正确`
+  return totalQuestions ? `本章已有 ${totalQuestions} 道待完成题目` : '本章尚未生成题目'
 })
 const masteryValue = computed(() => Math.max(0, Math.min(100, Number(latestScore.value || 0))))
 const masteryLabel = computed(() => latestScore.value === null || latestScore.value === undefined ? '--' : `${Math.round(Number(latestScore.value))}%`)
-const nextSuggestionTitle = computed(() => testInsights.value.recommendation?.action || (latestResult.value?.passed ? '进入下一章节' : '先补齐错误知识点'))
-const nextSuggestionReason = computed(() => testInsights.value.recommendation?.reason || (latestResult.value?.passed ? '本章已达到通过标准，可以继续学习。' : '完成测试后，系统会根据错误知识点给出建议。'))
+const nextSuggestionTitle = computed(() => testInsights.value.recommendation?.action || '完成本章题目测试')
+const nextSuggestionReason = computed(() => testInsights.value.recommendation?.reason || '本章还没有已提交的答题记录。')
 
-function unwrap(response) {
-  return response?.data?.data ?? response?.data ?? response ?? null
+function createEmptyInsights() {
+  return { totalQuestions: 0, totalAnswered: 0, totalCorrect: 0, masteryScore: null, weakPoints: [], recommendation: null }
 }
 
-function applyInsights(payload) {
-  const overview = unwrap(payload) || {}
-  const summary = overview.summary || {}
-  const diagnosis = overview.diagnosis || {}
+function collectWeakPoints(records) {
+  const counts = new Map()
+  records.filter((record) => record.is_correct === false).forEach((record) => {
+    const tags = Array.isArray(record.question?.knowledge_tags) ? record.question.knowledge_tags : []
+    tags.forEach((tag) => counts.set(tag, (counts.get(tag) || 0) + 1))
+  })
+  return [...counts.entries()]
+    .sort(([, left], [, right]) => right - left)
+    .map(([tag, count]) => ({ tag, count }))
+}
+
+function applyNodeSession(session) {
+  const records = Array.isArray(session?.records) ? session.records : []
+  const judged = records.filter((record) => typeof record.is_correct === 'boolean')
+  const totalCorrect = judged.filter((record) => record.is_correct).length
+  const masteryScore = judged.length ? Number(session.percentage ?? (totalCorrect / judged.length * 100)) : null
+  const weakPoints = collectWeakPoints(records)
+  const recommendation = !judged.length
+    ? { action: '完成本章题目测试', reason: '本章还没有已提交的答题记录。' }
+    : masteryScore < 60
+      ? { action: '先回看错误知识点', reason: '本章答题正确率低于 60%，建议先针对错题复习。' }
+      : masteryScore < 80
+        ? { action: '再做一次巩固练习', reason: '本章已有基础掌握，可以通过补题巩固薄弱点。' }
+        : { action: '进入下一学习节点', reason: '本章答题表现良好，可以继续下一节点。' }
   testInsights.value = {
-    totalAnswered: Number(diagnosis.answered || 0),
-    totalCorrect: Number(diagnosis.correct || 0),
-    masteryScore: summary.mastery_score ?? diagnosis.score ?? null,
-    weakPoints: Array.isArray(overview.blind_spots) ? overview.blind_spots : [],
-    recommendation: overview.recommendation || null,
+    totalQuestions: Number(session?.total_questions || records.length),
+    totalAnswered: judged.length,
+    totalCorrect,
+    masteryScore: Number.isFinite(masteryScore) ? masteryScore : null,
+    weakPoints,
+    recommendation,
   }
 }
 
-async function refreshInsights() {
+async function loadNodeInsights(sessionId) {
+  testInsights.value = createEmptyInsights()
+  if (!sessionId) return
   try {
-    applyInsights(await learningApi.getOverview())
-  } catch {
-    // The test result is already persisted; keep the last visible snapshot when refresh is unavailable.
+    applyNodeSession(await fundamentalsApi.getQuizSession(sessionId))
+  } catch (error) {
+    if (error.response?.status !== 404) throw error
   }
 }
 
@@ -199,6 +219,7 @@ async function loadNode() {
       const resource = await fundamentalsApi.getResource(resourceId)
       chapterContent.value = normalizeContent(resource?.content || documentResource.value?.content)
     } else chapterContent.value = normalizeContent(documentResource.value?.content)
+    await loadNodeInsights(nodeDetail.value?.quiz_session_id)
   } catch (error) {
     nodeError.value = error.response?.data?.detail || error.message || '请检查后端服务后重试。'
   }
@@ -236,7 +257,6 @@ async function loadPage() {
         })
         return
       }
-      await refreshInsights()
     }
 
     // 目录加载失败不影响当前节点测试；成功后再补齐科目切换列表。
