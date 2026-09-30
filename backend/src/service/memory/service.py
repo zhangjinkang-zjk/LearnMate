@@ -41,7 +41,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 MEMORY_WRITE_INTERVAL = int(os.getenv("MEMORY_WRITE_INTERVAL_SECONDS", "20"))   # 冷却秒数
-WORKING_BUFFER_TURNS = int(os.getenv("MEMORY_BUFFER_TURNS", "12"))              # 保留原文的最近轮数
+# 保留原文的最近轮数。**必须等于 `ai_core/brain._MAX_HISTORY_TURNS`**（同一个环境变量）：
+# 超过这个窗口的消息会被折进滚动摘要，而 Brain 水合的就是这个窗口。"水合得比折叠边界更多"
+# 会让同一条消息同时以原文和摘要进上下文。默认值曾是 12 而 brain 那边是 20 —— 差 8 条重复。
+# 现在两边统一到 20（保全 brain 的既有行为；折叠边界跟着上移，摘要覆盖更老的部分）。
+WORKING_BUFFER_TURNS = int(os.getenv("MEMORY_BUFFER_TURNS", "20"))
 WORKING_SUMMARY_MAX = int(os.getenv("MEMORY_WORKING_SUMMARY_MAX", "500"))       # 滚动摘要最大字数
 MAX_KV_PER_USER = int(os.getenv("MEMORY_MAX_KV", "40"))                         # 每用户 user 级 KV 上限
 MAX_MESSAGES_PER_USER = int(os.getenv("MEMORY_MAX_MESSAGES", "300"))            # 每用户原文向量上限

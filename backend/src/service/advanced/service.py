@@ -1036,10 +1036,9 @@ class AdvancedLearningService:
         completed, total = completed_node_count(current_path)
         # 节点数不足默认门槛的路径按实际长度解锁，否则其用户永远进不了进阶学习。
         unlock_nodes = effective_unlock_nodes(total)
-        is_unlocked = completed >= unlock_nodes
-        milestone = advanced_milestone(completed) if is_unlocked else 0
+        milestone = advanced_milestone(completed)
         # 短路径全部完成时 advanced_milestone 仍返回 0，归入第一个里程碑。
-        if is_unlocked and milestone == 0:
+        if milestone == 0:
             milestone = 1
         path_payload = {
             "id": current_path.get("path_id"),
@@ -1059,9 +1058,23 @@ class AdvancedLearningService:
             "remaining": max(0, unlock_nodes - completed),
         }
 
-        if not is_unlocked:
+        # 还没完成任何基础节点 → 不出任务卡，**但页面照常可用**。
+        #
+        # 这里以前是一道"完成 N 个节点才准进"的封锁（`completed < unlock_nodes` 直接
+        # 返回 status="locked"）。它拦在入口上，学生连工作区都打不开 —— 而他可能只是
+        # 想拿自己的项目来问教练。封锁去掉了，学生一进来就有 IDE 和教练，前端在没拿到
+        # 任务时落进「无任务」。
+        #
+        # **但任务卡仍然只从已完成节点出**，这条没变，也不能变：任务生成的提示词第一条
+        # 就写着"任务必须建立在学习者已经完成的节点上，不能提前考他还没学的内容"，第 21
+        # 条更明确禁止围绕 `current_node` 出题。一个节点都没完成时，模型手上**没有任何
+        # 知识标签可用**，硬出题只能现编 —— 而"围绕未完成节点出题"正是当初修掉的 bug
+        # （见 `_focus_node` 的注释）。所以这里返回空的 tasks 而不是放宽口径：
+        # 宁可不给任务卡，也不给一张编出来的。
+        if completed <= 0:
             return {
-                "status": "locked",
+                # 不是错误状态：页面是好的，只是这次没有任务卡可发，前端据此落进「无任务」。
+                "status": "ready",
                 "profile": profile,
                 "path": path_payload,
                 "milestone": milestone_payload,

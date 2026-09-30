@@ -515,7 +515,12 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.file-explorer { position: relative; display: flex; min-height: 0; flex-direction: column; overflow: hidden; }
+/* `flex: 1 1 auto` + `min-width: 0` 是为了**跟着父级给的宽度走**，不是装饰：面板宽度
+   现在由外面那条拖拽条决定，这里要是按内容定宽，长路径会把面板撑过它那一列、被父级
+   的 overflow: hidden 切掉。高度则由父级的 align-items: stretch 交下来（见
+   CodeWorkspace 的 .workspace__explorer）—— 少了那一环，里面这层
+   `overflow-y: auto` 永远不会触发，文件一多就既滚不动也够不着。 */
+.file-explorer { position: relative; display: flex; min-width: 0; min-height: 0; flex: 1 1 auto; flex-direction: column; overflow: hidden; }
 .file-explorer__head { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 8px 7px 11px; border-bottom: 1px solid var(--line); color: var(--muted); }
 .file-explorer__title { font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
 .file-explorer__head-actions { display: flex; gap: 2px; }

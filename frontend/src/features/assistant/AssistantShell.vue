@@ -32,7 +32,8 @@
               </a>
             </div>
           </div>
-          <div v-if="isLoading" class="assistant-message is-assistant">
+          <!-- 三个点只在**还没出字**的时候出现（见 chatTyping）。 -->
+          <div v-if="showTyping" class="assistant-message is-assistant">
             <div class="assistant-message__avatar">{{ assistantBadge }}</div>
             <div class="assistant-message__bubble typing"><i></i><i></i><i></i></div>
           </div>
@@ -45,7 +46,7 @@
 
         <p v-if="errorMessage" class="assistant-panel__error">{{ errorMessage }}</p>
         <form class="assistant-panel__composer" @submit.prevent="sendMessage">
-          <textarea v-model="draft" :disabled="isLoading" maxlength="1200" rows="2" :placeholder="`问问${assistantName}，或让它生成学习资源…`" @keydown.ctrl.enter.prevent="sendMessage" @keydown.meta.enter.prevent="sendMessage"></textarea>
+          <textarea v-model="draft" :disabled="isLoading" maxlength="1200" rows="2" :placeholder="`问问${assistantName}，或让它生成学习资源…（Enter 发送）`" @keydown="onComposerKeydown"></textarea>
           <div class="assistant-panel__composer-row">
             <span>{{ draft.length }} / 1200</span>
             <button type="submit" :disabled="!draft.trim() || isLoading" aria-label="发送消息" title="发送">
@@ -81,6 +82,9 @@ import { CheckCircle, FileDown, LoaderCircle, Send, X } from 'lucide-vue-next'
 import { chatApi } from '@/shared/api/chatApi'
 import robotImage from '@/shared/assets/assistant-robot.png'
 import { applyWorkflowEvent, applyWorkflowProgress, finishWorkflow, resetWorkflow } from '@/entities/agent/agentWorkflowState'
+import { pageContextPayload } from '@/entities/learning/currentPageContext'
+import { shouldSendOnKeydown } from '@/shared/lib/composerKeys'
+import { shouldShowTyping } from '@/shared/lib/chatTyping'
 
 const props = defineProps({
   assistantName: { type: String, default: '罗伯特' },
@@ -112,6 +116,8 @@ const position = ref({ x: null, y: null })
 const dragOffset = ref({ x: 0, y: 0 })
 const pointerStart = ref({ x: 0, y: 0 })
 const messages = ref([{ id: 'welcome', role: 'assistant', text: `你好，我是${assistantName.value}，你的学习导师。可以问知识点、说说你在学什么，也可以让我整理资料或生成学习资源。` }])
+// 这一处流式的标志叫 isLoading（见 sendMessage），判据本身和其它三个聊天框共用。
+const showTyping = computed(() => shouldShowTyping(messages.value, isLoading.value))
 
 const panelEl = ref(null)
 // 面板相对机器人的补偿位移。只有默认落点会跑出视口时才用得上，见 placePanel。
@@ -290,6 +296,13 @@ function showResourceNotice(message) {
   resourceNoticeTimer = window.setTimeout(() => { resourceNotice.value = '' }, 2600)
 }
 
+// Enter 发送、Shift + Enter 换行，输入法选字期间的回车不算发送（见 composerKeys）。
+function onComposerKeydown(event) {
+  if (!shouldSendOnKeydown(event)) return
+  event.preventDefault()
+  sendMessage()
+}
+
 async function sendMessage() {
   const text = draft.value.trim()
   if (!text || isLoading.value) return
@@ -325,9 +338,13 @@ async function sendMessage() {
       if (!reply.downloadUrl) reply.text = '资源已生成并保存到资料库。'
       showResourceNotice('资源已生成并保存到资料库')
     } else if (chatGroupId.value) {
-      await chatApi.streamMessage(chatGroupId.value, text, onEvent, controller.signal)
+      await chatApi.streamMessage(chatGroupId.value, text, {
+        onEvent, signal: controller.signal, pageContext: pageContextPayload(),
+      })
     } else {
-      await chatApi.streamNewHistory(text, onEvent, controller.signal)
+      await chatApi.streamNewHistory(text, {
+        onEvent, signal: controller.signal, pageContext: pageContextPayload(),
+      })
     }
     if (!reply.text.trim()) reply.text = '我暂时没有生成有效回复，请换个方式再问我一次。'
   } catch (error) {

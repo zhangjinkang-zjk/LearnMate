@@ -16,7 +16,8 @@
           <div class="feynman-bubble" v-html="renderMarkdown(message.text)"></div>
         </div>
       </template>
-      <div v-if="isStreaming" class="feynman-message is-assistant">
+      <!-- 三个点只在**还没出字**的时候出现（见 chatTyping）。 -->
+      <div v-if="showTyping" class="feynman-message is-assistant">
         <span class="feynman-avatar">LM</span>
         <div class="feynman-bubble typing" aria-label="正在回复"><span></span><span></span><span></span></div>
       </div>
@@ -36,9 +37,8 @@
         rows="4"
         maxlength="1600"
         :disabled="isStreaming"
-        placeholder="用自己的话讲讲你怎么理解这一章…"
-        @keydown.ctrl.enter.prevent="sendMessage"
-        @keydown.meta.enter.prevent="sendMessage"
+        placeholder="用自己的话讲讲你怎么理解这一章…（Enter 发送，Shift + Enter 换行）"
+        @keydown="onComposerKeydown"
       ></textarea>
       <div class="feynman-actions">
         <span>{{ draft.length }} / 1600</span>
@@ -56,10 +56,12 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { LoaderCircle, Send } from 'lucide-vue-next'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { renderMarkdown } from '@/shared/lib/markdown'
+import { shouldSendOnKeydown } from '@/shared/lib/composerKeys'
+import { shouldShowTyping } from '@/shared/lib/chatTyping'
 
 const props = defineProps({
   pathId: { type: [Number, String], required: true },
@@ -77,6 +79,7 @@ const errorMessage = ref('')
 const isStreaming = ref(false)
 const messageList = ref(null)
 const messages = ref([])
+const showTyping = computed(() => shouldShowTyping(messages.value, isStreaming.value))
 let requestController = null
 
 const draftKey = () => `learnmate_feynman_draft_${props.pathId}_${props.nodeId}`
@@ -101,6 +104,13 @@ async function scrollToLatest() {
 
 function useStarter(text) {
   draft.value = text
+  sendMessage()
+}
+
+// Enter 发送、Shift + Enter 换行，输入法选字期间的回车不算发送（见 composerKeys）。
+function onComposerKeydown(event) {
+  if (!shouldSendOnKeydown(event)) return
+  event.preventDefault()
   sendMessage()
 }
 
