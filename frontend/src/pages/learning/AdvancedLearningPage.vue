@@ -5,8 +5,11 @@
          全屏工作区里这三行等于从编辑器身上割走一块，所以只留读屏能读到的那份。 -->
     <h1 class="sr-only">应用实践 · 进阶学习</h1>
 
-    <section v-if="loading" class="surface surface-pad state-panel" aria-live="polite"><LoaderCircle class="spin" :size="20" /><div><strong>正在整理实践任务</strong><p>系统正在读取你的学习目标、路径进度和能力诊断。</p></div></section>
-    <section v-else-if="errorMessage" class="surface surface-pad state-panel state-panel--error"><CircleAlert :size="20" /><div><strong>暂时无法读取实践任务</strong><p>{{ errorMessage }}</p></div><button class="button button--quiet" type="button" @click="loadTask">重试</button></section>
+    <!-- 这两个全屏分支只在**还没有任务**时出现。以前是 `v-if="loading"`，于是点
+         「重新同步」也会命中 —— 而 CodeWorkspace 就住在下面的 <template v-else> 里，
+         它会被整个卸载，学生正在写的文件跟着一起没。刷新不该把工作区拆掉。 -->
+    <section v-if="loading && !task" class="surface surface-pad state-panel" aria-live="polite"><LoaderCircle class="spin" :size="20" /><div><strong>正在整理实践任务</strong><p>系统正在读取你的学习目标、路径进度和能力诊断。</p></div></section>
+    <section v-else-if="errorMessage && !task" class="surface surface-pad state-panel state-panel--error"><CircleAlert :size="20" /><div><strong>暂时无法读取实践任务</strong><p>{{ errorMessage }}</p></div><button class="button button--quiet" type="button" @click="loadTask({ refresh: true })">重试</button></section>
     <section v-else-if="!task" class="surface surface-pad empty-panel"><p class="eyebrow">进阶学习</p><h2>{{ learningStatus === 'locked' ? '先完成基础学习，再进入实践' : '还没有可开始的实践任务' }}</h2><p v-if="learningStatus === 'locked' && hasMilestone">已完成 {{ milestone.completed_nodes }} / {{ milestone.unlock_nodes }} 个基础学习节点，还需 {{ milestone.remaining }} 个节点解锁第一组进阶任务。</p><p v-else-if="learningStatus === 'locked'">完成基础学习和学习复盘后，这里会显示还需要多少个节点才能解锁进阶任务。</p><p v-else>完成基础学习和学习复盘后，系统会在下一个学习里程碑生成实践入口。</p><RouterLink class="button button--primary" to="/learning/fundamentals">继续基础学习</RouterLink></section>
 
     <template v-else>
@@ -19,15 +22,21 @@
           :task-source="taskSource"
           :options="optionalTasks"
           @select="selectTaskById"
-          @regenerate="loadTask()"
+          @regenerate="loadTask({ refresh: true })"
         />
-        <button class="button button--quiet advanced-top__sync" type="button" @click="loadTask">
-          <RefreshCw :size="14" />重新同步
+        <button class="button button--quiet advanced-top__sync" type="button" :disabled="loading" @click="loadTask({ refresh: true })">
+          <RefreshCw :size="14" :class="{ spin: loading }" />{{ loading ? '同步中' : '重新同步' }}
         </button>
       </div>
 
+      <!-- 已经有任务时刷新失败，错误挂在这里，而不是把整页换成错误页 ——
+           换页会把下面学生正在写的工作区一起卸载掉。 -->
+      <p v-if="syncError" class="advanced-sync-error" role="status">
+        <CircleAlert :size="14" />{{ syncError }}
+      </p>
+
       <div ref="layoutRef" class="ide-layout" :class="{ 'is-dragging': isDragging }" :style="layoutStyle">
-        <CodeWorkspace ref="workspaceRef" class="ide-workspace" />
+        <CodeWorkspace ref="workspaceRef" class="ide-workspace" :draft-key="workspaceDraftKey" />
 
         <!-- 分隔条：拖动改两侧宽度，双击回到一半。键盘也能调（左右方向键）。
              有了它就不必把 50/50 写死 —— 写代码时把编辑区拉大，讨论时把对话拉大。 -->
@@ -60,7 +69,7 @@
             :workspace-reader="readWorkspaceSnapshot"
             @end="endPractice"
           />
-          <section v-else-if="!hasWorkspace" class="surface surface-pad state-panel state-panel--error"><CircleAlert :size="20" /><div><strong>实践任务缺少关联节点</strong><p>请重新同步任务后再开始巩固。</p></div><button class="button button--quiet" type="button" @click="loadTask">重新同步</button></section>
+          <section v-else-if="!hasWorkspace" class="surface surface-pad state-panel state-panel--error"><CircleAlert :size="20" /><div><strong>实践任务缺少关联节点</strong><p>请重新同步任务后再开始巩固。</p></div><button class="button button--quiet" type="button" @click="loadTask({ refresh: true })">重新同步</button></section>
 
           <section v-else class="surface surface-pad session-ended">
             <span class="session-ended__mark">✓</span>
@@ -84,6 +93,7 @@ import { useRoute } from 'vue-router'
 import PracticeDialogue from '@/features/advanced/PracticeDialogue.vue'
 import TaskBar from '@/features/advanced/TaskBar.vue'
 import CodeWorkspace from '@/features/advanced/workspace/CodeWorkspace.vue'
+import { draftKeyFor } from '@/shared/storage/workspaceDraftStore'
 import { advancedLearningApi } from '@/shared/api/advancedLearningApi'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { renderMarkdown } from '@/shared/lib/markdown'
@@ -91,6 +101,9 @@ import { renderMarkdown } from '@/shared/lib/markdown'
 const route = useRoute()
 const loading = ref(true)
 const errorMessage = ref('')
+// 已经有任务时的刷新失败。和 errorMessage 分开，是因为两者后果不同：
+// 前者只挂一条提示，后者要把整页换成错误页（那会卸载工作区）。
+const syncError = ref('')
 const learningStatus = ref('')
 // agent = 智能体生成的；pending = 还在后台生成，展示的是临时入口；
 // fallback = 智能体这次失败了，展示的仍是临时入口（下次进页面会自动重试）
@@ -135,6 +148,10 @@ function getTaskWorkspace(value) {
 const optionalTasks = computed(() => tasks.value.filter((item) => !item.is_recommended).slice(0, 3))
 const selectedWorkspace = computed(() => getTaskWorkspace(task.value))
 const hasWorkspace = computed(() => selectedWorkspace.value.pathId !== null && selectedWorkspace.value.nodeId !== null)
+// 工作区草稿的归属。按学习路径而不是 task_id / node_id —— 理由见 draftKeyFor：
+// 工作区本来就跨任务卡和节点共享，按更细的粒度分会变成行为变更，而节点粒度的 key
+// 还会因为 prop 在挂载后变化而把旧文件写进新草稿里。
+const workspaceDraftKey = computed(() => draftKeyFor(selectedWorkspace.value.pathId))
 
 // 对话要能看见工作区，可数据在 CodeWorkspace 里。这里往下传的是个**身份稳定**的读取
 // 函数，而不是一份快照：
@@ -172,6 +189,9 @@ function schedulePoll() {
   }, POLL_INTERVAL_MS)
 }
 
+// refresh：**只有用户手点的按钮才传 true**。它让服务端绕过兜底重试冷却、强制重跑一次
+// 生成作业 —— 没有它，「重新同步」和兜底卡片上那句「重新生成」都是空转的：库里是一行
+// 刚写下的 fallback 时，冷却期内的每次请求都返回同一份兜底，点一百次也没反应。
 async function loadTask(options = {}) {
   const silent = options.silent === true
   if (!silent) {
@@ -180,8 +200,9 @@ async function loadTask(options = {}) {
     loading.value = true
   }
   errorMessage.value = ''
+  if (!silent) syncError.value = ''
   try {
-    const result = unwrap(await advancedLearningApi.getCurrentTask())
+    const result = unwrap(await advancedLearningApi.getCurrentTask(options.refresh === true))
     learningStatus.value = result?.status || ''
     taskSource.value = result?.task_source || ''
     Object.assign(milestone, result?.milestone || {})
@@ -195,7 +216,12 @@ async function loadTask(options = {}) {
       || tasks.value.find((item) => item.status === 'active')
       || tasks.value[0] || null
   } catch (error) {
-    if (!silent) errorMessage.value = error.response?.data?.detail || error.message || '请检查后端服务后重新同步。'
+    if (!silent) {
+      const detail = error.response?.data?.detail || error.message || '请检查后端服务后重新同步。'
+      // 已经有任务时只挂一条提示，不换整页 —— 换页会把工作区一起卸载（见模板里的注释）。
+      if (task.value) syncError.value = detail
+      else errorMessage.value = detail
+    }
   } finally {
     if (!silent) loading.value = false
   }
@@ -368,6 +394,8 @@ onBeforeUnmount(() => {
 /* 任务条吃掉横向余量，同步按钮按内容宽。min-width: 0 是给标题省略号留的余地。 */
 .advanced-top > :first-child { min-width: 0; flex: 1; }
 .advanced-top__sync { flex: 0 0 auto; padding: 6px 11px; font-size: 12px; }
+/* 刷新失败时的一行提示。刻意做得很薄：工作区才是主角，错误只是"这次没同步上"。 */
+.advanced-sync-error { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; margin: 0 0 10px; padding: 7px 11px; border: 1px solid rgba(149, 78, 56, .32); border-radius: 10px; background: rgba(149, 78, 56, .06); color: #954e38; font-size: 12px; line-height: 1.6; }
 .advanced-page h2 { color: #1e3c34; }
 .advanced-page .surface { border-radius: 14px; border-color: rgba(63, 91, 49, .28); box-shadow: 0 8px 24px rgba(45, 40, 92, .07); }
 .advanced-page .button { border-radius: 12px; gap: 8px; }

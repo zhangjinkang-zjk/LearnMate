@@ -13,15 +13,22 @@
 import { isDirectoryEntry } from './localWorkspace'
 import { rankWorkspaceFiles } from './workspaceRelevance'
 
-// 各段预算。数字是"够用但不失控"的折中：树给全局（一百多个文件的名字），
-// 当前文件给足（学生正看着它），其余文件少给（只当佐证），且其余文件有合计上限，
-// 免得 11 份各 1200 字把请求撑起来。
+// 各段预算，字符口径。
+//
+// 2026-09-30 整体上调一个数量级（原来是 1500/3000/1200/2400/12）。旧档是按"带几份
+// 代码片段当佐证"定的，但教练现在要真的**审核**代码 —— 3000 字符只够看一个 100 行的
+// 文件，学生问"我这段对不对"，来的其实是文件的前四分之一。对话模型是 MiMo-V2.6-Flash
+// （上下文 1M token、输入 $0.14/M），旧上限约占窗口的 0.2%，是我们自己把眼睛蒙上了。
+//
+// 新档按"一个中等项目的骨架 + 若干份完整源文件"定：极端情况 22 万字符 ≈ 7 万 token，
+// 仍不到窗口的 10%，单轮成本在 $0.01 量级。真正决定"带哪几份"的仍是 workspaceRelevance
+// 的相关性排序 —— 预算放宽不等于不分主次，只是不再把主次压到看不见的程度。
 export const SNAPSHOT_LIMITS = {
-  TREE_MAX_CHARS: 1500,
-  ACTIVE_FILE_MAX_CHARS: 3000,
-  OTHER_FILE_MAX_CHARS: 1200,
-  OTHER_FILES_TOTAL_MAX_CHARS: 2400,
-  MAX_SNAPSHOT_FILES: 12,
+  TREE_MAX_CHARS: 20000,
+  ACTIVE_FILE_MAX_CHARS: 40000,
+  OTHER_FILE_MAX_CHARS: 20000,
+  OTHER_FILES_TOTAL_MAX_CHARS: 160000,
+  MAX_SNAPSHOT_FILES: 40,
 }
 
 // 这段提示必须出现在界面上：把学生代码发出去是用户该知道的事，不能藏在代码注释里。
@@ -131,6 +138,12 @@ function selectSnapshotFiles({ entryByPath, activeFilePath, openPaths, limits })
     // 这套判断多出一个分支，得不偿失。
     if (remainingPool <= 0) break
     const text = String(item.text ?? '')
+    // 装不下就**整份跳过**，不切半份：半截文件比没有文件更坏 —— 教练会照着前半段下结论，
+    // 而问题常常正藏在他没看到的那半段里。跳过之后继续看下一份，排序里靠后的短文件仍然
+    // 进得来，池子的尾巴不会被一份长文件独吞。
+    // 反过来，池子还够一份单份上限时就照旧切一刀并标 truncated —— 那是"文件本身太长"，
+    // 有明确声明，教练知道自己在看开头。
+    if (text.length > remainingPool && remainingPool < limits.OTHER_FILE_MAX_CHARS) continue
     const cap = Math.min(limits.OTHER_FILE_MAX_CHARS, remainingPool)
     const sliced = text.slice(0, cap)
     files.push({ path: item.path, text: sliced, truncated: text.length > cap })

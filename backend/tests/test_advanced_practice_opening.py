@@ -166,10 +166,36 @@ def test_a_legacy_session_without_the_student_speaking_gets_a_real_opening():
     （见 test_the_student_speaking_ends_the_waiting）。
     """
     legacy = "我们从“理解问题”开始。先说说这个任务要解决的核心问题，以及你准备依据哪些信息判断。"
-    assert practice_service._LEGACY_OPENINGS == {legacy}, "认老会话全靠这个字面量，别让它漂了"
 
     session = _session(messages=[{"role": "assistant", "text": legacy}])
     assert _opening_pending(session) is True
+
+
+@pytest.mark.parametrize("stage", ["定义交付", "集成设计", "实现验证", "交付复盘", "理解问题"])
+def test_a_stage_era_opening_also_counts_as_not_having_opened(stage):
+    """阶段机时代那句开场也等于没开过头 —— **不管阶段名是什么**。
+
+    这句话是 `我们先从「{阶段名}」开始：…`，而阶段名取自会话自己的阶段词汇
+    （项目实训是「定义交付」、竞赛是别的）。以前这里只登记了一种固定字面量，
+    于是**所有阶段机时代开的会话都被判成"开场已经生成过"**，永远拿不到教练那次
+    真正读过任务的开场 —— 学生就一直停在「定义交付」这种凭空出现的术语上。
+    参数化就是为了钉住"别退回按字面量穷举"。
+    """
+    legacy = (
+        f"我们先从「{stage}」开始：这个任务要你产出的是「构建一个身份-权限模型」。"
+        "先说说它要解决的核心问题，以及你准备依据哪些信息判断。"
+    )
+    assert _opening_pending(_session(messages=[{"role": "assistant", "text": legacy}])) is True
+
+
+def test_a_coach_written_forward_question_is_not_mistaken_for_an_opening():
+    """反过来也要成立：不能把「我们先从…开始」这个形状当成万能通配。
+
+    教练真按任务说过话（哪怕开头也是"我们先从…开始"但不带阶段名括号）之后，
+    就不该再重开一遍 —— 否则每轮都会把学生的对话顶掉重来。
+    """
+    spoken = "我们先从最基础的一步开始：你打算怎么验证这份设计能跑起来？"
+    assert _opening_pending(_session(messages=[{"role": "assistant", "text": spoken}])) is False
 
 
 def test_a_legacy_session_where_the_student_already_spoke_is_left_alone():

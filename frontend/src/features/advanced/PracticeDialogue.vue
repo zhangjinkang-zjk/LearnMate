@@ -68,7 +68,11 @@
 
       <div ref="composerBox" class="practice-composer__box">
         <label class="sr-only" for="practice-answer">你的方案思考</label>
-        <textarea ref="composerInput" id="practice-answer" v-model="draft" rows="1" maxlength="1800" :disabled="isLoadingSession" placeholder="写下你的判断…（Ctrl + Enter 发送）" @keydown.ctrl.enter.prevent="sendMessage()" @keydown.meta.enter.prevent="sendMessage()"></textarea>
+        <!-- 1800 → 10000（2026-09-30）。原来的额度是按"写一段判断"定的，可这个框现在是
+             学生报错、贴栈、贴片段的地方，1800 字符粘一段 traceback 就被浏览器静默截掉了。
+             服务端那条路没有长度限制（chat_history.req 是 TextField，只有 .strip()），
+             卡点一直只在这个 maxlength 上。 -->
+        <textarea ref="composerInput" id="practice-answer" v-model="draft" rows="1" maxlength="10000" :disabled="isLoadingSession" placeholder="写下你的判断…（Ctrl + Enter 发送）" @keydown.ctrl.enter.prevent="sendMessage()" @keydown.meta.enter.prevent="sendMessage()"></textarea>
         <!-- 发送和停止是同一个位置的两个状态。以前流式期间只是把发送置灰，
              等于用户根本没有中断手段。 -->
         <button v-if="!isStreaming" class="practice-send" type="submit" :disabled="!draft.trim() || isLoadingSession" aria-label="发送" title="发送（Ctrl + Enter）"><Send :size="16" /></button>
@@ -282,9 +286,12 @@ function clientChapterSummary() {
   return props.chapterContent ? `主讲材料摘要：${props.chapterContent.slice(0, 1200)}` : '当前没有可用主讲材料'
 }
 
-// 分段信息里不再有 phase / phase_advance —— 阶段账本已经删掉了。服务端那侧
-// `_compose_user_prompt` 取不到 phase 时会兜底成"当前阶段"（见 classroom_chat），
-// 所以这里少传两个字段不会让教练失语，只是不再有"把学生引进第 N 步"的框架。
+// 分段信息里不再有 phase / phase_advance —— 阶段账本和服务端那份「当前阶段是「…」」
+// 的提示词都删了（见 classroom_chat 的 `_compose_user_prompt` 注释：那段话在**生产**
+// 一个不存在的议程）。这里少传两个字段完全没影响，因为服务端已经不看它们了。
+//
+// `script` 同理：任务说明现在**以服务端账本为准**（`AdvancedPracticeSession.task_snapshot`），
+// 这里这一行只是历史字段，服务端不采信。任务本身改由 TaskBar 直接展示给学生看。
 //
 // `workspace` 是**发送这一刻**现取的工作区只读快照（见 workspaceReader）。永远给一份
 // 带 available 字段的对象，绝不漏字段 —— 让后端去猜"这个键为什么没有"是丢信息的做法。
@@ -320,7 +327,8 @@ function streamCoachReply({ scenario, text, signal, onChunk }) {
     segment: practiceSegment(),
   }, (event) => {
     if (event?.error) throw new Error(event.error)
-    // 服务端仍会推 type='phase' 的进度事件（阶段机留在后端没动），这里直接忽略。
+    // 只认文本增量。以前这里要显式忽略服务端推的 type='phase' 进度事件；
+    // 阶段机删掉后已经没有任何地方会推它了。
     if ((event?.type === 'chunk' || event?.type === 'content') && event.content) onChunk(String(event.content))
   }, signal)
 }

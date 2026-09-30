@@ -8,6 +8,11 @@
         <button class="button button--quiet" type="button" :disabled="busy" @click="openFiles">
           <FilePlus2 :size="14" />打开文件
         </button>
+        <!-- 上次打开过文件夹、句柄还在，但浏览器要求重新授权。权限只能在这个点击里要，
+             所以不能自动恢复 —— 少了这个按钮，学生每次进来都得重新找一遍目录。 -->
+        <button v-if="pendingFolder" class="button button--quiet" type="button" :disabled="busy" @click="restoreFolder">
+          <FolderOpen :size="14" />恢复上次的文件夹{{ pendingFolder.name ? `「${pendingFolder.name}」` : '' }}
+        </button>
       </div>
       <div class="workspace__group">
         <span v-if="rootName" class="workspace__root" :title="rootName">{{ rootName }}</span>
@@ -75,7 +80,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onBeforeUnmount } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Download, FileCode2, FilePlus2, FolderOpen, PanelLeft, Save } from 'lucide-vue-next'
 import CodeEditor from './CodeEditor.vue'
 import FileExplorer from './FileExplorer.vue'
@@ -88,22 +93,43 @@ import {
   deleteEntryOnDisk,
   detectWorkspaceMode,
   downloadEntry,
+  folderPermission,
   importFromFileList,
   isDirectoryEntry,
   isReadablePath,
   moveEntryOnDisk,
   openDirectoryFromDisk,
   openFilesFromDisk,
+  readDirectoryFromHandle,
+  requestFolderPermission,
   splitEntryPath,
   writeEntryToDisk,
 } from './localWorkspace'
 import { buildWorkspaceSnapshot } from './workspaceSnapshot'
+import { fromDraft, toDraft } from './workspaceDraft'
+import {
+  deleteDraft,
+  deleteFolderHandle,
+  readDraft,
+  readFolderHandle,
+  writeDraft,
+  writeFolderHandle,
+} from '@/shared/storage/workspaceDraftStore'
+
+// 草稿按 (路径, 节点) 存，由页面算好传进来 —— 组件自己不认识路由。
+// 页面还没有任务时传空串，这时不存草稿（没地方归属）。
+const props = defineProps({
+  draftKey: { type: String, default: '' },
+})
 
 const mode = ref('')
 const rootName = ref('')
 // 打开过的本机文件夹句柄。新建目录/文件要靠它落盘 —— 没有它（没打开文件夹、
-// 或降级模式）新建的东西只活在本次会话里。
+// 或降级模式）新建的东西只写内存，靠下面的草稿兜住（见 persistDraftNow）。
 const rootHandle = ref(null)
+// 上次打开过、句柄还在、但**权限要重新问**的文件夹。不为 null 时工具栏上多一个
+// 「恢复上次的文件夹」按钮 —— 权限不能在页面加载时自动要（见 localWorkspace）。
+const pendingFolder = ref(null)
 const entries = ref([])
 const openPaths = ref([])
 const activePath = ref('')
@@ -158,6 +184,14 @@ function applyWorkspace(result) {
   openPaths.value = first ? [first] : []
   activePath.value = first
   errorMessage.value = ''
+  if (rootHandle.value) {
+    // 句柄记下来，下次进页面不用重新选文件夹（权限还得再要一次，见 requestFolderPermission）。
+    writeFolderHandle(rootHandle.value)
+    pendingFolder.value = null
+    // 文件已经真的落在磁盘上了，草稿让位 —— 留一份内存副本只会制造
+    // "磁盘是新版、草稿是旧版"的二义性，而两者我们分不出谁该赢。
+    deleteDraft(props.draftKey)
+  }
   if (result.truncated) {
     setNotice('文件太多，只打开了前一部分。想看完整个工程请把这个文件夹分成更小的目录。')
   } else if (result.entries.length) {
@@ -411,7 +445,128 @@ function readSnapshot() {
 
 defineExpose({ readSnapshot })
 
-onBeforeUnmount(() => window.clearTimeout(noticeTimer))
+// ── 草稿：没打开本机文件夹时，新建的东西不该随组件一起消失 ──────────────
+//
+// 这块工作区过去只活在组件的 ref 里，而组件会被「重新同步」（loading 把整页
+// 换掉）和路由跳转卸载 —— 学生人还在页面上，文件就没了。现在写进 IndexedDB。
+//
+// **只在没有本机文件夹时存。** 有文件夹时文件本来就落盘了，再存一份只会制造
+// "磁盘是新版、草稿是旧版"的二义性（applyWorkspace 里打开文件夹时会清掉草稿）。
+// 代价：FSA 模式下"改了一半没保存就切走"仍然会丢 —— 那条路要靠提醒，
+// 不靠草稿（beforeunload 已经在拦 dirty 的文件）。
+
+const PERSIST_DEBOUNCE_MS = 800
+let persistTimer = 0
+
+function persistDraftNow() {
+  window.clearTimeout(persistTimer)
+  if (!props.draftKey || rootHandle.value) return
+  // 空工作区不存：那等于给每个进来逛一眼的学生都写一条空草稿，
+  // 下次进来还会弹一句"已恢复上次的草稿（0 个文件）"。
+  if (!entries.value.length) { deleteDraft(props.draftKey); return }
+  writeDraft(props.draftKey, toDraft({
+    entries: entries.value,
+    openPaths: openPaths.value,
+    activePath: activePath.value,
+    rootName: rootName.value,
+  }))
+}
+
+function schedulePersistDraft() {
+  if (!props.draftKey || rootHandle.value) return
+  window.clearTimeout(persistTimer)
+  persistTimer = window.setTimeout(persistDraftNow, PERSIST_DEBOUNCE_MS)
+}
+
+// 深度侦听而不是在每个改动点手动调用：改动点有七八个（新建/删除/重命名/移动/
+// 关标签/切标签/编辑器输入），漏掉任何一个都是"悄悄不保存"，而那是查不出来的。
+// 代价是每次击键走一遍遍历 —— 几十个条目、几百 KB，可忽略。
+watch([entries, openPaths, activePath, rootName], schedulePersistDraft, { deep: true })
+
+function applyRestoredWorkspace({ rootName: name, entries: rows, openPaths: paths, activePath: active }) {
+  mode.value = detectWorkspaceMode()
+  rootName.value = name
+  // 恢复出来的条目**没有句柄** —— 草稿是纯文本，不连磁盘（见 workspaceDraft 开头）。
+  // 所以 canWriteBack 自然为 false，保存会走"下载副本"，按钮文案也会照实说。
+  rootHandle.value = null
+  entries.value = rows
+  openPaths.value = paths
+  activePath.value = active
+  errorMessage.value = ''
+}
+
+async function restoreFolderIfPermitted() {
+  const handle = await readFolderHandle()
+  if (!handle) return
+  const state = await folderPermission(handle)
+  if (state === 'granted') {
+    // 「每次访问都允许」和 PWA 安装态会走到这里，可以静默恢复。
+    // 读整个目录可能要几秒（几百个文件），所以要把 busy 打上 —— 否则这段时间工具栏
+    // 看起来是可点的，学生点了「打开文件夹」就会和这次恢复撞在一起。
+    busy.value = true
+    try {
+      await applyRestoredFolder(handle)
+    } finally {
+      busy.value = false
+    }
+    return
+  }
+  if (state === 'prompt') { pendingFolder.value = { handle, name: handle.name || '' }; return }
+  // 用户明确拒绝过：别再问，句柄也别留着占地方
+  await deleteFolderHandle()
+}
+
+async function applyRestoredFolder(handle) {
+  try {
+    applyWorkspace(await readDirectoryFromHandle(handle))
+    return true
+  } catch (error) {
+    errorMessage.value = `恢复上次的文件夹失败：${error?.message || error}`
+    return false
+  }
+}
+
+// 这个函数**本身**就是那个用户手势 —— requestPermission 只能在这里面调。
+async function restoreFolder() {
+  const pending = pendingFolder.value
+  if (!pending || busy.value) return
+  busy.value = true
+  try {
+    if (!await requestFolderPermission(pending.handle)) {
+      setNotice('没有拿到文件夹权限。可以重新点「打开文件夹」再选一次。')
+      return
+    }
+    await applyRestoredFolder(pending.handle)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function restoreDraft() {
+  if (!props.draftKey) return
+  // 文件夹已经恢复成功了就别再叠一份草稿上去 —— 那是两种不同性质的东西
+  // （磁盘上的 vs 只在该浏览器里的），混在一起学生会分不清哪个能写回。
+  if (entries.value.length || rootHandle.value) return
+  const restored = fromDraft(await readDraft(props.draftKey))
+  if (!restored) return
+  applyRestoredWorkspace(restored)
+  setNotice(`已恢复上次没保存的 ${restored.fileCount} 个文件。它们不再连着磁盘，保存时会下载副本。`)
+}
+
+onMounted(async () => {
+  await restoreFolderIfPermitted()
+  // 恢复文件夹失败时不要再叠一份草稿：那会把 errorMessage 抹掉（applyRestoredWorkspace
+  // 会清它），学生就看不到"上次的文件夹没恢复成"这件事，只会发现文件对不上。
+  if (errorMessage.value) return
+  await restoreDraft()
+})
+
+onBeforeUnmount(() => {
+  window.clearTimeout(noticeTimer)
+  // 卸载前把最后一次改动落盘：定时器可能正好还没到点，而那一次改动就是学生
+  // 最后写的那几行。clearTimeout 必须在 persistDraftNow 里面，它自己会清。
+  persistDraftNow()
+})
 
 // 离开页面前提醒未保存的修改 —— 本机文件被改了一半就切走，用户不会知道白改了
 function warnOnLeave(event) {
