@@ -2157,7 +2157,7 @@ class PathService:
                 all_resource_ids.extend(rids)
 
         resources_map = {}
-        read_duration_map = {}
+        read_status_map = {}
         if all_resource_ids:
             # Resource bindings are user-scoped; never expose a record that a
             # stale or forged progress row points at for another account.
@@ -2170,10 +2170,24 @@ class PathService:
             read_statuses = await ResourceReadStatus.filter(
                 user_id=user_id, resource_id__in=all_resource_ids
             ).all()
-            read_duration_map = {
-                status.resource_id: status.duration_seconds or 0
+            read_status_map = {
+                status.resource_id: {
+                    "is_read": bool(status.is_read),
+                    "duration_seconds": status.duration_seconds or 0,
+                }
                 for status in read_statuses
             }
+
+        session_ids = [progress.quiz_session_id for progress in progresses if progress.quiz_session_id]
+        quiz_progress_map: dict[str, dict] = {}
+        if session_ids:
+            quiz_records = await ExamRecord.filter(user_id=user_id, session_id__in=session_ids).all()
+            for record in quiz_records:
+                state = quiz_progress_map.setdefault(record.session_id, {"total": 0, "answered": 0, "correct": 0})
+                state["total"] += 1
+                if record.is_correct is not None:
+                    state["answered"] += 1
+                    state["correct"] += int(bool(record.is_correct))
 
         nodes = []
         current_node_id = None
@@ -2217,15 +2231,19 @@ class PathService:
                             logger.warning("已忽略异常 backend/src/service/path/service.py:1545", exc_info=True)
                     node_resources.append(item)
 
-            # 计算该节点资源总查看次数
-            node_total_views = sum(
-                (resources_map.get(rid).view_count or 0) for rid in resource_ids_map.get(node.id, [])
-                if resources_map.get(rid)
+            # 资源完成度必须来自当前用户自己的阅读状态，不能使用资源的全局 view_count。
+            node_resource_ids = resource_ids_map.get(node.id, [])
+            node_read_count = sum(
+                1 for rid in node_resource_ids
+                if read_status_map.get(rid, {}).get("is_read")
             )
             node_time_spent = sum(
-                read_duration_map.get(rid, 0)
-                for rid in resource_ids_map.get(node.id, [])
+                read_status_map.get(rid, {}).get("duration_seconds", 0)
+                for rid in node_resource_ids
             )
+            quiz_progress = quiz_progress_map.get(p.quiz_session_id, {"total": 0, "answered": 0, "correct": 0})
+            task_total = len(node_resources) + (1 if quiz_progress["total"] else 0)
+            task_completed = node_read_count + (1 if quiz_progress["total"] and quiz_progress["answered"] == quiz_progress["total"] else 0)
 
             resource_types = json.loads(node.resource_types) if node.resource_types else list(PATH_DEFAULT_RESOURCE_TYPES)
             nodes.append({
@@ -2245,9 +2263,18 @@ class PathService:
                 "resources": node_resources,
                 "session_id": p.quiz_session_id,
                 "narration_status": p.narration_status or "",
-                "resources_viewed": node_total_views > 0,
-                "total_views": node_total_views,
+                "resources_viewed": node_read_count > 0,
+                "total_views": node_read_count,
                 "time_spent": node_time_spent,
+                "garden_progress": {
+                    "resource_total": len(node_resources),
+                    "resource_completed": node_read_count,
+                    "quiz_total": quiz_progress["total"],
+                    "quiz_answered": quiz_progress["answered"],
+                    "quiz_correct": quiz_progress["correct"],
+                    "completed_tasks": task_completed,
+                    "total_tasks": task_total,
+                },
                 "action_label": "开始测验" if node.quiz_config and status in ("unlocked", "in_progress") else "开始学习",
             })
 
