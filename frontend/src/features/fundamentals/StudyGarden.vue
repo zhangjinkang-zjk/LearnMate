@@ -60,8 +60,7 @@
 import { computed } from 'vue'
 import ForestTree from '@/features/fundamentals/ForestTree.vue'
 
-const horizontalOffsets = [-2.8, 1.7, -1.2, 2.4, -2.1, 1.1, 2.7, -1.8]
-const sizeOffsets = [0.92, 1.07, 0.86, 1.12, 0.95, 1.04, 0.88, 1.09]
+const sizeOffsets = [0.96, 1.02, 0.98, 1.04, 0.97, 1.03]
 
 const props = defineProps({
   nodes: { type: Array, default: () => [] },
@@ -72,7 +71,7 @@ defineEmits(['select'])
 
 const completedNodes = computed(() => props.nodes.filter((node) => node.status === 'completed'))
 const visibleNodes = computed(() => props.nodes)
-const gardenColumnCount = computed(() => Math.min(6, Math.max(3, Math.ceil(Math.sqrt(visibleNodes.value.length * 1.4)))))
+const gardenColumnCount = computed(() => columnCountFor(visibleNodes.value.length))
 const gardenRowCount = computed(() => Math.ceil(visibleNodes.value.length / gardenColumnCount.value))
 const gardenSceneStyle = computed(() => ({ '--garden-rows': gardenRowCount.value }))
 const activeNode = computed(() => {
@@ -107,19 +106,25 @@ function plantStyle(index, node) {
 }
 
 function plantPosition(index, total) {
-  const columns = Math.min(6, Math.max(3, Math.ceil(Math.sqrt(total * 1.4))))
+  const columns = columnCountFor(total)
   const rows = Math.ceil(total / columns)
   const rowIndex = Math.floor(index / columns)
   const columnIndex = index % columns
   const nodesInRow = Math.min(columns, total - rowIndex * columns)
-  const x = 7 + ((columnIndex + 0.5) / nodesInRow * 86) + horizontalOffsets[index % horizontalOffsets.length]
-  const row = rows <= 1 ? 3 : Math.round(7 - rowIndex / (rows - 1) * 7)
+  // Keep every row centered on the same rhythm so large trees do not collide.
+  const x = 10 + ((columnIndex + 0.5) / nodesInRow * 80)
+  const row = rows <= 1 ? 0 : rows - 1 - rowIndex
   return {
-    x: Math.max(7, Math.min(93, x)),
+    x,
     row,
     size: sizeOffsets[index % sizeOffsets.length],
-    label: row >= 2 ? 'above' : 'below',
+    label: row > 0 ? 'above' : 'below',
   }
+}
+
+function columnCountFor(total) {
+  if (total <= 0) return 2
+  return Math.min(4, Math.max(2, Math.ceil(Math.sqrt(total * 1.05))))
 }
 
 function treeVariant(node, offset) {
@@ -139,7 +144,7 @@ function treeVariant(node, offset) {
 .forest-review__count strong { color: var(--accent-deep); font-size: 28px; line-height: 1; }
 .forest-review__count span { margin-left: 3px; }
 
-.garden-scene { position: relative; min-height: max(460px, calc(330px + var(--garden-rows) * 74px)); overflow: hidden; isolation: isolate; border: 1px solid #d8e3d5; border-radius: 7px; background: #edf4e9; }
+.garden-scene { position: relative; min-height: max(560px, calc(350px + var(--garden-rows) * 112px)); overflow: hidden; isolation: isolate; border: 1px solid #d8e3d5; border-radius: 7px; background: #edf4e9; }
 .garden-scene::before { position: absolute; z-index: -4; inset: 0; background-image: linear-gradient(#ffffff55 1px, transparent 1px), linear-gradient(90deg, #ffffff55 1px, transparent 1px); background-size: 28px 28px; content: ''; opacity: .36; }
 .garden-scene__sun { position: absolute; z-index: -3; top: 36px; right: 10%; width: 72px; height: 72px; border-radius: 50%; background: #f1d78b; opacity: .64; }
 .garden-scene__cloud { position: absolute; z-index: -3; width: 86px; height: 19px; border-radius: 50%; background: #fff; opacity: .6; }
@@ -150,7 +155,7 @@ function treeVariant(node, offset) {
 .garden-scene__hill--back { background: #c8dfc1; transform: rotate(-3deg); }.garden-scene__hill--front { bottom: -20%; height: 56%; background: #a8cb9f; transform: rotate(2deg); }
 .garden-scene__path { position: absolute; z-index: -1; bottom: -18%; left: 44%; width: 22%; height: 63%; border: 2px solid #cbad7d; border-radius: 50% 50% 0 0; background: #ddc391; transform: rotate(9deg); opacity: .55; }
 
-.garden-plant { position: absolute; z-index: 1; bottom: calc(9% + var(--row) * 4.8%); left: calc(var(--x) * 1%); display: block; width: clamp(32px, calc(28px + var(--size) * 78px), 154px); aspect-ratio: 180 / 235; padding: 0; border: 0; background: transparent; color: var(--ink); cursor: pointer; transform: translateX(-50%); transition: transform 180ms ease, filter 180ms ease; }
+.garden-plant { position: absolute; z-index: 1; bottom: calc(7% + var(--row) * 15%); left: calc(var(--x) * 1%); display: block; width: clamp(32px, calc(28px + var(--size) * 78px), 154px); aspect-ratio: 180 / 235; padding: 0; border: 0; background: transparent; color: var(--ink); cursor: pointer; transform: translateX(-50%); transition: transform 180ms ease, filter 180ms ease; }
 .garden-plant :deep(.forest-tree) { height: 100%; }.garden-plant:hover:not(:disabled) { z-index: 3; filter: saturate(1.12); transform: translateX(-50%) translateY(-7px) scale(1.04); }.garden-plant:focus-visible { z-index: 4; outline: 2px solid var(--accent-deep); outline-offset: 4px; }
 .garden-plant.is-active { z-index: 3; filter: saturate(1.12); }.garden-plant.is-active::before { position: absolute; z-index: -1; right: 6%; bottom: 4%; left: 6%; height: 22%; border: 1px dashed #507950; border-radius: 50%; background: #d4e5c9; content: ''; animation: garden-ground-pulse 1.8s ease-out infinite; }
 .garden-plant:disabled { cursor: default; opacity: .66; }.garden-plant__label { position: absolute; z-index: 4; right: 50%; bottom: -33px; display: grid; width: max-content; max-width: 142px; gap: 1px; overflow: hidden; color: #355438; font-size: 10px; font-weight: 800; line-height: 1.3; text-align: center; text-overflow: ellipsis; transform: translateX(50%); white-space: nowrap; }.garden-plant__label i { color: #6d8d65; font-size: 8px; font-style: normal; font-weight: 700; }.garden-plant:hover:not(:disabled) .garden-plant__label,.garden-plant.is-active .garden-plant__label { color: #1f5638; }.garden-plant.has-label-above .garden-plant__label { bottom: calc(100% + 7px); }
@@ -158,7 +163,7 @@ function treeVariant(node, offset) {
 .garden-scene__hint { position: absolute; right: 17px; bottom: 13px; margin: 0; color: #537451; font-size: 10px; }.garden-scene__more { position: absolute; top: 14px; right: 15px; margin: 0; color: #5f7e5f; font-size: 11px; font-weight: 800; }
 
 .garden-empty { display: grid; min-height: 300px; grid-template-columns: 180px minmax(0, 1fr); align-items: center; gap: 20px; border: 1px solid #d8e3d5; border-radius: 7px; background: #edf4e9; padding: 15px 28px; }.garden-empty :deep(.forest-tree) { height: 210px; }.garden-empty p { max-width: 270px; color: var(--muted); font-size: 12px; line-height: 1.6; }
-@media (max-width: 720px) { .forest-review { padding: 17px; }.forest-review__header { gap: 11px; flex-wrap: wrap; }.forest-review__status { order: 3; flex-basis: 100%; margin-left: 0; text-align: left; }.garden-scene { min-height: max(420px, calc(300px + var(--garden-rows) * 72px)); }.garden-scene__hint { display: none; }.garden-empty { grid-template-columns: 1fr; gap: 0; padding: 10px 18px 18px; text-align: center; }.garden-empty :deep(.forest-tree) { height: 175px; }.garden-empty p { margin: 0 auto; } }
+@media (max-width: 720px) { .forest-review { padding: 17px; }.forest-review__header { gap: 11px; flex-wrap: wrap; }.forest-review__status { order: 3; flex-basis: 100%; margin-left: 0; text-align: left; }.garden-scene { min-height: max(500px, calc(320px + var(--garden-rows) * 105px)); }.garden-plant { width: clamp(42px, calc(30px + var(--size) * 58px), 108px); }.garden-scene__hint { display: none; }.garden-empty { grid-template-columns: 1fr; gap: 0; padding: 10px 18px 18px; text-align: center; }.garden-empty :deep(.forest-tree) { height: 175px; }.garden-empty p { margin: 0 auto; } }
 @media (max-width: 430px) { .garden-scene { min-height: 370px; }.garden-plant { width: clamp(44px, calc(30px + var(--size) * 46px), 82px); }.garden-scene__sun { top: 26px; width: 52px; height: 52px; }.garden-scene__cloud { display: none; } }
 @keyframes garden-ground-pulse { 0%,100% { opacity: .45; transform: scale(.88); } 50% { opacity: .9; transform: scale(1.08); } }
 @media (prefers-reduced-motion: reduce) { .garden-plant.is-active::before { animation: none; } }
