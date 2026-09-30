@@ -26,101 +26,37 @@
     </section>
 
     <template v-else>
-      <section class="test-controls surface">
-        <div class="test-path-summary">
-          <p class="eyebrow">当前学习路径</p>
-          <strong>{{ learningPath.subject || learningPath.goal || '当前科目' }}</strong>
-          <div class="test-path-progress"><span>{{ learningPath.progress || 0 }}%</span><div class="progress-track"><div class="progress-value" :style="{ width: `${learningPath.progress || 0}%` }"></div></div></div>
-        </div>
-        <label class="test-select">
-          <span>切换科目</span>
-          <select :value="learningPath.path_id" :disabled="switching" @change="selectPath($event.target.value)">
-            <option v-for="path in pathCatalog" :key="path.path_id" :value="path.path_id">{{ path.subject || '未命名科目' }}</option>
-          </select>
-        </label>
-        <label class="test-select">
-          <span>选择章节</span>
-          <select v-model="activeNodeId" @change="selectNode(activeNodeId)">
-            <option v-for="(node, index) in testableNodes" :key="node.id" :value="node.id">第 {{ index + 1 }} 章 · {{ node.title }}</option>
-          </select>
-        </label>
-      </section>
-
       <StudyGarden
+        v-if="!isReviewOpen"
         :nodes="learningPath.nodes || []"
-        :active-node-id="activeNodeId"
+        :active-node-id="null"
         @select="selectNode"
       />
 
-      <section class="test-context">
-        <div>
-          <p class="eyebrow">CHAPTER CHECK</p>
-          <h2>{{ activeNode?.title || '选择一个章节' }}</h2>
-          <p>{{ activeNode?.summary || '从上方路径或下方章节选择要检查的知识。' }}</p>
-        </div>
-        <span class="test-chapter-status">{{ canStartTest ? '可以开始测试' : '等待完成阅读' }}</span>
-      </section>
+      <TreeReviewScene
+        v-else-if="activeNode"
+        :node="activeNode"
+        :latest-score-label="latestScoreLabel"
+        :answer-summary="answerSummary"
+        :mastery-label="masteryLabel"
+        :mastery-value="masteryValue"
+        :weak-points="testInsights.weakPoints"
+        :next-suggestion-title="nextSuggestionTitle"
+        :next-suggestion-reason="nextSuggestionReason"
+        :can-start-test="canStartTest"
+        @back="closeReview"
+        @quiz="openQuiz"
+        @feynman="activeTab = 'feynman'"
+        @learn="leaveTest"
+      />
 
-      <section v-if="activeNode" class="test-insights" aria-label="学习复盘结果">
-        <article class="insight-card insight-card--score">
-          <span class="insight-label">最近答题</span>
-          <strong>{{ latestScoreLabel }}</strong>
-          <span>{{ answerSummary }}</span>
-        </article>
-        <article class="insight-card">
-          <span class="insight-label">错误知识点</span>
-          <strong>{{ testInsights.weakPoints.length || 0 }}</strong>
-          <div v-if="testInsights.weakPoints.length" class="insight-tags">
-            <span v-for="point in testInsights.weakPoints.slice(0, 3)" :key="point.tag">{{ point.tag }}</span>
-          </div>
-          <span v-else>完成答题后自动记录</span>
-        </article>
-        <article class="insight-card">
-          <span class="insight-label">掌握度</span>
-          <strong>{{ masteryLabel }}</strong>
-          <div class="insight-progress progress-track"><span :style="{ width: `${masteryValue}%` }"></span></div>
-        </article>
-        <article class="insight-card insight-card--next">
-          <span class="insight-label">下一步建议</span>
-          <strong>{{ nextSuggestionTitle }}</strong>
-          <span>{{ nextSuggestionReason }}</span>
-        </article>
-      </section>
-
-      <section v-if="nodeError" class="surface surface-pad foundation-state foundation-state--error">
+      <section v-if="isReviewOpen && nodeError" class="surface surface-pad foundation-state foundation-state--error">
         <CircleAlert :size="22" />
         <div><strong>当前章节无法读取</strong><p>{{ nodeError }}</p></div>
         <button class="button button--quiet" type="button" @click="loadNode">重试</button>
       </section>
 
-      <section v-else-if="activeNode && !canStartTest" class="surface surface-pad test-gate">
-        <BookOpenText :size="23" />
-        <div>
-          <p class="eyebrow">开始测试前</p>
-          <h2>先完成本章主讲文档</h2>
-          <p>题目和费曼反讲会根据你实际阅读的内容生成。打开当前章节的基础学习，读完文档后再回来，系统才能判断你的掌握程度。</p>
-        </div>
-        <RouterLink
-          class="button button--primary"
-          :to="{ path: '/learning/fundamentals', query: { pathId: learningPath.path_id, node: activeNode.id } }"
-        >
-          去基础学习
-        </RouterLink>
-      </section>
-
-      <template v-if="activeNode">
-        <section class="test-entries" aria-label="学习复盘入口">
-          <button class="entry-card" type="button" :disabled="!canStartTest" @click="openQuiz">
-            <span class="entry-icon"><SquareCheck :size="21" /></span>
-            <span class="entry-copy"><strong>题目测试</strong><small>提交答案，记录正确率和错误知识点</small></span>
-            <ArrowRight :size="18" />
-          </button>
-          <button class="entry-card" :class="{ 'is-active': activeTab === 'feynman' }" type="button" :disabled="!canStartTest" @click="activeTab = 'feynman'">
-            <span class="entry-icon"><MessageCircle :size="21" /></span>
-            <span class="entry-copy"><strong>费曼反讲</strong><small>用自己的话讲清本章，获得下一步追问</small></span>
-            <ArrowRight :size="18" />
-          </button>
-        </section>
+      <template v-if="isReviewOpen && activeNode">
         <FeynmanCoach
           v-if="canStartTest && activeTab === 'feynman'"
           :key="`feynman-${activeNode.id}`"
@@ -142,10 +78,11 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { ArrowRight, BookOpenText, CircleAlert, LoaderCircle, MessageCircle, Route, SquareCheck } from 'lucide-vue-next'
+import { CircleAlert, LoaderCircle, Route } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 import FeynmanCoach from '@/features/fundamentals/FeynmanCoach.vue'
 import StudyGarden from '@/features/fundamentals/StudyGarden.vue'
+import TreeReviewScene from '@/features/fundamentals/TreeReviewScene.vue'
 import PageTitle from '@/shared/ui/PageTitle.vue'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { learningApi } from '@/shared/api/learningApi'
@@ -160,6 +97,7 @@ const notice = ref('')
 const learningPath = ref(null)
 const pathCatalog = ref([])
 const activeNodeId = ref(null)
+const isReviewOpen = ref(false)
 const nodeDetail = ref(null)
 const documentResource = ref(null)
 const chapterContent = ref('')
@@ -241,6 +179,7 @@ function chooseNode(path) {
   activeNodeId.value = requested && path.nodes.some((node) => String(node.id) === String(requested))
     ? Number(requested)
     : resolveFallbackNode(path.nodes)?.id ?? null
+  isReviewOpen.value = Boolean(requested)
 }
 
 async function loadNode() {
@@ -325,6 +264,7 @@ async function selectPath(pathId) {
       chooseNode(selected)
       await loadNode()
       activeTab.value = ''
+      isReviewOpen.value = false
       await router.replace({ query: { pathId: selected.path_id } })
     } else nodeError.value = '这条学习路径尚未加入，暂时不能进行学习复盘。'
   } catch (error) {
@@ -336,10 +276,17 @@ async function selectPath(pathId) {
 
 async function selectNode(nodeId) {
   activeNodeId.value = nodeId
+  isReviewOpen.value = true
   nodeError.value = ''
   await loadNode()
   activeTab.value = ''
   await router.replace({ query: { pathId: learningPath.value.path_id, node: nodeId } })
+}
+
+async function closeReview() {
+  isReviewOpen.value = false
+  activeTab.value = ''
+  await router.replace({ query: { pathId: learningPath.value?.path_id } })
 }
 
 function leaveTest() {
