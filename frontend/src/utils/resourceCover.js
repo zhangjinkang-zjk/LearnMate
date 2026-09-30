@@ -11,6 +11,9 @@ const TYPE_LABELS = {
   external_video: 'VIDEO LESSON',
 }
 
+// 内部用：把封面值归一成可直接喂给 <img> 的地址。
+// 曾短暂 export 给外部视频播放视图用（那边只要真封面、不要占位图），
+// 但远端重构后播放视图已删除、封面改由 LearningVideoPanel 的卡片网格负责，故收回。
 function asHttpUrl(value) {
   const text = String(value || '').trim()
   if (!text) return ''

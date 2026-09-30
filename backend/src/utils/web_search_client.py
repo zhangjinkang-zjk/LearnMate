@@ -12,6 +12,7 @@
 
 import logging
 import os
+import re
 
 import httpx
 
@@ -21,6 +22,10 @@ DEFAULT_BASE_URL = "https://api.bochaai.com"
 ENDPOINT_PATH = "/v1/web-search"
 MAX_COUNT = 50
 DEFAULT_COUNT = 10
+
+# 结果解析结构的版本。**改了 `_normalize_page` / `_extract_images` 就要 +1** ——
+# 缓存 key 带它，好让旧解析写下的那批结果立刻失效（否则要等 6 小时 TTL）。
+_CACHE_VERSION = 2
 
 
 def _env_int(name: str, default: int) -> int:
@@ -68,11 +73,70 @@ def _extract_pages(payload) -> list[dict]:
     return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
-def _normalize_page(item: dict) -> dict | None:
-    """把博查的 WebPageValue 映射成内部统一结构，无 URL 的丢弃"""
+def _page_key(url: str) -> str:
+    """把 URL 归一成能跨 m./mip./www. 匹配的键。
+
+    博查的图片结果给的是 `hostPageUrl`（`m.imooc.com/article/372181`），网页结果给的是
+    `url`（可能是 `mip.` 或带 query 的同一篇），所以匹配前必须先归一化。
+    """
+    text = str(url or "").strip().lower()
+    text = re.sub(r"^https?://", "", text)
+    text = re.sub(r"^(?:m|mip|mobile|www)\.", "", text)
+    return text.split("?")[0].rstrip("/")
+
+
+def _extract_images(payload) -> dict[str, str]:
+    """从 `data.images.value` 建「页面 → 封面图」的映射。
+
+    **网页结果里没有封面字段，图片在一个兄弟节点里。** 响应结构是：
+
+        data.webPages.value[]  {url, name, snippet, siteName, siteIcon, …}   ← 无封面
+        data.images.value[]    {hostPageUrl, thumbnailUrl, contentUrl, …}    ← 封面在这
+        data.videos            null
+
+    每条图都带 `hostPageUrl`（这张图属于哪个页面），按 `_page_key` 归一化后与
+    `webPages` 的 url **精确对得上** —— 实测两组查询交集 5/5、3/3。
+
+    **以前这个节点从来没被读过**（只取了 `webPages`），于是所有结果的 `thumbnail`
+    恒为空，还被误当成"博查不给封面"。这就是为什么现在要单独一个函数把它捞出来：
+    封面一直在响应里，是我们没接。
+
+    图片本身可能挂在 CDN 域（`imgapi.imooc.com`），与页面域不同 —— 不影响，我们只
+    用它配**已经过白名单的页面**，不单独把图片当检索结果。
+
+    防御式解析：结构不对就返回空 dict，绝不让它把整次搜索带崩。
+    """
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    images = data.get("images") if isinstance(data, dict) else None
+    if not isinstance(images, dict):
+        return {}
+    value = images.get("value")
+    if not isinstance(value, list):
+        return {}
+    mapping: dict[str, str] = {}
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        key = _page_key(item.get("hostPageUrl"))
+        image = str(item.get("thumbnailUrl") or item.get("contentUrl") or "").strip()
+        # 同一个页面可能有多张图，取第一张（响应里靠前的通常是头图）
+        if key and image.startswith(("http://", "https://")) and key not in mapping:
+            mapping[key] = image
+    return mapping
+
+
+def _normalize_page(item: dict, image_map: dict[str, str] | None = None) -> dict | None:
+    """把博查的 WebPageValue 映射成内部统一结构，无 URL 的丢弃。
+
+    `image_map` 是 `_extract_images()` 从兄弟节点建的「页面 → 封面」映射：网页结果自己
+    没有封面字段，要拿它补上。
+    """
     url = str(item.get("url") or "").strip()
     if not url:
         return None
+    own = str(item.get("thumbnail") or item.get("thumbnailUrl") or item.get("imageUrl") or "").strip()
     return {
         "title": " ".join(str(item.get("name") or "").split()),
         "url": url,
@@ -80,7 +144,8 @@ def _normalize_page(item: dict) -> dict | None:
         # summary 需要请求时开 summary=true 才返回，可能为空
         "summary": " ".join(str(item.get("summary") or "").split()),
         "site_name": str(item.get("siteName") or "").strip(),
-        "thumbnail": str(item.get("thumbnail") or item.get("thumbnailUrl") or item.get("imageUrl") or "").strip(),
+        # 网页结果自己那份优先（留着以防博查哪天真的加进来），否则用 images 节点里配到的那张
+        "thumbnail": own or (image_map or {}).get(_page_key(url), ""),
         # datePublished 是 UTC+8；dateLastCrawled 的 Z 结尾实为 UTC+8，官方建议优先用前者
         "published_at": str(item.get("datePublished") or "").strip(),
         "favicon": str(item.get("siteIcon") or "").strip(),
@@ -137,7 +202,13 @@ async def search_web(
 
     cache_key = None
     if cache_get is not None:
-        cache_key = _cache_key("websearch", _text_hash(f"{text}|{include or ''}|{size}|{int(bool(summary))}"))
+        # `_CACHE_VERSION` 进 key：改了响应解析就要 +1，否则 Redis 里那批**按旧解析写的**
+        # 结果会顶着 6 小时 TTL 继续被返回，新加的封面等半天才出现。
+        # v2 = 开始从 data.images 取封面（v1 的结果 thumbnail 恒为空）。
+        cache_key = _cache_key(
+            "websearch",
+            _text_hash(f"v{_CACHE_VERSION}|{text}|{include or ''}|{size}|{int(bool(summary))}"),
+        )
         cached = await cache_get(cache_key)
         if isinstance(cached, list):
             return cached
@@ -182,7 +253,9 @@ async def search_web(
         logger.warning("[WebSearch] 响应不是合法 JSON caller=%s query=%r", caller, text[:60])
         return []
 
-    results = [item for item in (_normalize_page(page) for page in _extract_pages(payload)) if item]
+    # 封面在兄弟节点 data.images 里，必须先建好「页面 → 图」的映射再映射网页
+    image_map = _extract_images(payload)
+    results = [item for item in (_normalize_page(page, image_map) for page in _extract_pages(payload)) if item]
 
     if cache_key is not None and results:
         try:

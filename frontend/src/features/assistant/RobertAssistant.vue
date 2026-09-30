@@ -1,5 +1,5 @@
 <template>
-  <XiaozhiAssistant
+  <AssistantShell
     assistant-name="罗伯特"
     variant="robert"
     :robot-image="robotImage"
@@ -8,6 +8,6 @@
 </template>
 
 <script setup>
-import XiaozhiAssistant from './XiaozhiAssistant.vue'
+import AssistantShell from './AssistantShell.vue'
 import robotImage from './robert-robot.png'
 </script>

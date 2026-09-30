@@ -27,7 +27,7 @@
       </div>
 
       <div ref="layoutRef" class="ide-layout" :class="{ 'is-dragging': isDragging }" :style="layoutStyle">
-        <CodeWorkspace class="ide-workspace" />
+        <CodeWorkspace ref="workspaceRef" class="ide-workspace" />
 
         <!-- 分隔条：拖动改两侧宽度，双击回到一半。键盘也能调（左右方向键）。
              有了它就不必把 50/50 写死 —— 写代码时把编辑区拉大，讨论时把对话拉大。 -->
@@ -57,6 +57,7 @@
             :task="task"
             :chapter-content="chapterContent"
             :resource-id="resourceId"
+            :workspace-reader="readWorkspaceSnapshot"
             @end="endPractice"
           />
           <section v-else-if="!hasWorkspace" class="surface surface-pad state-panel state-panel--error"><CircleAlert :size="20" /><div><strong>实践任务缺少关联节点</strong><p>请重新同步任务后再开始巩固。</p></div><button class="button button--quiet" type="button" @click="loadTask">重新同步</button></section>
@@ -113,6 +114,7 @@ const summaryLoading = ref(false)
 let summaryController = null
 const chapterContent = ref('')
 const resourceId = ref(null)
+const workspaceRef = ref(null)
 const milestone = reactive({ size: 0, unlock_nodes: 0, completed_nodes: 0, current: 0, next: 0, remaining: 0 })
 // 里程碑是后端算出来的。原来给了一组 {size:10, unlock_nodes:10, ...} 的默认值，
 // 后端漏字段时页面会显示"已完成 0 / 10 个基础学习节点，还需 10 个节点"和"第 0 个里程碑"
@@ -133,6 +135,17 @@ function getTaskWorkspace(value) {
 const optionalTasks = computed(() => tasks.value.filter((item) => !item.is_recommended).slice(0, 3))
 const selectedWorkspace = computed(() => getTaskWorkspace(task.value))
 const hasWorkspace = computed(() => selectedWorkspace.value.pathId !== null && selectedWorkspace.value.nodeId !== null)
+
+// 对话要能看见工作区，可数据在 CodeWorkspace 里。这里往下传的是个**身份稳定**的读取
+// 函数，而不是一份快照：
+//   - 正文随每次击键变（见 CodeWorkspace.onEditorInput），做成响应式 prop 会让对话
+//     组件每敲一个字符重渲染一次，而快照只在"按下发送那一刻"才有意义；
+//   - 发送时现取才是诚实的语义 —— 教练看到的是学生按下发送时的那份代码。
+// 所以它必须在页面里定义一次。**别改成模板里的内联箭头** —— 那样 prop 身份每渲染
+// 都变，等于把每次重渲染又还回来了。
+function readWorkspaceSnapshot() {
+  return workspaceRef.value?.readSnapshot?.() ?? { available: false }
+}
 
 // 智能体生成现在跑在后台（见后端 service/advanced/task_jobs.py），首次请求会先返回
 // 一份确定性任务并标记 task_source='pending'。所以这里要轮询到它落定为止 ——
@@ -283,10 +296,12 @@ async function loadNodeContext() {
     const resources = detail?.progress?.resources || detail?.resources || []
     const documentResource = resources.find((resource) => resource.resource_type === 'document')
     resourceId.value = documentResource?.resource_id || documentResource?.id || null
-    if (resourceId.value) {
-      const resource = await fundamentalsApi.getResource(resourceId.value)
-      chapterContent.value = normalizeContent(resource?.content || documentResource?.content)
-    } else chapterContent.value = normalizeContent(documentResource?.content)
+    // 有 resource_id 时不再把整篇正文拉到客户端：服务端会按本次提问自己挑相关段落
+    // （见 classroom_chat._build_classroom_path_context）。以前这里把整篇主讲材料取回来，
+    // 只为在客户端截 1200 字塞进 segment.script —— 白拉一趟，而且那份比服务端挑出来的
+    // 3600 字相关段落更差。同一份教材喂两遍是纯浪费。
+    // 只有服务端确实拿不到的时候（没有 resource_id），客户端这份才是唯一来源。
+    if (!resourceId.value) chapterContent.value = normalizeContent(documentResource?.content)
   } catch {
     chapterContent.value = ''
   }

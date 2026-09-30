@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend.src.models.advanced_practice_model import AdvancedPracticeSession
+from backend.src.service.advanced.practice_service import _welcome_message
 from backend.src.service.path import classroom_chat as cg_chat
 from backend.src.service.chat import service as chat_service
 
@@ -99,10 +100,27 @@ def test_compose_user_prompt_feynman():
 
 
 def test_compose_user_prompt_practice_keeps_one_step_at_a_time():
-    prompt = cg_chat._compose_user_prompt("practice", "我准备换向量模型", {"phase": "比较方案"})
-    assert "学习巩固" in prompt
-    assert "比较方案" in prompt
+    prompt = cg_chat._compose_user_prompt("practice", "我准备换向量模型", {})
+    assert "实践对话" in prompt
+    assert "我准备换向量模型" in prompt
     assert "只追问一个" in prompt
+
+
+def test_compose_user_prompt_practice_has_no_phase_agenda():
+    """这一轮的提示词里不该再出现「当前阶段是…」，也不该再要模型写阶段标记。
+
+    以前它写着"当前阶段是「比较方案」"，模型于是把上一轮的安排当成自己这一轮的任务：
+    学生问"看看我的代码"，它回"我们先完成任务定义这一步"。阶段机删了，这段话的每一句
+    都在生产一个不存在的议程。
+    """
+    prompt = cg_chat._compose_user_prompt("practice", "教练看看我的代码", {"phase": "比较方案"})
+
+    assert "比较方案" not in prompt
+    assert "当前阶段" not in prompt
+    assert "PHASE" not in prompt
+    # 学生的原话要原样在场，且提示词明确要求先回应他说的这件事
+    assert "教练看看我的代码" in prompt
+    assert "针对他说的这件事本身回应" in prompt
 
 
 def test_compose_user_prompt_free():
@@ -115,19 +133,22 @@ def test_compose_user_prompt_free():
 # 调用。于是学生在进阶学习里看到的第一问永远一样、也不提这个任务是什么。
 
 def test_compose_user_prompt_practice_opening_asks_the_first_question():
-    prompt = cg_chat._compose_user_prompt("practice_opening", "", {"phase": "理解问题"})
+    prompt = cg_chat._compose_user_prompt("practice_opening", "", {})
     assert "学生还没有任何发言" in prompt
-    assert "理解问题" in prompt
     assert "只问一个问题" in prompt
-    # 第一轮不该记进度：学生还没答，任何标记都是错的
-    assert "不输出任何阶段标记" in prompt
+
+
+def test_compose_user_prompt_practice_opening_does_not_name_a_stage():
+    prompt = cg_chat._compose_user_prompt("practice_opening", "", {"phase": "理解问题"})
+
+    assert "理解问题" not in prompt
+    assert "阶段" not in prompt
 
 
 def test_practice_opening_fallback_carries_the_task_title():
     """兜底必须点出任务名 —— 这正是原来那句写死开场缺的东西。"""
-    text = cg_chat._opening_fallback({"phase": "理解问题", "title": "构建一个身份-权限模型"})
+    text = cg_chat._opening_fallback({"title": "构建一个身份-权限模型"})
     assert "构建一个身份-权限模型" in text
-    assert "理解问题" in text
     assert "「」" not in text
 
 
@@ -139,40 +160,40 @@ def test_practice_opening_fallback_without_a_title_is_still_a_whole_sentence():
         assert "「」" not in text
 
 
-def test_practice_opening_fallback_falls_back_to_the_first_phase_label():
-    text = cg_chat._opening_fallback({"title": "写一份检索方案"})
-    assert "理解问题" in text
-    assert "写一份检索方案" in text
+def test_practice_opening_fallback_differs_from_the_seeded_opening():
+    """兜底那句必须和 `practice_service._welcome_message` 种下的那句**字面不同**。
+
+    `_opening_pending` 是靠"助手说过的话 != 种下的那句"来判断开场已经生成过的。
+    两句一样的话，就会每轮都重新请教练开场一次。
+    """
+    segment = {"title": "写一份检索方案"}
+    assert cg_chat._opening_fallback(segment) != _welcome_message({"title": "写一份检索方案"})["text"]
 
 
 @pytest.mark.asyncio
-async def test_the_opening_turn_never_records_phase_progress(monkeypatch):
-    """开场是助手在提问。模型不听话写了 [[PHASE:done]]，也不能记进账本。"""
+async def test_the_opening_turn_emits_no_phase_event(monkeypatch):
+    """流式回复里不该再有 `type:phase` 事件 —— 阶段账本已经删了。
+
+    以前这里跑一个 `PhaseStreamStripper` 剥掉模型吐的 `[[PHASE:done]]`，再把它交给
+    `AdvancedPracticeService.record_phase_markers`。两个东西都不在了，模型万一还是
+    吐了标记，它会原样出现在回复里 —— 这是可接受的：提示词里已经没有任何地方要求它写。
+    """
     monkeypatch.setattr(cg_chat, "get_or_create_classroom_agent", _async_value(123))
     monkeypatch.setattr(cg_chat, "_get_classroom_brain", lambda *a, **k: StubBrain([
         {"role": "assistant", "type": "chunk", "content": "这个任务要你产出的是「检索方案」。"},
-        {"role": "assistant", "type": "chunk", "content": "[[PHASE:done]]"},
     ]))
     monkeypatch.setattr(cg_chat, "_build_classroom_path_context", _async_value("ctx"))
     monkeypatch.setattr(cg_chat, "_build_global_portrait_context", _async_value("portrait"))
 
     session = SimpleNamespace(status="active")
     monkeypatch.setattr(AdvancedPracticeSession, "filter", lambda *a, **k: FakeQuerySet(session))
-    recorded = []
-
-    async def fake_record(session_arg, markers):
-        recorded.append(list(markers))
-        return {}
-
-    monkeypatch.setattr(cg_chat.AdvancedPracticeService, "record_phase_markers", fake_record)
 
     events = await _collect(cg_chat.stream_classroom_chat(
-        1, 1, 1, {"phase": "理解问题"}, "practice_opening", "", practice_session_id="abc",
+        1, 1, 1, {}, "practice_opening", "", practice_session_id="abc",
     ))
     joined = "\n".join(events)
+
     assert "这个任务要你产出的是" in joined
-    assert "[[PHASE:done]]" not in joined, "标记照样要剥掉，不能漏给学生看"
-    assert recorded == [[]], "开场那一轮不该把标记交给账本"
     assert '"type":"phase"' not in joined
 
 
@@ -332,3 +353,203 @@ def _async_value(value):
     async def _inner(*args, **kwargs):
         return value
     return _inner
+
+
+# ── 任务说明块 / 学生工作区块（_render_task_block / _render_workspace_block）──
+#
+# `_build_classroom_path_context` 新增了这两块，拼在最后、两个分支共用。以前 resource_id
+# 存在时那个函数提前 return，只给教材摘录 —— 节点一旦绑了主讲材料，任务说明就被整块丢掉，
+# 教练在不知道任务是什么的情况下跟学生聊。两块的**信任级别不一样**：任务说明来自服务端
+# 账本（task_snapshot），工作区天然只能来自客户端（文件在学生浏览器里）。下面按这两条线
+# 分别钉住输入契约、脏数据容错和注入边界。
+
+# 一段带换行和 4 空格缩进的代码 —— 正是 _clip 会摧毁、而工作区块必须保住的东西。
+_CODE_SAMPLE = "def add(a, b):\n    total = a + b\n    return total\n"
+
+
+@pytest.mark.asyncio
+async def test_workspace_block_preserves_code_newlines(monkeypatch):
+    """最关键的一条回归：代码快照的换行与缩进必须原样进上下文。
+
+    不能用 classroom._clip 渲染代码 —— 它把 \\r/\\n 换成空格再合并，代码过一遍就塌成
+    一整行，缩进和结构全丢，而教练要读的正是结构。这条既直接测 _render_workspace_block，
+    也经 _build_classroom_path_context 测一遍（拼接那层不能又把它塌一次）。
+    """
+    # 先确认 _clip 确实会把代码塌成一行 —— 这就是这条测试存在的理由
+    assert "\n" not in cg_chat._clip(_CODE_SAMPLE, 500)
+
+    workspace = {
+        "available": True,
+        "files": [{"path": "solution.py", "text": _CODE_SAMPLE, "truncated": False}],
+    }
+    block = cg_chat._render_workspace_block(workspace)
+    assert "def add(a, b):\n    total = a + b\n    return total" in block
+    assert "    return total" in block, "4 个空格的缩进不能被折叠掉"
+
+    # 经完整上下文路径也要保留
+    monkeypatch.setattr(cg_chat.PathNode, "filter", lambda *a, **k: FakeQuerySet(FakeNode()))
+    ctx = await cg_chat._build_classroom_path_context(1, 1, {"title": "补码", "workspace": workspace})
+    assert "def add(a, b):\n    total = a + b\n    return total" in ctx
+
+
+def test_workspace_block_renders_tree_files_and_active_marker():
+    """树、每份文件正文都要在；active_path 对应的那份要带"学生当前正在编辑"标记。"""
+    workspace = {
+        "available": True,
+        "root_name": "learnmate-demo",
+        "tree": "learnmate-demo\n├─ solution.py\n└─ utils.py",
+        "tree_total_files": 2,
+        "tree_shown_files": 2,
+        "tree_truncated": False,
+        "active_path": "solution.py",
+        "files": [
+            {"path": "solution.py", "text": "x = 1", "truncated": False},
+            {"path": "utils.py", "text": "y = 2", "truncated": False},
+        ],
+    }
+    block = cg_chat._render_workspace_block(workspace)
+    assert "【学生工作区（只读快照）】" in block
+    assert "文件树（共 2 个文件）：" in block
+    assert "solution.py" in block and "utils.py" in block
+    assert "x = 1" in block and "y = 2" in block
+    # 标记只落在 active_path 那一份上，别的文件不能也挂上
+    assert "--- solution.py（学生当前正在编辑） ---" in block
+    assert "--- utils.py（学生当前正在编辑） ---" not in block
+
+
+def test_workspace_block_says_so_when_nothing_is_open():
+    """available:false 必须显式说"看不到代码"，并禁止教练假装读过。
+
+    让整块凭空消失是不可靠的信号：教练会以为这条路上本来就没有工作区，于是照学生的话
+    脑补代码。明说了它才知道该请学生打开文件夹。
+    """
+    block = cg_chat._render_workspace_block({"available": False})
+    assert block == cg_chat._WORKSPACE_EMPTY_NOTICE
+    assert "没有打开任何本机文件" in block
+    assert "不要假装读过" in block
+
+
+def test_workspace_block_reports_tree_truncation_and_omitted_files_separately():
+    """树截断 和 正文遗漏 是两句独立的话，各说各的，不能合成一句也不能互相顶掉。"""
+    workspace = {
+        "available": True,
+        "tree": "root\n├─ a.py\n└─ b.py",
+        "tree_total_files": 40,
+        "tree_truncated": True,
+        "files": [{"path": "a.py", "text": "print(1)", "truncated": False}],
+        "omitted_count": 3,
+        "omitted_paths": ["b.py", "c.py", "d.py"],
+    }
+    block = cg_chat._render_workspace_block(workspace)
+    assert "文件树较长，这里只显示了前面一部分文件。" in block
+    assert "还有 3 个已打开文件因篇幅没有附上正文：b.py、c.py、d.py。" in block
+
+    # 树没截断时，不能冒出树截断那句（但遗漏那句不受影响）
+    no_tree_trunc = cg_chat._render_workspace_block({**workspace, "tree_truncated": False})
+    assert "文件树较长" not in no_tree_trunc
+    assert "还有 3 个已打开文件" in no_tree_trunc
+
+    # 没有遗漏文件时，也不能冒出遗漏那句（但树截断那句仍在）
+    no_omitted = cg_chat._render_workspace_block({**workspace, "omitted_count": 0, "omitted_paths": []})
+    assert "还有" not in no_omitted
+    assert "文件树较长，这里只显示了前面一部分文件。" in no_omitted
+
+
+def test_workspace_block_stays_bounded_but_keeps_the_end_marker():
+    """超长输入必须被截断到预算内，但结束标记是注入防御的边界，绝不能被截掉。
+
+    这两条一度是互斥的：实现先把正文截到 _WORKSPACE_CONTEXT_MAX_CHARS，**再**补截断提示
+    和结束标记，于是整块恒为 8000 + 18 + 8 —— 一个名字写着"上限"却能被超的常量。
+    现在截断预算里先给那条尾巴留了位置，所以"整体不超过常量"和"标记仍在"能同时成立。
+    """
+    workspace = {
+        "available": True,
+        "tree": "\n".join(f"pkg{i}/file_{i}.py" for i in range(200)),
+        "tree_total_files": 5000,
+        "tree_truncated": True,
+        "files": [{"path": f"file_{i}.py", "text": "x" * 5000, "truncated": True} for i in range(12)],
+    }
+    block = cg_chat._render_workspace_block(workspace)
+
+    assert block.endswith("【工作区结束】"), "截断后必须补回结束标记，它是注入防御的边界"
+    assert "（工作区内容过长，这里已经截断。）" in block, "确认这次确实触发了截断，断言才有意义"
+    # 常量说多少就是多少，不留"实际会多 26 个字符"这种只存在于注释里的例外
+    assert len(block) <= cg_chat._WORKSPACE_CONTEXT_MAX_CHARS
+
+
+def test_workspace_block_degrades_on_dirty_payloads_without_raising():
+    """工作区是不可信输入（学生能改自己的浏览器）。脏 JSON 只能退化成合理结果，不能抛异常。"""
+    # 整体不是 dict：没有工作区可谈，整块消失
+    assert cg_chat._render_workspace_block("not-a-dict") == ""
+    assert cg_chat._render_workspace_block(None) == ""
+
+    # files 不是 list、tree_total_files 不是数字：当成缺失，其余照常渲染，且不崩
+    block = cg_chat._render_workspace_block(
+        {"available": True, "tree": "root\n└─ a.py", "tree_total_files": "abc", "files": "not-a-list"}
+    )
+    assert "文件树：" in block, "计数非法时只省略个数"
+    assert "共" not in block
+    assert "已打开的文件正文" not in block
+
+    # files 里混入非 dict / 缺 path 的元素：跳过那几条，合法的照渲染
+    block = cg_chat._render_workspace_block(
+        {"available": True, "files": [1, "x", {"text": "没有 path"}, {"path": "ok.py", "text": "z = 1"}]}
+    )
+    assert "ok.py" in block and "z = 1" in block
+    assert "没有 path" not in block
+
+    # omitted_paths 里混入数字：收成字符串后照列，不崩
+    block = cg_chat._render_workspace_block(
+        {"available": True, "files": [{"path": "a.py", "text": "1"}], "omitted_paths": [1, 2]}
+    )
+    assert "还有 2 个已打开文件因篇幅没有附上正文：1、2。" in block
+
+
+def test_render_task_block_absent_when_empty():
+    """任务块没有实质内容时返回空串：不能留一个"【本次实践任务】"空壳占位。
+
+    快照缺字段/类型不对/字段全空白都算"这次没任务说明"，课堂不该因此中断，也不该塞空壳。
+    """
+    for snapshot in (
+        None,
+        {},
+        "不是 dict",
+        [],
+        {"title": "   ", "problem": "\n\t", "focus": ""},
+        {"criteria": [], "deliverables": ["  "]},
+    ):
+        assert cg_chat._render_task_block(snapshot) == ""
+
+
+@pytest.mark.asyncio
+async def test_task_block_comes_from_server_ledger_not_client_segment(monkeypatch):
+    """任务说明只认服务端账本 task_snapshot，客户端 segment["task"] 一律不采信。"""
+    monkeypatch.setattr(cg_chat.PathNode, "filter", lambda *a, **k: FakeQuerySet(FakeNode()))
+    segment = {"title": "补码", "task": {"title": "客户端伪造的任务名"}}
+
+    ctx = await cg_chat._build_classroom_path_context(
+        1, 1, segment, task_snapshot={"title": "服务端的任务名"}
+    )
+    assert "【本次实践任务】" in ctx
+    assert "服务端的任务名" in ctx
+    assert "客户端伪造的任务名" not in ctx
+
+    # 没有服务端快照时任务块整块消失，客户端那份也不能顶上来
+    ctx_without = await cg_chat._build_classroom_path_context(1, 1, segment)
+    assert "【本次实践任务】" not in ctx_without
+    assert "客户端伪造的任务名" not in ctx_without
+
+
+def test_workspace_goes_into_path_context_not_the_user_prompt():
+    """工作区属于 path_context（系统侧材料），绝不能漏进 user prompt。"""
+    workspace = {
+        "available": True,
+        "files": [{"path": "secret_marker.py", "text": "TOKEN_IN_WORKSPACE"}],
+    }
+    prompt = cg_chat._compose_user_prompt(
+        "practice", "学生的话", {"phase": "比较方案", "workspace": workspace}
+    )
+    assert "TOKEN_IN_WORKSPACE" not in prompt
+    assert "【学生工作区" not in prompt
+    # 学生的原话照常进 prompt，改动没有误伤正常路径
+    assert "学生的话" in prompt

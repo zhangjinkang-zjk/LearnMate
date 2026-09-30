@@ -77,7 +77,7 @@ async def _save_single_generated_resource(
         file_url=file_url,
         user=user,
     )
-    cover_url = build_cover_url(resource_type, file_url, record.id)
+    cover_url = build_cover_url(resource_type, file_url)
     if cover_url:
         await GeneratedResource.filter(id=record.id).update(cover_url=cover_url)
 
@@ -369,7 +369,7 @@ class ResourceService:
                                 file_url=chunk.get("file_urls", {}).get(rt),
                                 user=user,
                             )
-                            cover_url = build_cover_url(rt, record.file_url, record.id)
+                            cover_url = build_cover_url(rt, record.file_url)
                             if cover_url:
                                 await GeneratedResource.filter(id=record.id).update(cover_url=cover_url)
                             saved_resources.append({

@@ -109,7 +109,10 @@ async def upload_document(
                 # 视频没有可检索的正文，留空向量（codec.unpack 会认成"没有向量"跳过）
                 embedding="",
                 visibility=visibility,
-                cover_url=cover_url or "/static/covers/default_video.svg",
+                # 没传封面就是没有封面：以前这里兜一个 /static/covers/default_video.svg，
+                # 而那个文件不存在（这个目录里只有**用户自己传上来**的 cover_*.jpg）。
+                # 留着空值，读的一侧才知道"没有"，不会去请求一个必然 404 的地址。
+                cover_url=cover_url,
                 user_id=user_id,
             )
             logger.info("视频上传成功 path=%s title=%s", video_url, doc_title)

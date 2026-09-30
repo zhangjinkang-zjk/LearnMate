@@ -81,7 +81,7 @@ async def save_resources(
                 file_url=file_urls.get(resource_type),
                 user=user,
             )
-            cover_url = build_cover_url(resource_type, file_urls.get(resource_type), record.id)
+            cover_url = build_cover_url(resource_type, file_urls.get(resource_type))
             if cover_url:
                 await GeneratedResource.filter(id=record.id).update(cover_url=cover_url)
             saved.append(

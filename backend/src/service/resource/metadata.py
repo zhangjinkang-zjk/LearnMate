@@ -75,10 +75,23 @@ def apply_ppt_theme_to_content(content: str | None, ppt_theme_id: str | None) ->
     return "\n---\n".join(themed_blocks)
 
 
-def build_cover_url(resource_type: str, file_url: str | None, resource_id: int) -> str | None:
+def build_cover_url(resource_type: str, file_url: str | None) -> str | None:
+    """资源的封面地址；**没有真封面时返回 None**。
+
+    只有图片自己就是封面。文档、PPT、思维导图、视频都只有正文和文件，没有封面。
+
+    这里以前对其它类型一律返回 `/static/covers/default_{type}.svg`，而
+    `backend/static/covers/` 里**从来没有过任何文件**（全仓 find 和全部 git 历史都查过，
+    那个目录只有 `main.py` 启动时的一句 mkdir）。于是每一个非图片资源都拿到一个必然
+    404 的地址：卡片多打一次请求、服务端多记一条 404，只因为前端 `@error` 把它悄悄
+    兜住才没露出破图。
+
+    返回 None 之后前端 `resourceCoverUrl()` 会接手 —— 它按标题和资源类型现场画一张
+    带标题的 SVG，比一张通用静态图更有信息，而且不发请求。
+    """
     if resource_type == "image" and file_url:
         return file_url
-    return f"/static/covers/default_{resource_type}.svg"
+    return None
 
 
 def external_video_metadata(record: GeneratedResource) -> dict:

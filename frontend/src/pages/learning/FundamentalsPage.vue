@@ -2017,10 +2017,6 @@ onBeforeUnmount(() => {
 .resource-group__empty { display: flex; width: 100%; min-height: 54px; align-items: center; gap: 8px; padding: 0 14px; border: 1px dashed #cbd8c5; color: var(--muted); font-size: 12px; text-align: left; }
 .resource-group__empty:hover { border-color: #9dbb8d; background: #fbfdf9; color: var(--accent-deep); }
 .resource-group__empty span { flex: 1; }
-.external-video-fallback { display: grid; min-height: 360px; place-items: center; align-content: center; gap: 10px; padding: 40px; color: #a45b45; text-align: center; }
-.external-video-fallback strong { color: var(--ink); font-size: 17px; }
-.external-video-fallback p { max-width: 480px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
-.external-video-fallback .button { display: inline-flex; align-items: center; gap: 7px; margin-top: 5px; }
 .lesson-context { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 22px; margin-bottom: 12px; padding: 0 0 16px; border-bottom: 1px solid var(--line); }
 .lesson-context__copy { min-width: 0; }
 .lesson-context__actions { display: flex; min-width: 0; flex: 0 0 auto; align-items: flex-end; gap: 14px; }

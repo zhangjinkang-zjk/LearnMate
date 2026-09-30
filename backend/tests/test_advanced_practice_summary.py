@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""本次巩固的"过程小结"。
+"""本次实践的"过程小结"。
 
 `practice_summary` 这个场景在提示词表、兜底表和 SSE 分支里一直都有，只是**没有任何
 调用方**。接上它的时候有一个容易做错的地方：如果让前端把"我刚才学了什么"当文本传
-上来，总结就变成了给自己的作文打分 —— 和阶段推进是同一个坑。
+上来，总结就变成了给自己的作文打分。
 
 所以输入一律由服务端从会话记录里拼（`practice_record_text`），这里钉住这条，以及
-"提交过的会话不能继续聊、但可以拿来总结"这条门禁。
+"会话不存在才拒绝"这条门禁。
 """
 
 from types import SimpleNamespace
@@ -18,9 +18,7 @@ from backend.src.service.path.classroom_chat import _compose_user_prompt, _pract
 def _session(**kwargs):
     return SimpleNamespace(
         task_snapshot=kwargs.get("task_snapshot", {"title": "综合三个已学标签完成一次交付"}),
-        completed_phases=kwargs.get("completed_phases", ["understand", "evidence"]),
         messages=kwargs.get("messages", []),
-        evaluation=kwargs.get("evaluation"),
         status=kwargs.get("status", "paused"),
     )
 
@@ -29,31 +27,33 @@ def _session(**kwargs):
 #  记录来自服务端
 # ═══════════════════════════════════════
 
-def test_the_record_carries_the_task_phases_and_transcript():
+def test_the_record_carries_the_task_and_the_transcript():
     record = practice_record_text(_session(messages=[
         {"role": "user", "text": "我认为瓶颈在超时阈值"},
         {"role": "assistant", "text": "依据是什么？"},
     ]))
 
     assert "任务：综合三个已学标签完成一次交付" in record
-    assert "已完成阶段：理解问题、寻找证据" in record
     assert "学生：我认为瓶颈在超时阈值" in record
-    assert "助教：依据是什么？" in record
+    assert "教练：依据是什么？" in record
 
 
-def test_the_record_uses_phase_labels_not_ids():
-    """给学生看的总结里不该冒出 `understand` 这种内部 id。"""
-    record = practice_record_text(_session(completed_phases=["understand", "verify"]))
+def test_the_record_has_no_phase_or_score_left_in_it():
+    """阶段名和分数都不该再进总结输入 —— 它们是没有读者的死状态。
 
-    assert "理解问题、验证结果" in record
-    assert "understand" not in record
-    assert "verify" not in record
+    以前这段里会有「已完成阶段：理解问题、寻找证据」和「提交结果：…（82 分）」两行，
+    而阶段机与判分已经删掉了；留着它们等于让总结提示词继续按一个不存在的进度写。
+    """
+    record = practice_record_text(_session(messages=[{"role": "user", "text": "随便说了一句"}]))
+
+    for gone in ("已完成阶段", "提交结果", "理解问题", "understand", "分）"):
+        assert gone not in record
 
 
-def test_a_session_with_no_progress_says_so_instead_of_going_empty():
-    record = practice_record_text(_session(completed_phases=[], messages=[]))
+def test_a_session_without_messages_does_not_write_an_empty_heading():
+    record = practice_record_text(_session(messages=[]))
 
-    assert "还没有阶段完成" in record
+    assert "任务：" in record
     assert "对话记录" not in record, "没有记录就别写一个空的标题"
 
 
@@ -77,12 +77,6 @@ def test_the_transcript_survives_broken_rows():
 
     assert "唯一一条有效的话" in record
     assert record.count("学生：") == 1
-
-
-def test_a_submitted_evaluation_shows_up_in_the_record():
-    record = practice_record_text(_session(evaluation={"label": "达到当前任务要求", "score": 82}))
-
-    assert "提交结果：达到当前任务要求（82 分）" in record
 
 
 def test_a_session_without_attached_state_does_not_crash():
@@ -123,20 +117,19 @@ def test_the_summary_prompt_forbids_inventing_scores():
 #  门禁
 # ═══════════════════════════════════════
 
-def test_a_completed_session_cannot_be_chatted_in():
-    assert _practice_session_blocked("practice", _session(status="completed")) is True
+def test_a_completed_session_is_no_longer_a_dead_end():
+    """`completed` 曾经是"已提交、判分定稿"，于是对话被永久拒掉。
 
-
-def test_a_completed_session_can_still_be_summarised():
-    """提交后的会话阶段和评价都定稿了，读它写小结是安全的。"""
-    assert _practice_session_blocked("practice_summary", _session(status="completed")) is False
+    判分删了之后这个状态只剩一个作用：把老会话锁死 —— 页面把旧对话读出来，之后每次
+    发言都被顶回"会话不存在、无权访问或已经完成"，而界面上再没有按钮能解除它。
+    """
+    assert _practice_session_blocked(_session(status="completed")) is False
 
 
 def test_a_paused_session_can_be_summarised_and_resumed():
-    assert _practice_session_blocked("practice", _session(status="paused")) is False
-    assert _practice_session_blocked("practice_summary", _session(status="paused")) is False
+    assert _practice_session_blocked(_session(status="paused")) is False
+    assert _practice_session_blocked(_session(status="active")) is False
 
 
-def test_a_missing_session_is_blocked_either_way():
-    assert _practice_session_blocked("practice", None) is True
-    assert _practice_session_blocked("practice_summary", None) is True
+def test_a_missing_session_is_blocked():
+    assert _practice_session_blocked(None) is True

@@ -28,7 +28,7 @@ class EmbeddingModelSpec:
     """入库切片的正文上限（字符），按本模型 tokenizer 实测反推。"""
 
     chunk_overlap_chars: int
-    """相邻切片的上下文携带量（字符），见 file_processor._add_overlap。"""
+    """相邻切片的上下文携带量（字符），见 file_processor.apply_context_prefix。"""
 
     note: str = ""
 

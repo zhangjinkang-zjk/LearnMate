@@ -204,7 +204,7 @@ function updateAgentStage(id, status, message, agentName = '') {
 function applyGenerationEvent(event) {
   if (!event) return
   // 同一条 SSE 流同时喂给全局"智能体流程"抽屉（侧边栏），这样弹窗关掉之后
-  // 进度还有地方看。写法与 FundamentalsPage / XiaozhiAssistant 保持一致。
+  // 进度还有地方看。写法与 FundamentalsPage / AssistantShell 保持一致。
   if (event.type === 'agent_event') applyWorkflowEvent(event)
   else applyWorkflowProgress(event)
 

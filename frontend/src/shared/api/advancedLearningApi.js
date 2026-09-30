@@ -8,5 +8,4 @@ export const advancedLearningApi = {
   getPracticeSession: (sessionId) => httpClient.get(`/learning/advanced/practice/sessions/${sessionId}`),
   savePracticeSession: (sessionId, payload) => httpClient.patch(`/learning/advanced/practice/sessions/${sessionId}`, payload),
   endPracticeSession: (sessionId) => httpClient.post(`/learning/advanced/practice/sessions/${sessionId}/end`),
-  submitPracticeSession: (sessionId, payload) => httpClient.post(`/learning/advanced/practice/sessions/${sessionId}/submit`, payload),
 }

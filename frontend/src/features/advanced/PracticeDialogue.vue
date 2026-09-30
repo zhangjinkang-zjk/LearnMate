@@ -1,33 +1,42 @@
 <template>
   <section class="practice-dialogue surface" :class="{ 'is-compact': compact }" aria-label="学习巩固对话">
     <header class="practice-dialogue__header">
-      <p class="eyebrow practice-dialogue__eyebrow">学习巩固 · {{ task.kind_label || '实践任务' }}</p>
-      <div class="practice-dialogue__tools">
-        <div v-if="currentPhase" class="phase-progress" aria-label="巩固阶段进度">
-          <span class="phase-progress__count">{{ currentPhaseIndex + 1 }} / {{ phases.length }}</span>
-          <strong>{{ currentPhase.label }}</strong>
-          <div class="phase-progress__track"><span :style="{ width: `${phaseProgress}%` }"></span></div>
+      <div class="practice-dialogue__titlebar">
+        <p class="eyebrow practice-dialogue__eyebrow">学习巩固 · {{ task.kind_label || '实践任务' }}</p>
+        <div class="practice-dialogue__tools">
+          <!-- 会话级动作收进溢出菜单。VS Code 那边「新建对话 / 历史」也不在输入框里。 -->
+          <div class="practice-menu">
+            <button class="practice-menu__trigger" type="button" :aria-expanded="menuOpen" aria-haspopup="menu" aria-label="更多会话操作" title="更多" @click="menuOpen = !menuOpen"><Ellipsis :size="16" /></button>
+            <!-- 点外面就收起来。这里不用 focusout：菜单项一被点会先失焦，收得比点击快 -->
+            <div v-if="menuOpen" class="practice-menu__backdrop" @click="menuOpen = false"></div>
+            <ul v-if="menuOpen" class="practice-menu__list" role="menu">
+              <li><button type="button" role="menuitem" :disabled="isBusy || !sessionId" @click="endSessionFromMenu">结束本次巩固</button></li>
+            </ul>
+          </div>
         </div>
-        <!-- 提交是判分入口，四个动作里只有它配得上一块带字的按钮，所以放头部常驻可见。
-             以前它混在发送旁边，而且评价一出来整条输入区连同它一起消失。 -->
+      </div>
+
+      <!-- 教练能看到什么，得写出来。跟"新建到底建在哪儿"是同一个教训：状态不可见就只能靠猜，
+         而学生已经在问了（"能不能看到我的工作区"）。摘要取自**发送时**读的那份快照，
+         所以它说的是"这一轮教练看到的是这个"，不是"此刻编辑器里是什么" —— 两回事。
+         这一条长在 header 里而不是另起一行 grid 子元素：另起一行要动 .practice-dialogue
+         的 grid-template-rows，那是上一轮为了高度塌陷踩过坑的地方。 -->
+      <div class="practice-visibility">
         <button
-          v-if="!evaluation"
-          class="button button--secondary practice-dialogue__submit"
+          v-if="workspaceSummary.details.length"
+          class="practice-visibility__toggle"
           type="button"
-          :disabled="!canSubmit || isBusy"
-          @click="submitSolution"
+          :aria-expanded="workspaceDetailOpen"
+          @click="workspaceDetailOpen = !workspaceDetailOpen"
         >
-          <LoaderCircle v-if="isSubmitting" class="spin" :size="13" /><CheckCircle2 v-else :size="13" />提交方案
+          <Eye :size="13" />
+          <span class="practice-visibility__headline">{{ workspaceSummary.headline }}</span>
+          <component :is="workspaceDetailOpen ? ChevronUp : ChevronDown" :size="13" />
         </button>
-        <!-- 会话级动作收进溢出菜单。VS Code 那边「新建对话 / 历史」也不在输入框里。 -->
-        <div v-if="!evaluation" class="practice-menu">
-          <button class="practice-menu__trigger" type="button" :aria-expanded="menuOpen" aria-haspopup="menu" aria-label="更多会话操作" title="更多" @click="menuOpen = !menuOpen"><Ellipsis :size="16" /></button>
-          <!-- 点外面就收起来。这里不用 focusout：菜单项一被点会先失焦，收得比点击快 -->
-          <div v-if="menuOpen" class="practice-menu__backdrop" @click="menuOpen = false"></div>
-          <ul v-if="menuOpen" class="practice-menu__list" role="menu">
-            <li><button type="button" role="menuitem" :disabled="isBusy || !sessionId" @click="endSessionFromMenu">结束本次巩固</button></li>
-          </ul>
-        </div>
+        <p v-else class="practice-visibility__blind"><EyeOff :size="13" /><span>{{ workspaceSummary.headline }}</span></p>
+        <ul v-if="workspaceDetailOpen" class="practice-visibility__details">
+          <li v-for="(detail, index) in workspaceSummary.details" :key="index">{{ detail }}</li>
+        </ul>
       </div>
     </header>
 
@@ -47,27 +56,8 @@
       </div>
     </div>
 
-    <section v-if="evaluation" class="practice-evaluation" aria-live="polite">
-      <div class="practice-evaluation__head">
-        <div>
-          <p class="eyebrow">提交结果</p>
-          <strong>{{ evaluation.label }}</strong>
-          <p>{{ evaluation.passed ? '这次方案已经达到当前任务的验收线。' : '方案已经保存，下面是下一轮需要补强的地方。' }}</p>
-          <p v-if="evaluationStatus === 'reviewing'" class="practice-evaluation__note"><LoaderCircle class="spin" :size="12" />智能体正在复核这份评价，结果出来会自动更新</p>
-          <p v-else-if="evaluation.source === 'agent'" class="practice-evaluation__note"><CheckCircle2 :size="12" />已由智能体复核</p>
-        </div>
-        <strong class="practice-evaluation__score">{{ evaluation.score }}<small>分</small></strong>
-      </div>
-      <ul v-if="evaluationCriteria.length" class="practice-criteria">
-        <li v-for="item in evaluationCriteria" :key="item.label" :class="{ 'is-passed': item.passed }"><CheckCircle2 v-if="item.passed" :size="13" /><Circle v-else :size="13" />{{ item.label }}</li>
-      </ul>
-      <div class="practice-evaluation__notes">
-        <div v-if="evaluation.strengths?.length"><p class="eyebrow">已经做到</p><ul><li v-for="item in evaluation.strengths" :key="item">{{ item }}</li></ul></div>
-        <div v-if="evaluation.next_steps?.length"><p class="eyebrow">下一步</p><ul><li v-for="item in evaluation.next_steps" :key="item">{{ item }}</li></ul></div>
-      </div>
-    </section>
     <p v-if="errorMessage" class="practice-error" role="status">{{ errorMessage }}</p>
-    <form v-if="!evaluation && currentPhase" class="practice-composer" @submit.prevent="sendMessage()">
+    <form v-if="!isLoadingSession" class="practice-composer" @submit.prevent="sendMessage()">
       <!-- 提示本质是预设提问（它发的就是一句固定话术，见 requestHint），所以做成一角建议，
            不跟发送并排。VS Code 那边同类东西走 `/` 命令，这里退一步用建议角更直白。
            顺带修掉 hintIsProminent 的老毛病：同一个位置按 support_level 在 quiet/secondary
@@ -76,12 +66,12 @@
         <Lightbulb :size="13" />{{ hintIsProminent ? '先要一个提示' : '要一个提示' }}
       </button>
 
-      <div class="practice-composer__box">
+      <div ref="composerBox" class="practice-composer__box">
         <label class="sr-only" for="practice-answer">你的方案思考</label>
-        <textarea id="practice-answer" v-model="draft" rows="3" maxlength="1800" :disabled="isLoadingSession || isSubmitting" :placeholder="`围绕“${currentPhase.label}”写下你的判断…`" @keydown.ctrl.enter.prevent="sendMessage()" @keydown.meta.enter.prevent="sendMessage()"></textarea>
+        <textarea ref="composerInput" id="practice-answer" v-model="draft" rows="1" maxlength="1800" :disabled="isLoadingSession" placeholder="写下你的判断…（Ctrl + Enter 发送）" @keydown.ctrl.enter.prevent="sendMessage()" @keydown.meta.enter.prevent="sendMessage()"></textarea>
         <!-- 发送和停止是同一个位置的两个状态。以前流式期间只是把发送置灰，
              等于用户根本没有中断手段。 -->
-        <button v-if="!isStreaming" class="practice-send" type="submit" :disabled="!draft.trim() || isLoadingSession || isSubmitting" aria-label="发送" title="发送（Ctrl + Enter）"><Send :size="16" /></button>
+        <button v-if="!isStreaming" class="practice-send" type="submit" :disabled="!draft.trim() || isLoadingSession" aria-label="发送" title="发送（Ctrl + Enter）"><Send :size="16" /></button>
         <button v-else class="practice-send practice-send--stop" type="button" aria-label="停止生成" title="停止生成" @click="stopStreaming"><Square :size="13" /></button>
       </div>
     </form>
@@ -89,11 +79,12 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { CheckCircle2, Circle, Ellipsis, Lightbulb, LoaderCircle, Send, Square } from 'lucide-vue-next'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { ChevronDown, ChevronUp, Ellipsis, Eye, EyeOff, Lightbulb, Send, Square } from 'lucide-vue-next'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { advancedLearningApi } from '@/shared/api/advancedLearningApi'
 import { renderMarkdown } from '@/shared/lib/markdown'
+import { describeWorkspaceSnapshot } from './workspace/workspaceSnapshot'
 
 const props = defineProps({
   pathId: { type: [Number, String], required: true },
@@ -104,25 +95,19 @@ const props = defineProps({
   // 放进 IDE 右栏时打开。默认布局按视口宽度决定几栏，而右栏宽度和视口无关 ——
   // 视口 1440px 时这个组件的容器只有 420px，媒体查询根本不会触发，两栏会挤成一栏宽。
   compact: { type: Boolean, default: false },
+  // 读学生工作区快照的函数，由页面持有（见 AdvancedLearningPage.readWorkspaceSnapshot）。
+  // **它是函数不是对象**：快照只在"按下发送那一刻"取才有意义，而正文随每次击键变，
+  // 做成响应式 prop 会让这个组件每敲一个字符就重渲染一次。别"顺手"改成响应式数据。
+  workspaceReader: { type: Function, default: null },
 })
-const emit = defineEmits(['end', 'completed'])
+const emit = defineEmits(['end'])
 
-// 阶段列表由**服务端**下发（session.phases）—— 阶段词汇跟着任务类型走（案例诊断 /
-// 迁移练习 / 项目实训各一套 4 阶段），这里以前抄了一份全局 6 阶段，于是三种任务的
-// 操作方式一字不差。词汇只能有一处，所以这里是空的，等会话加载。
-const phases = ref([])
-// 会话还没加载完（或加载失败）时没有当前阶段，读它的地方都要有守卫。
-const currentPhase = ref(null)
-const completedPhaseIds = ref([])
 const messages = ref([])
 const draft = ref('')
 const errorMessage = ref('')
 const isStreaming = ref(false)
 const isLoadingSession = ref(false)
-const isSubmitting = ref(false)
 const sessionId = ref('')
-const evaluation = ref(null)
-const evaluationStatus = ref('none')
 const confirmedFacts = ref([])
 const assumptions = ref([])
 const messageList = ref(null)
@@ -131,34 +116,63 @@ const openingPending = ref(false)
 let requestController = null
 let openingController = null
 let sessionLoadVersion = 0
-// 提交后先拿到一份确定性评价（不用等），智能体的复核在后台跑完会覆盖它 ——
-// 判分实测要几十秒，而 httpClient 超时只有 15 秒，所以同步判分必然失败。
-const EVALUATION_POLL_INTERVAL_MS = 3000
-const EVALUATION_POLL_MAX_TRIES = 40
-let evaluationPoll = 0
-let evaluationTries = 0
-const currentPhaseIndex = computed(() => phases.value.findIndex((phase) => phase.id === currentPhase.value?.id))
-// 四个评分维度的 label 由服务端给（判分器只填 passed），前端不自己拼一份
-const evaluationCriteria = computed(() => (Array.isArray(evaluation.value?.criteria) ? evaluation.value.criteria : []))
-const phaseProgress = computed(() => (
-  phases.value.length ? Math.round((completedPhaseIds.value.length / phases.value.length) * 100) : 0
-))
-const canSubmit = computed(() => messages.value.some((message) => message.role === 'user' && message.text?.trim()))
 // 支持强度决定提示的分量：引导练习（high）把提示摆在明面上，开放挑战（low）保持低调 ——
 // 这两种任务本来就该由不同分量的脚手架陪着做。
 const hintIsProminent = computed(() => props.task?.support_level === 'high')
-// 三个按钮原来各自写一遍「流式中 / 会话加载中 / 提交中」的禁用条件，口径迟早会分叉。
-const isBusy = computed(() => isStreaming.value || isLoadingSession.value || isSubmitting.value)
+const isBusy = computed(() => isStreaming.value || isLoadingSession.value)
 const menuOpen = ref(false)
+// 本轮教练能看到的工作区。**只在发送时（含开场轮）刷新** —— 页头那条提示显示的就是
+// 这一份，语义是"这一轮教练看到的是这个"，不是"此刻编辑器里是什么"。
+// 会话恢复后也要读一次：否则还没发过话时会显示成"看不到"，而学生明明已经打开了文件夹。
+const workspaceShown = ref({ available: false })
+const workspaceDetailOpen = ref(false)
+const workspaceSummary = computed(() => describeWorkspaceSnapshot(workspaceShown.value))
+const composerInput = ref(null)
+const composerBox = ref(null)
+// 输入框高度跟着内容长。原来写死 height: 62px + resize: none，学生写长一点就只能在
+// 那个小框里滚，看不到自己写了什么 —— 而这个练习的答案本来就是成段的。
+const COMPOSER_MIN_HEIGHT = 62
+const COMPOSER_MAX_HEIGHT = 200
+
+function growComposer() {
+  const el = composerInput.value
+  if (!el) return
+  // 先归零再量 scrollHeight：不归零的话量到的是「当前高度」，只会越涨越高、缩不回去。
+  el.style.height = 'auto'
+  // box-sizing 是 border-box，scrollHeight 不含上下边框，补回来（否则短一行就出滚动条）
+  const needed = el.scrollHeight + 2
+  el.style.height = `${Math.min(Math.max(needed, COMPOSER_MIN_HEIGHT), COMPOSER_MAX_HEIGHT)}px`
+  el.style.overflowY = needed > COMPOSER_MAX_HEIGHT ? 'auto' : 'hidden'
+}
+
+// 右栏宽度是用户拖出来的。拖窄之后同一段文字会重排成更多行，而上面那个 watch 只在
+// 草稿变化时量高度 —— 不动键盘只拖分隔条，框不会跟着长，文字就被挤进滚动条里。
+// 所以再盯一层容器宽度：只在**宽度**变了时才重量，不然 growComposer 改高度会把
+// 观察器自己再触发一次，转成死循环。
+//
+// 盯的是 composerBox 这个 ref 而不是 onMounted —— 输入区是 v-if="!isLoadingSession"
+// 渲染的，挂载那一刻它还不存在，挂上去等于挂了个 null（实测拖窄之后文字照样被截）。
+let composerResizeObserver = null
+
+watch(composerBox, (el) => {
+  composerResizeObserver?.disconnect()
+  composerResizeObserver = null
+  if (!el || typeof ResizeObserver === 'undefined') return
+  let lastWidth = el.clientWidth
+  composerResizeObserver = new ResizeObserver(() => {
+    if (el.clientWidth === lastWidth) return
+    lastWidth = el.clientWidth
+    growComposer()
+  })
+  composerResizeObserver.observe(el)
+  // 元素刚出现时也量一次（此时草稿可能是恢复出来的历史内容）
+  nextTick(growComposer)
+})
 
 function resetConversation() {
   requestController?.abort()
   requestController = null
   abortOpening()
-  clearEvaluationPoll()
-  phases.value = []
-  currentPhase.value = null
-  completedPhaseIds.value = []
   // 开场那句不在这里造。以前这里抄了一份和后来服务端一样的话，两处各自漂移 ——
   // 学生看到的第一句和库里存的对不上。现在只有服务端种（见 practice_service
   // ._welcome_message），前端负责让教练把它换成真的读过任务的那一句。
@@ -167,16 +181,9 @@ function resetConversation() {
   draft.value = ''
   errorMessage.value = ''
   isStreaming.value = false
-  isSubmitting.value = false
   sessionId.value = ''
-  evaluation.value = null
-  evaluationStatus.value = 'none'
   confirmedFacts.value = []
   assumptions.value = []
-}
-
-function clearEvaluationPoll() {
-  if (evaluationPoll) { window.clearTimeout(evaluationPoll); evaluationPoll = 0 }
 }
 
 // 开场那一轮不占 isStreaming：学生不该为了看教练开口而等 —— 种下的那句开场已经
@@ -186,39 +193,12 @@ function abortOpening() {
   openingController = null
 }
 
-// 服务端的评价还在复核时轮询它。取不到就等下一轮 —— 界面上那份基线评价一直是有效的，
-// 轮询失败不该把它变成错误态。
-function scheduleEvaluationPoll() {
-  clearEvaluationPoll()
-  if (evaluationStatus.value !== 'reviewing' || !sessionId.value) return
-  if (evaluationTries >= EVALUATION_POLL_MAX_TRIES) return
-  evaluationPoll = window.setTimeout(async () => {
-    evaluationTries += 1
-    try {
-      hydrateSession(unwrap(await advancedLearningApi.getPracticeSession(sessionId.value)))
-    } catch {
-      // 忽略：下一轮再试，或者用户在别处已经看到基线评价
-    }
-    scheduleEvaluationPoll()
-  }, EVALUATION_POLL_INTERVAL_MS)
-}
-
 function unwrap(response) {
   return response?.data?.data ?? response?.data ?? response
 }
 
 function hydrateSession(session) {
   sessionId.value = String(session?.session_id || '')
-  // 阶段词汇由服务端给（跟着任务类型走）。拿不到就保留空数组 —— 宁可少显示一块，
-  // 也不要让前端自己编一套词汇出来，那样进度会落在服务端不认识的 id 上。
-  phases.value = Array.isArray(session?.phases)
-    ? session.phases.filter((phase) => phase && phase.id && phase.label)
-    : []
-  const phase = phases.value.find((item) => item.id === session?.current_phase)
-  currentPhase.value = phase || phases.value[0] || null
-  completedPhaseIds.value = Array.isArray(session?.completed_phase_ids)
-    ? session.completed_phase_ids.filter((id) => phases.value.some((item) => item.id === id))
-    : []
   const restoredMessages = Array.isArray(session?.messages)
     ? session.messages.filter((message) => message && ['user', 'assistant'].includes(message.role) && String(message.text || '').trim())
     : []
@@ -226,8 +206,6 @@ function hydrateSession(session) {
   openingPending.value = Boolean(session?.opening_pending)
   confirmedFacts.value = Array.isArray(session?.confirmed_facts) ? session.confirmed_facts : []
   assumptions.value = Array.isArray(session?.assumptions) ? session.assumptions : []
-  evaluation.value = session?.evaluation || null
-  evaluationStatus.value = session?.evaluation_status || 'none'
 }
 
 async function initializeSession() {
@@ -244,6 +222,9 @@ async function initializeSession() {
     })
     if (loadVersion !== sessionLoadVersion) return
     hydrateSession(unwrap(response))
+    // 恢复出来的老会话不会走开场那一轮（见下面 requestOpening 的守卫），所以这里得自己
+    // 读一次 —— 否则页头会显示"教练看不到你的文件"，而学生明明已经打开了文件夹。
+    readWorkspaceShown()
     await scrollToLatest()
     // 新会话（学生还没说过话）才让教练开口；老会话里开场早就生成过了。
     void requestOpening()
@@ -258,39 +239,21 @@ async function initializeSession() {
 
 function sessionPayload() {
   return {
-    current_phase: currentPhase.value?.id || '',
-    completed_phase_ids: completedPhaseIds.value,
     messages: messages.value.map((message) => ({ role: message.role, text: message.text })),
     confirmed_facts: confirmedFacts.value,
     assumptions: assumptions.value,
   }
 }
 
-// 阶段进度是服务端的账本：`completed_phase_ids` 由智能体回复里的 [[PHASE:done]] 标记
-// 推进，客户端传的值服务端会忽略。这里只做展示同步。
-function applyPhaseState(state) {
-  const ids = Array.isArray(state?.completed_phase_ids)
-    ? state.completed_phase_ids.filter((id) => phases.value.some((item) => item.id === id))
-    : null
-  if (ids) completedPhaseIds.value = ids
-  const phase = phases.value.find((item) => item.id === state?.current_phase)
-  if (phase) currentPhase.value = phase
-}
-
+// 保存只做持久化，不再拿返回值回写任何进度 —— 阶段账本已经删掉了。
 async function saveSessionState() {
-  if (!sessionId.value || evaluation.value) return
-  const saved = unwrap(await advancedLearningApi.savePracticeSession(sessionId.value, sessionPayload()))
-  // 用服务端返回的状态校准本地：这次回复可能没有触发标记，服务端手里才是真实进度。
-  if (saved?.session_id) applyPhaseState(saved)
+  if (!sessionId.value) return
+  await advancedLearningApi.savePracticeSession(sessionId.value, sessionPayload())
 }
-
-// 阶段由服务端推进（智能体回复里的 [[PHASE:done]]），前端不再提供手动跳转 ——
-// 原来那个可点的阶段列表已经删掉，头部只读显示当前进度。
 
 
 function requestHint() {
-  if (!currentPhase.value) return
-  sendMessage(`请围绕“${currentPhase.value.label}”给我一个不直接泄露答案的提示。`, { advancesPhase: false })
+  sendMessage(`请围绕“${props.task.title}”给我一个不直接泄露答案的提示。`)
 }
 
 // 中断当前这一轮。开场白也算一轮 —— 它虽然不占 requestController，但同样是用户在等的一段回复。
@@ -310,25 +273,43 @@ async function scrollToLatest() {
   if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight
 }
 
-function practiceSegment(advancesPhase) {
-  // 阶段名一定来自服务端下发的那份（跟着任务类型走），本地不认词汇表。
-  const phaseLabel = currentPhase.value?.label || ''
+// 主讲材料有两条路进上下文：服务端按本次提问挑出的相关段落（带 resource_id 时，
+// 见 classroom_chat._build_classroom_path_context），和这里客户端截一段塞进 script。
+// 同一份教材喂两遍是纯浪费 —— 服务端那份更强（按问题选段、预算 3600 对我们这 1200、
+// 而且是权威副本）。所以只在**服务端拿不到**的时候才带这一份。
+function clientChapterSummary() {
+  if (props.resourceId) return ''
+  return props.chapterContent ? `主讲材料摘要：${props.chapterContent.slice(0, 1200)}` : '当前没有可用主讲材料'
+}
+
+// 分段信息里不再有 phase / phase_advance —— 阶段账本已经删掉了。服务端那侧
+// `_compose_user_prompt` 取不到 phase 时会兜底成"当前阶段"（见 classroom_chat），
+// 所以这里少传两个字段不会让教练失语，只是不再有"把学生引进第 N 步"的框架。
+//
+// `workspace` 是**发送这一刻**现取的工作区只读快照（见 workspaceReader）。永远给一份
+// 带 available 字段的对象，绝不漏字段 —— 让后端去猜"这个键为什么没有"是丢信息的做法。
+function practiceSegment() {
+  readWorkspaceShown()
   return {
     id: `practice-${props.task.id}`,
     type: 'practice',
     title: props.task.title,
-    phase: phaseLabel,
-    // 请求提示这一轮不该记进度，服务端据此不认这一轮的阶段标记。
-    phase_advance: advancesPhase !== false,
-    script: [props.task.brief, props.task.problem, `当前阶段：${phaseLabel}`, `重点能力：${props.task.focus}`, `验收标准：${(props.task.criteria || []).join('；')}`, props.chapterContent ? `主讲材料摘要：${props.chapterContent.slice(0, 1200)}` : '当前没有可用主讲材料'].filter(Boolean).join('\n'),
+    script: [props.task.brief, props.task.problem, `重点能力：${props.task.focus}`, `验收标准：${(props.task.criteria || []).join('；')}`, clientChapterSummary()].filter(Boolean).join('\n'),
     points: (props.task.constraints || []).slice(0, 6),
-    question: { prompt: `请围绕${phaseLabel}推进任务。` },
+    question: { prompt: '请围绕这个任务推进对话。' },
+    workspace: workspaceShown.value,
   }
 }
 
-// 学生发言和教练开场走的是同一条流式接口，只有 scenario 和 segment 上的开关不同
+// 读一份新的工作区快照，同时把它记下来给页头那条提示用 —— 两处必须是同一份，
+// 否则"教练看到的是这个"就和实际发出去的请求对不上了。
+function readWorkspaceShown() {
+  workspaceShown.value = props.workspaceReader?.() ?? { available: false }
+}
+
+// 学生发言和教练开场走的是同一条流式接口，只有 scenario 不同
 // （服务端按 scenario 拼提示词，见 classroom_chat._compose_user_prompt）。
-function streamCoachReply({ scenario, text, advancesPhase, signal, onChunk }) {
+function streamCoachReply({ scenario, text, signal, onChunk }) {
   return fundamentalsApi.streamAssistantReply({
     path_id: Number(props.pathId),
     node_id: Number(props.nodeId),
@@ -336,13 +317,10 @@ function streamCoachReply({ scenario, text, advancesPhase, signal, onChunk }) {
     practice_session_id: sessionId.value,
     scenario,
     text,
-    segment: practiceSegment(advancesPhase),
+    segment: practiceSegment(),
   }, (event) => {
     if (event?.error) throw new Error(event.error)
-    if (event?.type === 'phase') {
-      applyPhaseState(event)
-      return
-    }
+    // 服务端仍会推 type='phase' 的进度事件（阶段机留在后端没动），这里直接忽略。
     if ((event?.type === 'chunk' || event?.type === 'content') && event.content) onChunk(String(event.content))
   }, signal)
 }
@@ -351,9 +329,8 @@ function streamCoachReply({ scenario, text, advancesPhase, signal, onChunk }) {
 // 任务内容。真正"读过任务再开口"的是教练，以前要等学生先说一句才会被调用 ——
 // 于是第一问永远是同一句通用话术，学生看完只能回"你在说啥"。现在把它提前到第一轮。
 async function requestOpening() {
-  // 没有当前阶段就没法告诉教练"把他引进哪一步" —— 服务端没给阶段列表时宁可不开口。
-  if (!openingPending.value || !sessionId.value || !currentPhase.value) return
-  if (isStreaming.value || isSubmitting.value || evaluation.value) return
+  if (!openingPending.value || !sessionId.value) return
+  if (isStreaming.value) return
   openingPending.value = false
   let bubble = messages.value[messages.value.length - 1]
   if (!bubble || bubble.role !== 'assistant') {
@@ -395,9 +372,9 @@ async function requestOpening() {
   }
 }
 
-async function sendMessage(forcedText = '', options = { advancesPhase: true }) {
+async function sendMessage(forcedText = '') {
   const text = String(forcedText || draft.value).trim()
-  if (!text || isStreaming.value || isLoadingSession.value || isSubmitting.value || !sessionId.value || evaluation.value) return
+  if (!text || isStreaming.value || isLoadingSession.value || !sessionId.value) return
   // 学生先开口就把教练那一轮掐掉：种下的开场已经够他回答，而两路回复会交叉着落到
   // 同一条气泡上。
   abortOpening()
@@ -414,7 +391,6 @@ async function sendMessage(forcedText = '', options = { advancesPhase: true }) {
     await streamCoachReply({
       scenario: 'practice',
       text,
-      advancesPhase: options.advancesPhase,
       signal: requestController.signal,
       onChunk: (content) => {
         responseMessage.text += content
@@ -422,8 +398,6 @@ async function sendMessage(forcedText = '', options = { advancesPhase: true }) {
       },
     })
     if (!responseMessage.text.trim()) throw new Error('LearnMate 暂时没有返回有效追问')
-    // 阶段推进交给服务端：它读智能体回复末尾的 [[PHASE:done]] 标记（见 applyPhaseState）。
-    // 这里以前会无条件 advancePhase()，等于学生每说一句话就自动过一关。
     await saveSessionState()
   } catch (error) {
     if (error.name === 'AbortError') return
@@ -438,7 +412,7 @@ async function sendMessage(forcedText = '', options = { advancesPhase: true }) {
 }
 
 async function endSession() {
-  if (!sessionId.value || isStreaming.value || isSubmitting.value) return
+  if (!sessionId.value || isStreaming.value) return
   abortOpening()
   errorMessage.value = ''
   try {
@@ -452,34 +426,19 @@ async function endSession() {
   }
 }
 
-async function submitSolution() {
-  if (!sessionId.value || !canSubmit.value || isStreaming.value || isSubmitting.value || evaluation.value) return
-  abortOpening()
-  isSubmitting.value = true
-  errorMessage.value = ''
-  const finalSubmission = draft.value.trim() || [...messages.value].reverse().find((message) => message.role === 'user')?.text || ''
-  try {
-    const response = await advancedLearningApi.submitPracticeSession(sessionId.value, {
-      ...sessionPayload(),
-      final_submission: finalSubmission,
-    })
-    const saved = unwrap(response)
-    hydrateSession(saved)
-    emit('completed', saved?.evaluation || null)
-    scheduleEvaluationPoll()
-  } catch (error) {
-    errorMessage.value = error.response?.data?.detail || error.message || '方案提交失败，请稍后重试。'
-  } finally {
-    isSubmitting.value = false
-  }
-}
+// 草稿一变就重新量高度。监听而不是只挂在 @input 上，是因为发完之后 draft 被清空 ——
+// 只处理输入事件的话，框会停在上一句撑开的高度上缩不回去。
+watch(draft, () => nextTick(growComposer))
+// 输入区出现前的那段时间也要能量一次（会话加载中它还不存在）
+onMounted(() => nextTick(growComposer))
 
 watch(() => props.task?.id, () => { void initializeSession() }, { immediate: true })
 onBeforeUnmount(() => {
   sessionLoadVersion += 1
   requestController?.abort()
   abortOpening()
-  clearEvaluationPoll()
+  composerResizeObserver?.disconnect()
+  composerResizeObserver = null
 })
 </script>
 
@@ -493,38 +452,31 @@ onBeforeUnmount(() => {
   display: grid;
   height: clamp(430px, calc(100vh - 330px), 700px);
   min-height: 0;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
 }
 
 /* ── 头部 ───────────────────────────────────────────── */
 .practice-dialogue__header {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  padding: 11px 15px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfcfa;
+}
+/* 标题那一行原样保留，只是外面多包了一层：页头还要纵向放下"教练能看到什么"那一条，
+   而它不该挤进标题行。这样也不必去动 .practice-dialogue 的 grid-template-rows ——
+   那是上一轮为高度塌陷踩过坑的地方（可选行会把它下面的行错位）。 */
+.practice-dialogue__titlebar {
   display: flex;
   min-width: 0;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 11px 15px;
-  border-bottom: 1px solid var(--line);
-  background: #fbfcfa;
 }
 .practice-dialogue__eyebrow { margin: 0; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .practice-dialogue__tools { display: flex; min-width: 0; flex: 0 0 auto; align-items: center; gap: 8px; }
-.phase-progress {
-  display: grid;
-  flex: 0 1 150px;
-  gap: 4px;
-  min-width: 0;
-  max-width: 170px;
-  padding: 5px 9px;
-  border: 1px solid #d7e3c9;
-  border-radius: 6px;
-  background: #f3f8ea;
-  color: var(--accent-deep);
-  font-size: 10px;
-  line-height: 1.35;
-}
-.phase-progress strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 提交按钮比全局 .button 矮一档 —— 它是页头里的一枚控件，不是页面级主按钮，
    40px 的全局高度会把这一行撑得比面板标题还重。 */
 .practice-dialogue__submit { flex: 0 0 auto; min-height: 30px; padding: 0 11px; gap: 6px; font-size: 11px; }
@@ -536,10 +488,49 @@ onBeforeUnmount(() => {
 .practice-menu__list button { width: 100%; padding: 8px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font-size: 12px; text-align: left; }
 .practice-menu__list button:hover:not(:disabled) { background: #f1f6eb; color: var(--accent-deep); }
 .practice-menu__list button:disabled { color: var(--muted); cursor: not-allowed; }
-.phase-progress__count { color: var(--muted); font-size: 10px; }
-.phase-progress strong { font-size: 11px; }
-.phase-progress__track { height: 4px; overflow: hidden; border-radius: 99px; background: #dfe9d4; }
-.phase-progress__track span { display: block; height: 100%; border-radius: inherit; background: var(--accent-deep); transition: width .25s ease; }
+
+/* ── 教练能看到什么（页头第二行）────────────────────────
+   一条常驻的窄条。它在说"这一轮教练看到的是这个" —— 与学生猜的那件事直接对应，
+   所以不藏进菜单、也不做成悬浮提示。 */
+.practice-visibility { min-width: 0; }
+.practice-visibility__toggle,
+.practice-visibility__blind {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f6f9f2;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: left;
+}
+.practice-visibility__toggle { cursor: pointer; }
+.practice-visibility__toggle:hover { border-color: #c8d9b7; background: #f1f6eb; color: var(--accent-deep); }
+.practice-visibility__blind { border-style: dashed; background: transparent; }
+.practice-visibility__toggle svg,
+.practice-visibility__blind svg { flex: 0 0 auto; }
+.practice-visibility__toggle svg { color: var(--accent-deep); }
+/* 文案可能很长（文件多、名字长），截断而不是换行 —— 它是一行摘要，展开看细节。 */
+.practice-visibility__headline { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.practice-visibility__details {
+  display: grid;
+  gap: 3px;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+  list-style: none;
+}
 
 /* ── 消息区 ─────────────────────────────────────────── */
 .practice-dialogue__body { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr); overflow: hidden; }
@@ -603,10 +594,13 @@ onBeforeUnmount(() => {
 .practice-composer textarea {
   display: block;
   width: 100%;
+  /* 高度由 growComposer() 按内容算（见脚本）。这里只兜底 min/max：JS 没跑起来时
+     也不至于塌成一条线；resize: none 是因为手动拖拽会和自动高度打架。 */
   height: 62px;
   min-height: 62px;
-  max-height: 120px;
+  max-height: 200px;
   resize: none;
+  overflow-y: hidden;
   padding: 10px 48px 10px 12px;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -625,55 +619,22 @@ onBeforeUnmount(() => {
 .practice-dialogue .button--secondary { border-color: #d5e2c8; background: #eef5e6; color: var(--accent-deep); }
 .practice-dialogue .button--secondary:hover { border-color: #b9c9b2; background: #e3eed9; }
 
-/* ── 提交结果 ───────────────────────────────────────── */
-.practice-evaluation { display: grid; max-height: 164px; min-height: 0; gap: 8px; overflow-y: auto; padding: 12px 20px; border-top: 1px solid var(--line); background: #f3f8ea; }
-.practice-evaluation__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-.practice-evaluation .eyebrow { margin-bottom: 5px; }
-.practice-evaluation__head > div > strong { color: var(--accent-deep); font-size: 15px; }
-.practice-evaluation p:not(.eyebrow) { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
-.practice-evaluation__note { display: flex; align-items: center; gap: 5px; }
-.practice-evaluation__score { flex: 0 0 auto; color: var(--accent-deep); font-size: 30px; line-height: 1; }
-.practice-evaluation__score small { margin-left: 3px; font-size: 11px; }
-/* 四个维度的判定：这是判分器真正算出来的东西，之前算完就丢了 */
-.practice-criteria { display: flex; flex-wrap: wrap; gap: 7px; margin: 0; padding: 0; list-style: none; }
-.practice-criteria li { display: flex; align-items: center; gap: 4px; padding: 4px 9px; border: 1px solid #dfe6d8; border-radius: 99px; background: #fff; color: var(--muted); font-size: 11px; }
-.practice-criteria li.is-passed { border-color: #c8d9b7; background: #eef5e6; color: var(--accent-deep); }
-.practice-evaluation__notes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 20px; }
-.practice-evaluation__notes ul { display: grid; gap: 5px; margin: 0; padding-left: 17px; color: var(--muted); font-size: 11px; line-height: 1.5; }
-
 /* ── 紧凑模式：放进 IDE 右半屏 ──────────────────────────
    高度撑满容器（由外层栅格决定），而不是按视口算出来的那个 clamp。 */
 .practice-dialogue.is-compact { height: 100%; min-height: 0; border-radius: 14px; }
-.practice-dialogue.is-compact .phase-progress { flex: 0 1 170px; }
 .practice-dialogue.is-compact .practice-messages { padding: 16px; }
 .practice-dialogue.is-compact .practice-message { max-width: 100%; }
-.practice-dialogue.is-compact .practice-evaluation { max-height: 190px; padding: 12px 15px; }
-.practice-dialogue.is-compact .practice-evaluation__notes { grid-template-columns: 1fr; }
 
 @keyframes pulse { 0%, 60%, 100% { opacity: .3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin .8s linear infinite; }
 
-/* 面板宽度是用户拖出来的，跟视口无关 —— 所以头部按**容器**宽度退化，不是按媒体查询。
-   实测拖到 302px 时：眉标 + 阶段进度 + 提交 + 溢出菜单一行放不下，会顶出右边界。 */
-.practice-dialogue { container-type: inline-size; }
-@container (max-width: 430px) {
-  /* 眉标是三者里唯一冗余的（上面任务条已经写着任务类型），先撤它 */
-  .practice-dialogue__eyebrow { display: none; }
-  .practice-dialogue__tools { flex: 1; justify-content: flex-end; }
-  .phase-progress { flex: 1 1 auto; max-width: none; }
-}
-@container (max-width: 300px) {
-  /* 再窄就只剩提交和菜单；阶段进度退化成一行小字，描述性的进度条让位给可操作的东西 */
-  .phase-progress { padding: 4px 7px; }
-  .phase-progress__track { display: none; }
-  .practice-dialogue__submit { padding: 0 9px; }
-}
+/* 这里原来有一组 @container 查询，是因为头部挤着眉标 + 阶段进度 + 提交 + 溢出菜单四样，
+   面板拖到 302px 就会顶出右边界。现在头部只剩眉标（可省略号）+ 一个菜单按钮，
+   任何宽度都放得下 —— 容器查询连同 container-type 一起撤掉，别留着做无用功。 */
 
 @media (max-width: 780px) {
   .practice-dialogue { height: clamp(420px, calc(100vh - 300px), 620px); }
   .practice-messages { min-height: 360px; }
-  .practice-evaluation { padding: 15px 18px; }
-  .practice-evaluation__notes { grid-template-columns: 1fr; }
 }
 </style>
