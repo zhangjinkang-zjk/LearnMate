@@ -28,7 +28,11 @@
           <span aria-hidden="true">↗</span>
         </button>
       </div>
-      <p v-if="isPreparing" class="summary-status">正在根据你的方向拆分科目并准备学习路径，完成后会自动进入学习概览。</p>
+      <p v-if="isPreparing" class="summary-status">
+        <span>正在根据你的方向拆分科目并准备学习路径，完成后会自动进入学习概览。</span>
+        <!-- 前 3 秒不显示：一闪而过的秒数只是噪音。之后它替学生回答"是不是卡住了"。 -->
+        <span v-if="pathElapsedSeconds >= 3" class="summary-status__elapsed">已等待 {{ pathElapsedSeconds }} 秒</span>
+      </p>
       <p v-if="portraitError" class="summary-error" role="alert">{{ portraitError }}</p>
       <p v-if="generationError" class="summary-error" role="alert">{{ generationError }}</p>
     </section>
@@ -180,6 +184,79 @@ const hasOverviewContent = overview => Boolean(
   (Array.isArray(overview?.subjects) && overview.subjects.some(subject => subject?.id || subject?.name)),
 )
 
+// 等路径落库。
+//
+// 生成路径是一次长任务：一条路径要跑完整张图才落库，实测 105-185 秒。服务端现在**不等**它
+// —— POST /path/generate-from-direction 几百毫秒就返回"已排上队"，所以前端也不能靠一个长
+// 请求去等，只能去问。
+//
+// 问的是 /path/list（两次读库），**不是 /study/overview**：概览每次都要重算六维雷达，
+// 5 秒一次的轮询会把它压垮。等到了再读一次概览做最终确认。
+const PATH_WAIT_TIMEOUT_MS = 240000
+const PATH_POLL_INTERVAL_MS = 5000
+
+const wait = ms => new Promise(resolve => { window.setTimeout(resolve, ms) })
+
+async function waitForFirstPath() {
+  const deadline = Date.now() + PATH_WAIT_TIMEOUT_MS
+  while (!isDisposed && Date.now() < deadline) {
+    try {
+      const paths = unwrap(await learningApi.listPaths())
+      if (Array.isArray(paths) && paths.some(path => path?.path_id)) return true
+    } catch {
+      // 服务端正忙着生成，这一两次读不到很正常，继续等。
+    }
+    await wait(PATH_POLL_INTERVAL_MS)
+  }
+  return false
+}
+
+// 这段等待去不掉，能做的只是把它变可见。**不画进度条**：进度是编的，秒数是真的
+// （和诊断页同一处理）。
+const pathElapsedSeconds = ref(0)
+let pathElapsedTimer = null
+
+function startPathWaiting() {
+  stopPathWaiting()
+  const startedAt = Date.now()
+  pathElapsedSeconds.value = 0
+  pathElapsedTimer = window.setInterval(() => {
+    pathElapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000)
+  }, 1000)
+}
+
+function stopPathWaiting() {
+  if (pathElapsedTimer !== null) {
+    window.clearInterval(pathElapsedTimer)
+    pathElapsedTimer = null
+  }
+}
+
+// 页面被卸载（比如点了「修改回答」）之后继续轮询是没意义的：既没人看，结束时的跳转还会
+// 把用户从他自己选的地方拽走。
+let isDisposed = false
+
+// 排队 → 等第一条路径落库。
+// 返回 null = 可以进概览了；返回字符串 = 要显示给学生的原因，且不该继续往下走。
+async function prepareLearningPaths() {
+  try {
+    // 这个接口**只负责排队**：整批路径生成交给后台就返回（几百毫秒），不再同步等第一条跑完。
+    // 所以这里拿不到 paths，也不该拿 —— "好了没有"是下面那个轮询回答的。
+    await learningApi.generatePathsFromDirection(directionValue.value, goalValue.value)
+  } catch (error) {
+    // 有 response = 服务端明确回了话（400 没有可用方向 / 503…），那是真失败，照实报。
+    // 没有 response = 我们自己没等到答复（超时/断连）。**服务端没有停** —— 它多半已经把生成
+    // 排上队了，所以不在这里判它死刑，接着往下等。
+    if (error?.response) return error.response.data?.detail || '学习路径生成失败，请重试。'
+  }
+
+  // 路径还没落库就跳过去，概览只会显示"还在生成中"，等于把人丢在那儿干等 —— 等到有为止。
+  if (!(await waitForFirstPath())) {
+    return '学习路径还在生成中。稍等片刻后重新点「确认画像」即可 —— 已经生成好的那条会被直接复用，不会重来一遍。'
+  }
+  return null
+}
+
 const confirmProfile = async () => {
   if (!isComplete.value || isPreparing.value || isGeneratingPortrait.value) return
   isPreparing.value = true
@@ -192,14 +269,15 @@ const confirmProfile = async () => {
   if (goalValue.value) learningState.goal = goalValue.value
   persistLearningProfile()
 
+  startPathWaiting()
   try {
-    const response = await learningApi.generatePathsFromDirection(directionValue.value, goalValue.value)
-    const generated = unwrap(response)
-    const paths = Array.isArray(generated?.paths) ? generated.paths : []
-    const readyPath = paths.find(path => path && path.path_id)
-    if (!readyPath) throw new Error('学习路径暂未生成成功，请稍后重试')
+    const failureReason = await prepareLearningPaths()
+    if (failureReason) {
+      generationError.value = failureReason
+      return
+    }
 
-    // 路径生成完成后再读取一次概览快照，确保进入页面时目标、科目和节点已经可用。
+    // 路径就绪后再读一次概览快照，确保进入页面时目标、科目和节点都已经可用。
     const overview = unwrap(await learningApi.getOverview())
     if (!hasOverviewContent(overview)) throw new Error('学习概览暂未准备完成，请稍后重试')
 
@@ -213,6 +291,7 @@ const confirmProfile = async () => {
   } catch (error) {
     generationError.value = error?.response?.data?.detail || error?.message || '学习路径生成失败，请重试。'
   } finally {
+    stopPathWaiting()
     isPreparing.value = false
   }
 }
@@ -223,7 +302,9 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  isDisposed = true
   if (streamTimer) window.clearTimeout(streamTimer)
+  stopPathWaiting()
 })
 </script>
 
@@ -369,7 +450,9 @@ onBeforeUnmount(() => {
   line-height: 1.6;
 }
 
-.summary-status { color: rgba(243, 240, 231, 0.72); }
+.summary-status { display: flex; flex-wrap: wrap; gap: 10px; color: rgba(243, 240, 231, 0.72); }
+/* 等宽数字：秒数从 9 跳到 10 时宽度不变，整行文字不会左右抽动 */
+.summary-status__elapsed { font-variant-numeric: tabular-nums; color: rgba(226, 244, 82, 0.75); }
 .summary-error { color: #ffb5a8; }
 
 .summary-notice {

@@ -5,8 +5,17 @@
       title="学习复盘"
       description="用题目测试和费曼反讲确认本章掌握情况，结果会同步到学习概览。"
     >
+      <!-- **这一页必须给往前走的门。** 它是整条主线的中转站：基础学习每章的主按钮
+           （「完成阅读，进入检查」）就跳到这里。而这里原来唯一的按钮是「回到基础学习」——
+           一个指向**后面**的动作，两个阶段共用。于是整条路径都学完的学生站在这里，
+           找不到去做实战任务的路，只能自己回到侧边栏猜第三个图标是干什么的。
+           现在按路径的实际状态分岔：学完 → 进阶学习；没学完 → 回去继续下一章。 -->
       <template #actions>
-        <RouterLink class="button button--quiet" to="/learning/fundamentals">回到基础学习</RouterLink>
+        <RouterLink v-if="pathCompleted" class="button button--primary" to="/learning/advanced">
+          去做实战任务
+          <ArrowRight :size="15" />
+        </RouterLink>
+        <RouterLink v-else class="button button--quiet" to="/learning/fundamentals">继续基础学习</RouterLink>
       </template>
     </PageTitle>
 
@@ -78,7 +87,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { CircleAlert, LoaderCircle, Route } from 'lucide-vue-next'
+import { ArrowRight, CircleAlert, LoaderCircle, Route } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 import FeynmanCoach from '@/features/fundamentals/FeynmanCoach.vue'
 import StudyGarden from '@/features/fundamentals/StudyGarden.vue'
@@ -106,6 +115,15 @@ const latestResult = ref(null)
 const testInsights = ref({ totalAnswered: 0, totalCorrect: 0, masteryScore: null, weakPoints: [], recommendation: null })
 
 const testableNodes = computed(() => (learningPath.value?.nodes || []).filter((node) => node.status !== 'locked'))
+
+// 整条路径学完没有 —— 决定头部那个按钮指向"继续基础学习"还是"去做实战任务"。
+// 判据就是节点状态本身：`get_current_path` 的载荷里**没有** completed 字段（见
+// path/service.py 的返回），而"每个节点都 completed"就是它的定义，不需要再问一次服务端。
+// 节点为空时算没学完：那说明路径还没生成出来，谈不上"学完了"。
+const pathCompleted = computed(() => {
+  const nodes = learningPath.value?.nodes || []
+  return nodes.length > 0 && nodes.every((node) => node.status === 'completed')
+})
 
 // 复盘要复的是「用户最近所在的那一章」，不是「第一个没锁的章节」。
 //

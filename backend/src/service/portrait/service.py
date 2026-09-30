@@ -388,6 +388,42 @@ def _clean_assessment(assessment: dict | None) -> dict | None:
     return cleaned
 
 
+async def _load_diagnosis_transcript(user_id: int, session_id: str) -> str:
+    """按会话号取回这次基础测评的问答原话，拼成给提示词的一段。
+
+    为什么要有这一段：诊断是**自由问答**，学生写的那几段字里装着他实际的理解和卡点 ——
+    而画像提示词原先只拿到一行判分统计（正确率 / 答对几题 / 一句评语），正文全丢了。
+    统计回答"他答对了多少"，原话回答"他为什么答错"，后者才是 commonmis / knowbase。
+
+    **必须 user_id + session_id 一起过滤**：session_id 是客户端传上来的，单靠它查等于
+    给出了"拿别人的会话号读别人的作答"的口子。
+
+    这里不单独设长度上限，是有意的：题数已经被诊断的 _MAX_QUESTIONS 封顶（最多 5 题），
+    每题的作答在诊断页被输入框限到 2000 字，所以整块最多一万字上下 —— 和上面那段访谈
+    记录同一个量级。给每段答案单独截断等于从中间切一刀，宁可整块进不去：LLM 调用失败时
+    本来就有"画像分析没有完成"的降级分支兜着。
+    """
+    session = str(session_id or "").strip()
+    if not session:
+        return ""
+
+    from backend.src.models.exam_model import ExamRecord
+
+    records = await ExamRecord.filter(
+        user_id=user_id, session_id=session
+    ).order_by("id").prefetch_related("question").all()
+
+    lines = []
+    for index, item in enumerate(records, 1):
+        content = str(getattr(item.question, "content", "") or "").strip()
+        answer = str(item.user_answer or "").strip()
+        if content:
+            lines.append(f"测评第{index}题：{content}")
+        # 空作答照实写出来 —— "他没答"本身就是信息，跳过它会让模型以为这题不存在
+        lines.append(f"学生作答：{answer or '（没有作答）'}")
+    return "\n".join(lines)
+
+
 def _answer_excerpt(dialogue: list[dict], index: int = -1, fallback: str = "这个方向") -> str:
     try:
         answer = str((dialogue or [])[index].get("answer", "") or "").strip()
@@ -933,11 +969,26 @@ class PortraitChatHistory_Service:
         from backend.src.utils.prompt_loader import load_prompt, fill_prompt
         from backend.src.utils.json_parser import parse_llm_json
 
+        # 诊断那几道题的原话由服务端按会话号回查（见 _load_diagnosis_transcript）。
+        # 取不到时给一句显式声明而不是空串：提示词那一段在讲"有原话时怎么用、没有时别乱提
+        # 测评"，空串会让模型对着空白猜自己是不是漏了什么（和 _format_assessment 同一个道理）。
+        #
+        # 整个回查包在 try 里：原话是**加分项**，为它把"访谈收尾"变成 500，用户就卡在总结页
+        # 反复点重试了 —— 和下面模型那段是同一个取舍。
+        try:
+            diagnosis_text = await _load_diagnosis_transcript(
+                user_id, (assessment or {}).get("session_id") if isinstance(assessment, dict) else ""
+            )
+        except Exception:
+            logger.warning("回查基础测评原话失败，本次按没有原话处理 user_id=%s", user_id, exc_info=True)
+            diagnosis_text = ""
+
         template = load_prompt("portrait/init_from_dialogue")
         prompt = fill_prompt(
             template,
             dialogue_text=dialogue_text,
             assessment_text=_format_assessment(assessment),
+            diagnosis_text=diagnosis_text or "（这次没有取到基础测评的问答原话，只按上面的统计和访谈记录判断。）",
         )
 
         # 模型挂了不能把整个"访谈收尾"变成 500：这一步真正不能丢的是 identity/direction/goal，
@@ -1096,8 +1147,13 @@ def _is_retryable_radar_write_error(error: Exception) -> bool:
     return any(marker in message for marker in ("1213", "deadlock", "1062", "duplicate"))
 
 
-def _active_day(value):
-    """把时间戳归一到"哪一天"（UTC）。naive 时间按 UTC 处理，空值返回 None。"""
+def active_day(value):
+    """把时间戳归一到"哪一天"（UTC）。naive 时间按 UTC 处理，空值返回 None。
+
+    公开而不是私有：学习概览的「近 7 天活跃」和这里的「坚持」维度数的是同一件事，两处
+    必须走同一条归日规则。各写一份必然在时区上走偏 —— 库里存的是 naive 时间，UTC+8 的
+    凌晨会被归到前一天，两处的口径就此错开。
+    """
     if not value:
         return None
     from datetime import timezone as tz
@@ -1112,7 +1168,7 @@ def _persistence_score(timestamps, cutoff_date, window_days: int = 30) -> int:
     timestamps 可以来自多个来源（答题记录 + learning_events），这里取并集去重 ——
     同一天做了几件事只算一天。
     """
-    days = {day for day in (_active_day(ts) for ts in timestamps) if day and day >= cutoff_date}
+    days = {day for day in (active_day(ts) for ts in timestamps) if day and day >= cutoff_date}
     return min(100, round(len(days) / window_days * 100))
 
 

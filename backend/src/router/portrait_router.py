@@ -91,6 +91,14 @@ class DiagnosisAssessment(BaseModel):
     correct_count: int = Field(default=0, ge=0)
     total_questions: int = Field(default=0, ge=0)
     message: str = Field(default="", max_length=200)
+    # 诊断会话号。用来让**服务端自己**回查那几道题的原话 —— 画像提示词以前只拿到正确率，
+    # 学生写的那几段字一个都没进去（诊断是自由问答，正文才是"他为什么卡住"的那一半）。
+    # 走服务端回查而不是让前端把原话传上来：这两边的信任级别不一样，服务端有权威副本，
+    # 客户端送来的文本没有可核对的来源。
+    #
+    # 这个字段是第三次踩同一个坑了：DiagnosisPage 早就把整个 result 写进 sessionStorage
+    # 并原样发上来，是 model_dump() 按声明字段把它滤掉的。加字段前先确认前端真的在发。
+    session_id: str = Field(default="", max_length=64)
 
 
 class InitFromDialogueRequest(BaseModel):

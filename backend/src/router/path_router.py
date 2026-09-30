@@ -6,7 +6,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Depends, Body, Query
 from starlette.responses import StreamingResponse
 
-from backend.src.service.path.service import PathService
+from backend.src.service.path.service import ENTRY_PATH_NODE_CAP, PathService
 from backend.src.service.path.classroom import generate_classroom_audio, generate_classroom_lesson, get_saved_classroom_lesson
 from backend.src.service.path.classroom_transition import get_classroom_transition
 from backend.src.service.path.classroom_chat import stream_classroom_chat
@@ -33,21 +33,14 @@ logger = logging.getLogger(__name__)
 # 的那条就没有强引用了 —— asyncio 对任务只持弱引用，它会被垃圾回收，跑到一半消失。
 _BACKGROUND_PATH_TASKS: dict[int, set[asyncio.Task]] = {}
 
-# 学生确认画像之后**同步等待**的那一条路径，节点数封顶到这个数。
-#
-# 等待时间几乎全在模型调用上：每 4 个节点一组、一组一次调用（`_GROUP_SIZE`），而一次调用
-# 光首字延迟就是二十几到三十几秒。节点数从 20 降到 12 就是 5 组变 3 组、少一整波。实测
-# 20 个节点的首条路径要 5 分钟上下 —— 正好压在前端那 5 分钟超时上，于是"迟迟进不去、
-# 还超时"。封顶之后这条路径落在正常长度（_compute_node_count 给的是 8-30）的低段，够用，
-# 其余科目仍按各自应有的长度在后台生成。
-_ENTRY_PATH_NODE_CAP = 12
+# 入口路径的节点上限在 path/service.py（两条入口都要用它，不止这一条）。
 
 
 def _entry_node_count(node_cap: int, requested: int) -> int:
     """入口路径实际用几个节点。
 
     封顶只**往下压**，不往上抬：调用方明确要得更少（比如 6）就照他说的，别拿上限把
-    他要的长度顶回去。node_cap 为 0 表示这条路径不在同步等待里（后台生成），照原样。
+    他要的长度顶回去。node_cap 为 0 表示不封顶，照原样。
     """
     if node_cap <= 0:
         return requested
@@ -157,85 +150,41 @@ async def generate_paths_from_direction(data: GenerateFromDirectionRequest, user
         data.subject_limit,
         force_regenerate=data.force_regenerate,
     )
-    from backend.src.models.path_model import LearningPath
-
-    async def generate_or_reuse(subject: str, node_cap: int = 0):
-        # node_cap 只给"学生正在同步等待的那一条"用：等待时间主要由节点数决定（每 4 个节点
-        # 一组、一组一次模型调用，一次调用首字就是二十几到三十几秒）。入口这条封顶之后，
-        # 其余科目仍按各自的正常长度在后台生成，学生不必站在这里等。
-        node_count = _entry_node_count(node_cap, data.node_count)
-        if data.force_regenerate:
-            existing = await LearningPath.filter(user_id=user_id, subject=subject).first()
-            if existing:
-                result = await PathService.regenerate_path(existing.id, user_id)
-            else:
-                result = await PathService.generate_path(subject, user_id, data.difficulty, node_count)
-        else:
-            result = await PathService.generate_path(subject, user_id, data.difficulty, node_count)
-
-        # 生成接口也负责把路径接入当前学习进度。新路径在 generate_path
-        # 内已经完成初始化；缓存路径则需要在这里补齐，否则概览接口无法读取。
-        path_id = result.get("path_id") if isinstance(result, dict) else None
-        if path_id and result.get("cached"):
-            await PathService.enroll_path(path_id, user_id)
-        return result
-
-    first_result = None
-    first_subject_index = -1
-    failed_subjects = []
-    # 按课程架构师返回的依赖顺序尝试，确保至少有一条路径可进入学习空间。
-    for index, subject in enumerate(subjects):
-        try:
-            first_result = await generate_or_reuse(subject, _ENTRY_PATH_NODE_CAP)
-            first_subject_index = index
-            break
-        except Exception as error:
-            failed_subjects.append(subject)
-            logger.exception("首条学习路径生成失败 subject=%s user_id=%s", subject, user_id)
-
-    if first_result is None:
-        raise HTTPException(
-            status_code=503,
-            detail="暂时无法生成学习路径，请稍后重试",
-        )
-
-    def serialize_path(subject: str, result: dict) -> dict:
-        return {
-            "subject": subject,
-            "status": "regenerated" if result.get("regenerated") else ("cached" if result.get("cached") else "created"),
-            "path_id": result.get("path_id"),
-            "node_count": result.get("node_count", len(result.get("nodes", []))),
-        }
-
-    paths = [serialize_path(subjects[first_subject_index], first_result)]
-    remaining_subjects = subjects[first_subject_index + 1:] + failed_subjects
-
-    async def generate_remaining_paths() -> None:
-        # 后台按顺序生成，避免首次进入时并发触发多组 LLM/数据库写入。
-        for subject in remaining_subjects:
-            try:
-                result = await generate_or_reuse(subject)
-                logger.info(
-                    "后台学习路径已生成 user_id=%s subject=%s path_id=%s",
+    # 整批生成全部挪到后台，接口立刻返回。
+    #
+    # 原来是"同步生成第一条、其余后台"：同步那条靠 ENTRY_PATH_NODE_CAP 把节点封顶到 12 来
+    # 压等待时间。但一条路径要跑完整张图才落库（实测 105-185 秒），加上方向拆解，学生仍然要
+    # 在这个按钮上站几分钟，而前端的 5 分钟超时正好压在上面 —— 超时之后前端判定失败、服务端
+    # 却还在继续写，"重试一次"于是变成再生成一遍，等待翻倍。
+    #
+    # 现在一条都不同步等：接口几百毫秒返回，前端的等待改成轮询 /path/list 问"路径到了没有"。
+    # 顺序仍然保留 —— 第一条封顶、先跑，学生最先拿到的是那条能进去的路。
+    node_counts = [_entry_node_count(ENTRY_PATH_NODE_CAP, data.node_count)]
+    node_counts += [data.node_count] * max(0, len(subjects) - 1)
+    if subjects:
+        _track_background_path_task(
+            user_id,
+            asyncio.create_task(
+                PathService.generate_subject_paths(
                     user_id,
-                    subject,
-                    result.get("path_id"),
+                    subjects,
+                    difficulty=data.difficulty,
+                    node_counts=node_counts,
+                    force_regenerate=data.force_regenerate,
                 )
-            except Exception:
-                logger.exception("后台学习路径生成失败 subject=%s user_id=%s", subject, user_id)
-
-    if remaining_subjects:
-        _track_background_path_task(user_id, asyncio.create_task(generate_remaining_paths()))
+            ),
+        )
 
     return {
         "code": 200,
-        "msg": "首条学习路径已就绪，其余路径正在后台生成",
+        "msg": "学习路径正在后台生成",
         "data": {
             "direction": direction,
             "subjects": subjects,
-            "paths": paths,
-            "pending_subjects": remaining_subjects,
-            "generation_status": "partial" if remaining_subjects else "complete",
+            "paths": [],
+            "pending_subjects": subjects,
+            # 调用方靠这个判断"要不要等"：pending 时 paths 必然是空的，别把空数组读成失败。
+            "generation_status": "pending",
         },
     }
 

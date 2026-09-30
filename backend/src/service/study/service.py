@@ -3,17 +3,18 @@
 import json
 import logging
 import math
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from tortoise.expressions import Q
 
-from backend.src.models.study_model import StudySession, ResourceReadStatus, ResourceCollection
+from backend.src.models.study_model import StudySession, ResourceReadStatus, ResourceCollection, LearningEvent
 from backend.src.models.exam_model import KnowledgeMastery, ExamRecord
 from backend.src.models.resource_model import GeneratedResource
 from backend.src.models.path_model import LearningPath, PathNode, UserPathProgress
 from backend.src.service.portrait.service import (
     PortraitChatHistory_Service,
     PortraitRadarService,
+    active_day,
     build_learning_guidance,
     record_learning_event,
 )
@@ -73,6 +74,36 @@ def _build_path_difficulty_trend(nodes: list[dict]) -> list[dict]:
         }
         for index, node in enumerate(ordered_nodes)
     ]
+
+
+# 活跃度的观察窗。「近 7 天」是报给学生的那个数，「30 天」是查询边界 —— 超出边界的记录
+# 连 last_active_date 都不参与，于是它的 None 有确切含义：这个人已经 30 天没来过了，
+# 而不是"最后一次来是三个月前"。
+_ACTIVITY_WEEK_DAYS = 7
+_ACTIVITY_WINDOW_DAYS = 30
+
+
+def _summarize_learning_activity(timestamps, *, today: date) -> dict:
+    """把时间戳归到天，给出「近 7 天活跃了几天」和「最后一次学习是哪天」。
+
+    口径与雷达的「坚持」维度同源（同一个 active_day、同样是答题记录与 learning_events
+    的**并集**）：只数答题会把"看资料 / 做节点测验 / 课堂对话但没考试"的人算成没来过。
+
+    last_active_date 是**日期**不是时间戳，这是刻意的：库里存的是 naive 时间，按时间戳
+    序列化会不带偏移量，浏览器 `new Date()` 按本地时区解析会比 UTC 实际晚一个时区；只回
+    一个日期就不存在这个陷阱，而页面要的也只是"几天前"。
+    """
+    days = {day for day in (active_day(ts) for ts in timestamps) if day}
+    window_start = today - timedelta(days=_ACTIVITY_WINDOW_DAYS - 1)
+    recent = [day for day in days if day >= window_start]
+    if not recent:
+        return {"active_days_7d": 0, "last_active_date": None, "window_days": _ACTIVITY_WINDOW_DAYS}
+    week_start = today - timedelta(days=_ACTIVITY_WEEK_DAYS - 1)
+    return {
+        "active_days_7d": sum(1 for day in recent if day >= week_start),
+        "last_active_date": str(max(recent)),
+        "window_days": _ACTIVITY_WINDOW_DAYS,
+    }
 
 
 def _knowledge_tag_key(value: object) -> str:
@@ -320,6 +351,10 @@ class StudyService:
                 "mastery_score": latest_score,
                 "text": summary_text,
             },
+            # 活跃度与 summary 平级，而不是塞进 summary 里：summary 那几个数是"学到什么程度"，
+            # 这一项是"最近来没来"，两件事。summary.total_study_seconds 恒为 0 是真的 0
+            # （见 get_stats 里的注释），所以页面上回答"多久没来"的只能是这一项。
+            "activity": stats.get("activity") or {"active_days_7d": 0, "last_active_date": None, "window_days": _ACTIVITY_WINDOW_DAYS},
             "recommendation": recommendation,
         }
 
@@ -525,6 +560,22 @@ class StudyService:
         )
         total_sessions = len(session_ids)
 
+        # ── 活跃度 ──
+        # 注意别用上面的 study_time 去回答"最近学过没有"：StudySession.total_seconds 的唯一
+        # 写入方是 StudyService.heartbeat，而前端从来没调用过 /study/heartbeat，所以它恒为 0，
+        # active_days 也跟着恒为 0。改用 learning_events + 答题记录 —— 这两张表有真实写入方
+        # （assessment / node_quiz / resource_read / classroom_chat / chat）。
+        # exam_records 上面已经整体读进内存了，并集不多花查询；只多一条 learning_events 查询。
+        now_utc = datetime.now(timezone.utc)
+        event_times = await LearningEvent.filter(
+            user_id=user_id,
+            created_at__gte=now_utc - timedelta(days=_ACTIVITY_WINDOW_DAYS),
+        ).values_list("created_at", flat=True)
+        activity = _summarize_learning_activity(
+            [r.created_at for r in exam_records] + list(event_times),
+            today=now_utc.date(),
+        )
+
         # ── 学习指导 ──
         guidance = ""
         try:
@@ -539,6 +590,7 @@ class StudyService:
                 "total_seconds": total_seconds,
                 "active_days": active_days,
             },
+            "activity": activity,
             "weak_points": weak_points,
             "learning_paths": paths,
             "resources": {

@@ -2,7 +2,7 @@
 
 测试目标：backend/src/service/portrait/service.py
 覆盖范围：
-- _active_day 的时区归一
+- active_day 的时区归一
 - _persistence_score 的去重、时间窗、封顶
 - _compute_locked 的「坚持」取答题记录与 learning_events 的**并集**
 
@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from backend.src.service.portrait.service import (
     PortraitRadarService,
-    _active_day,
+    active_day,
     _persistence_score,
 )
 
@@ -30,24 +30,24 @@ CUTOFF = (NOW - timedelta(days=30)).date()
 
 
 # ═══════════════════════════════════════════════
-#  _active_day
+#  active_day
 # ═══════════════════════════════════════════════
 
 class TestActiveDay:
     def test_aware_datetime(self):
-        assert _active_day(datetime(2026, 9, 20, 8, 0, tzinfo=timezone.utc)).isoformat() == "2026-09-20"
+        assert active_day(datetime(2026, 9, 20, 8, 0, tzinfo=timezone.utc)).isoformat() == "2026-09-20"
 
     def test_naive_treated_as_utc(self):
-        assert _active_day(datetime(2026, 9, 20, 8, 0)).isoformat() == "2026-09-20"
+        assert active_day(datetime(2026, 9, 20, 8, 0)).isoformat() == "2026-09-20"
 
     def test_none_is_none(self):
-        assert _active_day(None) is None
+        assert active_day(None) is None
 
     def test_utc_normalization_across_midnight(self):
         """UTC+8 的凌晨 1 点，在 UTC 上还是前一天"""
         tz8 = timezone(timedelta(hours=8))
         # 2026-09-20 01:00 +08:00 == 2026-09-19 17:00 UTC
-        assert _active_day(datetime(2026, 9, 20, 1, 0, tzinfo=tz8)).isoformat() == "2026-09-19"
+        assert active_day(datetime(2026, 9, 20, 1, 0, tzinfo=tz8)).isoformat() == "2026-09-19"
 
 
 # ═══════════════════════════════════════════════

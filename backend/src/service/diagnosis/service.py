@@ -425,14 +425,14 @@ async def _generate_paths_after_diagnosis(user_id: int, direction: str, goal: st
 
         subjects = await sync_direction_subjects(user_id, direction, goal, 4)
         logger.info("诊断完成，开始生成学习路径 user_id=%s direction=%s subjects=%s", user_id, direction, subjects)
-        results = await asyncio.gather(
-            *[PathService.generate_path(subject, user_id, "medium", 0) for subject in subjects],
-            return_exceptions=True,
-        )
-        failed = [str(item) for item in results if isinstance(item, Exception)]
-        if failed:
-            logger.error("学习路径生成部分失败 user_id=%s failed=%s", user_id, failed)
+        # 走 generate_subject_paths 而不是自己 asyncio.gather：它按顺序生成，并且和学生点
+        # 「确认画像」那条入口**共用一把用户级锁**。两条入口相隔只有几十秒（诊断一结束这条就
+        # 开跑，学生读完画像总结就点按钮），各跑一遍等于同一次生成做两遍 —— 学生等的时间翻倍，
+        # 模型调用也翻倍（见 path_generation_lock）。第一条同样沿用 ENTRY_PATH_NODE_CAP。
+        done = await PathService.generate_subject_paths(user_id, subjects, difficulty="medium")
+        if len(done) < len(subjects):
+            logger.error("学习路径生成部分失败 user_id=%s done=%s subjects=%s", user_id, done, subjects)
         else:
-            logger.info("学习路径生成完成 user_id=%s path_count=%s", user_id, len(results))
+            logger.info("学习路径生成完成 user_id=%s path_count=%s", user_id, len(done))
     except Exception:
         logger.exception("诊断后学习路径生成失败 user_id=%s direction=%s", user_id, direction)

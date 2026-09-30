@@ -1,138 +1,250 @@
 <template>
   <div class="overview-page">
     <div v-if="loading" class="surface surface-pad loading-state">正在同步你的学习状态…</div>
-    <div v-else-if="errorMessage" class="surface surface-pad error-state"><strong>学习概览暂时无法读取</strong><p>{{ errorMessage }}</p><button class="button button--secondary" type="button" @click="loadOverview">重试 <ArrowRight :size="14" /></button></div>
-    <div v-else class="overview-dashboard">
-      <section class="path-trend-panel">
-        <div class="section-heading section-heading--compact"><div><p class="eyebrow path-eyebrow">LEARNING PATH</p><h2>{{ trendMode === 'path' ? '学习路径' : '资源难度匹配' }}</h2><small v-if="path.subject || profile.direction" class="path-subject">{{ path.subject || profile.direction }}</small><span v-if="trendMode === 'path' && path.currentNode" class="path-current-node">当前学习：{{ path.currentNode }}</span></div><div class="trend-heading-side"><div class="trend-switch" :class="{ 'is-resource': trendMode === 'resource' }" role="tablist" aria-label="难度曲线类型"><span class="trend-switch-indicator" aria-hidden="true"></span><button type="button" :class="{ 'is-active': trendMode === 'path' }" role="tab" :aria-selected="trendMode === 'path'" @click="trendMode = 'path'">学习路径</button><button type="button" :class="{ 'is-active': trendMode === 'resource' }" role="tab" :aria-selected="trendMode === 'resource'" @click="trendMode = 'resource'">资源匹配</button></div><div class="trend-caption"><span v-if="trendMode === 'path'" class="path-progress-badge"><b>{{ pathProgressLabel }}</b><small>路径进度</small></span><span v-else>资源难度与当前能力的匹配</span><small>{{ trendMode === 'path' ? '曲线展示后续节点的相对难度' : '实线为资源难度，虚线为当前能力' }}</small></div></div></div>
-        <div v-if="activeTrend.length > 1" class="trend-chart" :aria-label="trendMode === 'path' ? '当前学习路径相对难度折线图' : '资源难度与当前能力匹配曲线'">
-          <svg viewBox="0 0 920 42" role="img" :aria-label="trendMode === 'path' ? '学习路径节点相对难度折线图' : '资源难度与当前能力匹配曲线'" preserveAspectRatio="none">
-            <line v-for="level in [8, 21, 34]" :key="level" x1="0" :y1="level" x2="920" :y2="level" class="chart-grid" />
-            <path v-if="trendMode === 'path'" :d="trendAreaPath" class="trend-area" />
-            <path :d="trendPath" class="trend-line" :class="{ 'resource-difficulty-line': trendMode === 'resource' }" />
-            <path v-if="trendMode === 'resource' && resourceTrendHasUserLevel" :d="userLevelPath" class="user-level-line" />
-          </svg>
-          <div class="trend-points" aria-hidden="true"><span v-for="(point, index) in activeTrend" :key="point.id" class="trend-point" :style="{ left: `${trendX(index) / 9.2}%`, top: trendPointTop(point.value) }" :title="`${point.label}：${point.tooltip}`"></span></div>
-          <div class="trend-labels" :style="{ gridTemplateColumns: `repeat(${activeTrend.length}, minmax(0, 1fr))` }"><span v-for="point in activeTrend" :key="`${point.id}-label`" :title="point.label">{{ point.label }}</span></div>
+
+    <div v-else-if="errorMessage" class="surface surface-pad error-state">
+      <strong>学习概览暂时无法读取</strong>
+      <p>{{ errorMessage }}</p>
+      <!-- 这里原来是 button--secondary：main.css 里没有这个类（只有 primary / quiet / accent），
+           所以重试一直渲染成一个没有样式的文字链接。 -->
+      <button class="button button--quiet" type="button" @click="loadOverview">重试 <ArrowRight :size="14" /></button>
+    </div>
+
+    <template v-else>
+      <PageTitle eyebrow="学习概览" :title="headingTitle" :description="profile.direction" />
+
+      <!-- ① 现在做什么。整页的主位 —— 以前唯一能行动的那张卡片被夹在中间，和另外三张一样大。 -->
+      <RecommendationPanel
+        :title="nextActionTitle"
+        :reason="recommendation.reason"
+        :criteria="recommendation.criteria"
+        :to="nextActionTarget"
+        :action-label="nextActionLabel"
+      />
+
+      <!-- ② 为什么是它。知识盲区和总体掌握度本来就是同一批掌握度记录的两种切法，
+           以前分成两个面板，正是"四张卡片没有优先级"的来源，这里合成一张表。 -->
+      <section class="surface surface-pad">
+        <div class="panel-heading">
+          <div class="panel-heading__copy">
+            <p class="eyebrow">WHY THIS</p>
+            <h2>薄弱知识点</h2>
+            <small v-if="recommendation.judgement">{{ recommendation.judgement }}</small>
+          </div>
+          <span v-if="weakRows.length" class="panel-count">{{ weakRows.length }} 个待巩固</span>
         </div>
-        <div v-else class="empty-state trend-empty">{{ trendMode === 'path' ? '正在生成学习路径难度数据…' : '正在生成资源难度匹配数据…' }}</div>
+        <ul v-if="weakRows.length" class="weak-list">
+          <li v-for="row in weakRows" :key="row.tag" class="weak-item">
+            <div class="weak-item__copy">
+              <strong>{{ row.tag }}</strong>
+              <small>{{ row.detail }}</small>
+            </div>
+            <div class="mini-progress"><span :style="{ width: `${row.accuracy}%` }"></span></div>
+            <RouterLink
+              v-if="row.reviewTo"
+              class="icon-link"
+              :to="row.reviewTo"
+              :aria-label="`查看「${row.nodeTitle}」的学习复盘`"
+              title="查看对应学习复盘"
+            >
+              <ArrowRight :size="15" />
+            </RouterLink>
+            <span v-else class="icon-link icon-link--none" aria-hidden="true"></span>
+          </li>
+        </ul>
+        <p v-else class="empty-state">{{ weakEmptyCopy }}</p>
       </section>
 
-      <div class="overview-columns">
-        <div class="overview-left">
-          <div class="overview-top-cards">
-            <section class="surface surface-pad compact-panel goal-panel"><div class="goal-heading"><div><p class="eyebrow">CURRENT FOCUS</p><h2>当前学习目标</h2></div><span v-if="goalItems.length" class="goal-count">{{ goalItems.length }}</span></div><ul v-if="goalItems.length" class="goal-list"><li v-for="(item, index) in goalItems" :key="item.id || item.title"><span class="goal-index">{{ String(index + 1).padStart(2, '0') }}</span><span class="goal-copy">{{ item.title }}</span><span class="goal-status" aria-hidden="true"></span></li></ul><div v-else class="empty-state">正在生成学习目标…</div></section>
-            <section class="surface surface-pad compact-panel next-panel"><div class="next-heading"><div><p class="eyebrow">NEXT STEP</p><h2>下一步学习内容</h2></div><span class="next-mark"><ArrowUpRight :size="19" /></span></div><div v-if="nextTopic" class="next-content"><span class="next-label">推荐学习节点</span><p class="next-topic">{{ nextTopic }}</p></div><div v-else-if="path.completed" class="empty-state next-empty">这条路径的节点都学完了，可以进入进阶学习做实战任务。</div><div v-else class="empty-state next-empty">正在生成下一步学习内容…</div><RouterLink v-if="hasNextAction" class="button button--primary overview-start-button" :to="nextAction.to">开始学习 <ArrowRight :size="14" /></RouterLink><RouterLink v-else-if="path.completed" class="button button--primary overview-start-button" to="/learning/advanced">进入进阶学习 <ArrowRight :size="14" /></RouterLink></section>
+      <!-- ③ 我在哪。收成一张紧凑面板，不再排四张等权卡片把同样的毛病搬到页面底部。 -->
+      <section class="surface surface-pad">
+        <div class="panel-heading">
+          <div class="panel-heading__copy">
+            <p class="eyebrow">WHERE I AM</p>
+            <h2>我在哪</h2>
           </div>
-          <section class="surface surface-pad blindspot-panel"><div class="section-heading section-heading--compact"><div><p class="eyebrow module-eyebrow">KNOWLEDGE GAPS</p><h2>知识盲区</h2></div><span class="muted">{{ weakPoints.length }} 个待巩固</span></div><div v-if="weakPoints.length" class="blindspot-list"><article v-for="(point, index) in weakPoints" :key="point.tag" class="blindspot-item"><div class="blindspot-copy"><span class="blindspot-index">{{ String(index + 1).padStart(2, '0') }}</span><div><strong>{{ point.tag }}</strong><small>正确率 {{ point.accuracy }}% · 已答 {{ point.attempts }} 题</small></div></div><div class="mini-progress"><span :style="{ width: `${point.accuracy}%` }"></span></div><RouterLink class="icon-link" :to="point.reviewTo" :aria-label="`查看${point.nodeTitle}的学习复盘`" title="查看对应学习复盘"><ArrowRight :size="15" /></RouterLink></article></div><div v-else class="empty-state">完成章节复盘后，这里会显示有答题记录的知识点薄弱项。</div></section>
         </div>
-
-        <section class="surface surface-pad mastery-panel"><div class="mastery-card-header"><div><p class="eyebrow module-eyebrow">OVERALL MASTERY</p><h2>总体掌握度</h2><p class="muted">按知识点对比当前掌握度与达标线</p></div><div class="mastery-headline"><span>当前总计</span><strong>{{ masteryScore === null ? '正在生成' : `${masteryScore}%` }}</strong><em v-if="masteryDelta !== null" :class="{ 'is-positive': masteryDelta >= 0 }">{{ masteryDeltaLabel }} 达标线</em></div></div><p v-if="overviewSummary.text" class="mastery-insight">{{ learningSummary }}</p><div v-if="masteryItems.length" class="mastery-legend" aria-label="柱状图图例"><span><i class="legend-swatch legend-swatch--current"></i>当前掌握度</span><span><i class="legend-swatch legend-swatch--target"></i>达标线 60%</span></div><div v-if="masteryItems.length" class="mastery-chart" aria-label="知识点掌握度与达标线柱状图"><div class="mastery-axis"><span>100%</span><span>50%</span><span>0%</span></div><div class="bars"><div v-for="item in masteryItems" :key="item.tag" class="bar-column"><div class="bar-track"><span class="bar-value bar-value--current" :style="{ height: `${item.score}%` }" :title="`${item.tag}：当前掌握度 ${item.score}%`"><strong>{{ item.score }}%</strong></span><span class="bar-value bar-value--target" :style="{ height: `${item.target}%` }" :title="`${item.tag}：达标线 ${item.target}%`"></span></div><span class="bar-label" :title="item.tag">{{ item.shortTag }}</span></div></div></div><div v-else class="empty-state mastery-empty">正在生成掌握度数据…</div><div class="mastery-footer"><span>已答 {{ stats.examAnswered }} 题</span><span>学习 {{ formatDuration(stats.studySeconds) }}</span></div></section>
-      </div>
-    </div>
+        <template v-if="pathSegments.length">
+          <!-- 这条带子取代了原来的折线图：同样的 difficulty_trend 数据，以前画的是
+               relative_difficulty（路径内归一化，没有外部刻度，加纵轴等于伪造精度），
+               现在画的是每个节点的完成状态 —— 读的成本几乎为零。 -->
+          <div class="path-strip" role="img" :aria-label="pathStripLabel">
+            <span
+              v-for="segment in pathSegments"
+              :key="segment.id"
+              class="path-seg"
+              :class="`path-seg--${segment.kind}`"
+              :title="`${segment.title}（${segment.kindLabel}）`"
+            ></span>
+          </div>
+          <p class="path-caption">{{ pathStripLabel }}</p>
+        </template>
+        <p v-else class="empty-state">学习路径还在生成中。生成之后，这里会显示每个节点学到哪了。</p>
+        <dl class="where-facts">
+          <div class="where-fact"><dt>当前阶段</dt><dd>{{ stageLabel }}</dd></div>
+          <div class="where-fact"><dt>近期活跃</dt><dd>{{ activityLabel }}</dd></div>
+        </dl>
+      </section>
+    </template>
   </div>
 </template>
 
-<style scoped>
-.overview-page .path-trend-panel .trend-line { stroke-width: 3; filter: drop-shadow(0 2px 2px rgba(30, 60, 52, .12)); }
-.overview-page .trend-area { fill: rgba(30, 60, 52, .08); }
-.overview-page .trend-points { position: absolute; inset: 0 0 16px; }
-.overview-page .trend-points .trend-point { position: absolute; display: block; box-sizing: border-box; width: 10px; height: 10px; border: 2px solid var(--accent-deep); border-radius: 50%; background: var(--paper); box-shadow: 0 1px 3px rgba(30, 60, 52, .18); transform: translate(-50%, -50%); }
-.overview-page .trend-labels { display: grid; gap: 4px; }
-.overview-page .trend-labels span { display: block; overflow: hidden; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
-</style>
-
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ArrowRight, ArrowUpRight } from 'lucide-vue-next'
+import { ArrowRight } from 'lucide-vue-next'
 import { learningApi } from '@/shared/api/learningApi'
+import PageTitle from '@/shared/ui/PageTitle.vue'
+import RecommendationPanel from '@/widgets/learning/RecommendationPanel.vue'
 
 const loading = ref(true)
 const errorMessage = ref('')
 const profile = reactive({ direction: '', goal: '' })
-const path = reactive({ id: null, subject: '', currentNode: '', nextAction: null, nodes: [], difficultyTrend: [], resourceDifficultyMatch: [], progress: null, completed: false })
-const stats = reactive({ studySeconds: 0, examAnswered: 0, weakPoints: [] })
-const goals = ref([])
-const nextContent = ref([])
-const mastery = ref([])
-const overviewSummary = reactive({ masteryScore: null, text: '' })
+const path = reactive({ id: null, completed: false, trend: [] })
+const diagnosis = reactive({ stage: '', answered: 0 })
+const recommendation = reactive({ judgement: '', reason: '', criteria: '', action: '', targetId: null })
+const activity = reactive({ activeDays7d: 0, lastActiveDate: null, windowDays: 0 })
+const blindSpots = ref([])
+const masteryBars = ref([])
+
 const unwrap = (response) => response?.data?.data ?? response?.data ?? null
-const toPercent = (value) => { const numeric = Number(value); return Number.isFinite(numeric) ? Math.max(0, Math.min(100, Math.round(numeric <= 1 ? numeric * 100 : numeric))) : null }
-const goalItems = computed(() => goals.value.filter((item) => item && item.title).slice(0, 4))
-const nextTopic = computed(() => nextContent.value[0]?.title || '')
-const nextAction = computed(() => ({ to: '/learning/fundamentals' }))
-const weakPoints = computed(() => { const values = stats.weakPoints || []; const unique = values.filter((item, index, all) => item?.source === 'mastery' && Number(item.path_id) > 0 && Number(item.node_id) > 0 && (item.tag || item.knowledge_tag) && all.findIndex((other) => (other.tag || other.knowledge_tag) === (item.tag || item.knowledge_tag)) === index); return unique.slice(0, 3).map((item) => { const raw = Number(item.accuracy); const accuracy = Number.isFinite(raw) ? toPercent(raw) : null; if (accuracy === null) return null; return { tag: item.tag || item.knowledge_tag, accuracy, attempts: Math.max(0, Math.round(Number(item.attempts) || 0)), nodeTitle: item.node_title || '对应章节', reviewTo: { name: 'foundationTest', query: { pathId: item.path_id, node: item.node_id } } } }).filter(Boolean) })
-const pathTrend = computed(() => path.difficultyTrend.slice(0, 12).map((node, index) => { const relative = Number(node.relative_difficulty); const score = Number(node.difficulty_score); const label = String(node.title || '').trim(); return { id: node.id || index, label: label.slice(0, 8), relative_difficulty: relative, difficulty_score: Number.isFinite(score) ? score.toFixed(2) : '', status: node.status } }).filter((node) => node.label && Number.isFinite(node.relative_difficulty)))
-const resourceTrend = computed(() => path.resourceDifficultyMatch.slice(0, 12).map((item, index) => { const score = Number(item.difficulty_score); const label = String(item.title || '').trim(); const userLevel = item.user_level === null || item.user_level === undefined ? null : Number(item.user_level); if (!label || !Number.isFinite(score)) return null; const matchScore = Number(item.match_score); const tooltip = item.status === 'well_matched' && Number.isFinite(matchScore) ? `难度 ${score}，匹配度 ${matchScore}%` : item.status === 'too_hard' ? `难度 ${score}，当前偏难` : item.status === 'too_easy' ? `难度 ${score}，当前偏简单` : `难度 ${score}`; return { id: item.resource_id || index, label: label.slice(0, 8), value: score, user_level: Number.isFinite(userLevel) ? userLevel : null, status: item.status, tooltip } }).filter(Boolean))
-const trendMode = ref('path')
-const activeTrend = computed(() => trendMode.value === 'path' ? pathTrend.value.map((point) => ({ ...point, value: point.relative_difficulty, tooltip: `相对难度 ${point.difficulty_score}` })) : resourceTrend.value)
-const resourceTrendHasUserLevel = computed(() => resourceTrend.value.some((point) => point.user_level !== null))
-const chartHeight = 42
-const chartTop = 6
-const chartBottom = 36
-const trendDomain = computed(() => {
-  const values = activeTrend.value.map((point) => Number(point.value))
-  if (trendMode.value === 'resource') values.push(...resourceTrend.value.filter((point) => point.user_level !== null).map((point) => Number(point.user_level)))
-  const validValues = values.filter(Number.isFinite)
-  if (!validValues.length) return { min: 0, max: 1 }
 
-  const min = Math.min(...validValues)
-  const max = Math.max(...validValues)
-  const span = max - min
-  if (!span) return { min: min - 1, max: max + 1 }
-  const padding = Math.max(span * 0.24, Math.abs(max) * 0.04, 0.15)
-  return { min: min - padding, max: max + padding }
-})
-const userLevelPath = computed(() => smoothPath(resourceTrend.value.map((point, index) => ({ x: trendX(index), y: trendY(point.user_level) }))))
-const masteryItems = computed(() => { const source = (mastery.value.length ? mastery.value : weakPoints.value).slice(0, 6); return source.map((item) => { const tag = item.knowledge_tag || item.tag || item.label; const score = toPercent(item.accuracy ?? item.score); return tag && score !== null ? { tag, shortTag: tag.length > 6 ? `${tag.slice(0, 6)}…` : tag, score, target: 60 } : null }).filter(Boolean) })
-const masteryScore = computed(() => { const summaryScore = Number(overviewSummary.masteryScore); if (overviewSummary.masteryScore !== null && overviewSummary.masteryScore !== undefined && overviewSummary.masteryScore !== '' && Number.isFinite(summaryScore)) return toPercent(summaryScore); const values = masteryItems.value.map((item) => item.score); return values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : null })
-const masteryDelta = computed(() => masteryScore.value === null ? null : masteryScore.value - 60)
-const masteryDeltaLabel = computed(() => `${masteryDelta.value >= 0 ? '+' : ''}${masteryDelta.value}%`)
-const learningSummary = computed(() => overviewSummary.text || '正在生成学习总结…')
-const trendPath = computed(() => smoothPath(activeTrend.value.map((point, index) => ({ x: trendX(index), y: trendY(point.value) }))))
-const trendAreaPath = computed(() => {
-  const points = activeTrend.value.map((point, index) => ({ x: trendX(index), y: trendY(point.value) }))
-  if (points.length < 2) return ''
-  const firstPoint = points[0]
-  const lastPoint = points[points.length - 1]
-  return `${smoothPath(points)} L ${lastPoint.x} ${chartBottom} L ${firstPoint.x} ${chartBottom} Z`
-})
-const trendX = (index) => activeTrend.value.length < 2 ? 460 : Math.round(index * (920 / (activeTrend.value.length - 1)))
-const trendY = (rate) => {
-  const value = Number(rate)
-  const { min, max } = trendDomain.value
-  const ratio = Number.isFinite(value) && max > min ? Math.max(0, Math.min(1, (value - min) / (max - min))) : 0.5
-  return chartBottom - ratio * (chartBottom - chartTop)
-}
-function trendPointTop(value) {
-  return `${(trendY(value) / chartHeight) * 100}%`
+// 后端这两处给的都是 0–100 的整数（盲区在 _build_reviewable_weak_points 里已经把小数换算过了，
+// 掌握度是 round(答对/总数*100)），所以这里只需要夹一下范围。**不要**沿用原来那个
+// `value <= 1 ? value * 100 : value` 的换算：正确率真是 1% 的时候它会把 1 读成 100%。
+const clampPercent = (value) => {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? Math.max(0, Math.min(100, Math.round(numeric))) : null
 }
 
-function smoothPath(points) {
-  if (!points.length) return ''
-  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`
+const headingTitle = computed(() => profile.goal || '继续你的学习')
 
-  let path = `M ${points[0].x} ${points[0].y}`
-  for (let index = 1; index < points.length; index += 1) {
-    const previous = points[index - 1]
-    const current = points[index]
-    const midpoint = Math.round((previous.x + current.x) / 2)
-    path += ` C ${midpoint} ${previous.y}, ${midpoint} ${current.y}, ${current.x} ${current.y}`
+// ── ① 现在做什么 ─────────────────────────────────────────────
+// 后端 recommendation.action 就是当前节点的标题；没有当前节点时（路径学完或还没解锁）
+// 退回路径条上的"可学习"节点，再退回一句实话。
+const nextActionTitle = computed(() => {
+  if (path.completed) return '这条路径已学完，去做实战任务'
+  return recommendation.action || currentSegment.value?.title || '继续基础学习'
+})
+const nextActionLabel = computed(() => (path.completed ? '进入进阶学习' : '开始学习'))
+
+// 目的地的规则只有两条，写在这里而不是抽成模块 —— 没有第二个消费者，前端也没有测试框架：
+//   · 路径学完 → 进阶学习（做实战任务）
+//   · 否则   → 基础讲解，并把当前节点带过去（基础学习页按 route.query.pathId / .node 落位）
+// **主按钮永远不指向学习复盘**：一是系统设计 §1.4 的边表里概览的出口只有基础讲解和基础测试；
+// 二是这份载荷支撑不了那个判断 —— recommendation.action_type 是节点的类型（quiz/read），
+// 不是"你已经读完了该去测"，拿它分支会跳过没读过的节点的阅读。
+const nextActionTarget = computed(() => {
+  if (path.completed) return { name: 'advancedLearning' }
+  const query = {}
+  if (path.id) query.pathId = path.id
+  if (recommendation.targetId) query.node = recommendation.targetId
+  return Object.keys(query).length ? { name: 'fundamentals', query } : { name: 'fundamentals' }
+})
+
+// ── ② 为什么是它 ─────────────────────────────────────────────
+const weakRows = computed(() => {
+  const rows = new Map()
+  for (const point of blindSpots.value) {
+    const tag = point?.tag || point?.knowledge_tag
+    if (!tag) continue
+    rows.set(tag, {
+      tag,
+      accuracy: clampPercent(point.accuracy),
+      attempts: Math.max(0, Math.round(Number(point.attempts) || 0)),
+      nodeTitle: point.node_title || '',
+      pathId: point.path_id,
+      nodeId: point.node_id,
+    })
   }
-  return path
-}
-function formatDuration(seconds) { const value = Number(seconds || 0); if (value < 60) return `${value}秒`; const minutes = Math.round(value / 60); if (minutes < 60) return `${minutes}分钟`; return `${(minutes / 60).toFixed(1)}小时` }
+  for (const bar of masteryBars.value) {
+    const tag = bar?.label || bar?.knowledge_tag
+    if (!tag || rows.has(tag)) continue
+    rows.set(tag, {
+      tag,
+      accuracy: clampPercent(bar.score ?? bar.accuracy),
+      attempts: Math.max(0, Math.round(Number(bar.attempts) || 0)),
+      nodeTitle: '',
+      pathId: null,
+      nodeId: null,
+    })
+  }
+  return [...rows.values()]
+    .filter((row) => row.accuracy !== null)
+    .map((row) => ({
+      ...row,
+      // 「已答 0 题」是没话找话 —— 雷达维度转过来的条目没有作答次数，那半句就不出现。
+      detail: [`正确率 ${row.accuracy}%`, row.attempts > 0 && `已答 ${row.attempts} 题`, row.nodeTitle && `来自「${row.nodeTitle}」`].filter(Boolean).join(' · '),
+      reviewTo: row.pathId && row.nodeId ? { name: 'foundationTest', query: { pathId: row.pathId, node: row.nodeId } } : null,
+    }))
+    // 有复习链接的排前面（那几条才是能立刻动手的），组内按正确率升序 —— 最弱的先看到。
+    .sort((a, b) => (b.reviewTo ? 1 : 0) - (a.reviewTo ? 1 : 0) || a.accuracy - b.accuracy)
+})
 
-const pathProgressLabel = computed(() => path.progress === null ? '正在生成' : `${path.progress}%`)
-const hasNextAction = computed(() => Boolean(path.nextAction?.type && nextTopic.value))
+// 空不是"正在生成"。答过题的账号是**终态**（没有弱项是好事），没答过的是"等你去做"。
+const weakEmptyCopy = computed(() => (diagnosis.answered > 0
+  ? '你已经答过的题里还没有需要补强的知识点。'
+  : '还没有答题记录。完成一次章节测验后，这里会列出掌握得还不牢的知识点。'))
+
+// ── ③ 我在哪 ─────────────────────────────────────────────────
+const pathSegments = computed(() => path.trend.map((node, index) => {
+  const status = String(node?.status || '')
+  const kind = status === 'completed' ? 'done' : (status === 'in_progress' || status === 'unlocked') ? 'current' : 'locked'
+  return {
+    id: node?.id ?? index,
+    title: String(node?.title || '').trim() || `第 ${index + 1} 个节点`,
+    kind,
+    kindLabel: { done: '已完成', current: '可学习', locked: '未解锁' }[kind],
+  }
+}))
+const currentSegment = computed(() => pathSegments.value.find((segment) => segment.kind === 'current'))
+const pathStripLabel = computed(() => {
+  const total = pathSegments.value.length
+  if (!total) return ''
+  const done = pathSegments.value.filter((segment) => segment.kind === 'done').length
+  const base = `已完成 ${done} / 共 ${total} 个节点`
+  return currentSegment.value ? `${base}，当前可学「${currentSegment.value.title}」` : base
+})
+
+// 后端还没有掌握度数据时给的 stage 是「正在生成」，那其实是"还没开始答题"，不是"在生成"。
+const stageLabel = computed(() => {
+  const stage = String(diagnosis.stage || '')
+  if (stage && stage !== '正在生成') return stage
+  return diagnosis.answered > 0 ? '评估中' : '完成一次测验后给出'
+})
+
+// 活跃度取代了原来的「学习 N 秒」—— 那个数结构性恒为 0：StudySession 的唯一写入方是
+// /study/heartbeat，而前端从来没调用过它。这里数的是 LearningEvent 与答题记录的并集。
+const activityLabel = computed(() => {
+  if (!activity.lastActiveDate) {
+    return activity.windowDays ? `最近 ${activity.windowDays} 天没有学习记录` : '还没有学习记录'
+  }
+  const week = activity.activeDays7d > 0 ? `近 7 天活跃 ${activity.activeDays7d} 天` : '近 7 天没有学习'
+  return `${week} · 最近学习${relativeDay(activity.lastActiveDate)}`
+})
+
+// 后端回的是**日期**不是时间戳，这是刻意的（库里存的是 naive 时间，当时间戳解析会整体偏
+// 一个时区）。所以这里也只按日期相减，不做时刻运算。
+function relativeDay(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''))
+  if (!match) return ''
+  const then = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  const now = new Date()
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+  // 服务端按 UTC 归日、浏览器按本地日：UTC+8 的凌晨本地已经是新的一天而 UTC 还是前一天，
+  // 相减会出现 0 甚至 -1，两种都当"今天"。
+  const days = Math.round((today - then) / 86400000)
+  if (days <= 0) return '今天'
+  if (days === 1) return '昨天'
+  return `${days} 天前`
+}
+
 function resetOverviewState() {
   Object.assign(profile, { direction: '', goal: '' })
-  Object.assign(path, { id: null, subject: '', currentNode: '', nextAction: null, nodes: [], difficultyTrend: [], resourceDifficultyMatch: [], progress: null, completed: false })
-  Object.assign(stats, { studySeconds: 0, examAnswered: 0, weakPoints: [] })
-  goals.value = []
-  nextContent.value = []
-  mastery.value = []
-  Object.assign(overviewSummary, { masteryScore: null, text: '' })
+  Object.assign(path, { id: null, completed: false, trend: [] })
+  Object.assign(diagnosis, { stage: '', answered: 0 })
+  Object.assign(recommendation, { judgement: '', reason: '', criteria: '', action: '', targetId: null })
+  Object.assign(activity, { activeDays7d: 0, lastActiveDate: null, windowDays: 0 })
+  blindSpots.value = []
+  masteryBars.value = []
 }
 
 async function loadOverview() {
@@ -140,23 +252,33 @@ async function loadOverview() {
   errorMessage.value = ''
   resetOverviewState()
   try {
-    const result = await learningApi.getOverview()
-    const overview = unwrap(result) || {}
+    const overview = unwrap(await learningApi.getOverview()) || {}
     const profileData = overview.profile || {}
-    Object.assign(profile, { direction: profileData.direction || '', goal: profileData.goal || '' })
-    const subjects = Array.isArray(overview.subjects) ? overview.subjects : []
+    const diagnosisData = overview.diagnosis || {}
     const pathData = overview.path || {}
-    const content = Array.isArray(overview.next_content) ? overview.next_content : []
-    const progress = Number(pathData.progress)
-    Object.assign(path, { id: pathData.id || null, subject: subjects[0]?.name || '', currentNode: content[0]?.title || '', nextAction: overview.recommendation?.action_type ? { type: overview.recommendation.action_type } : null, nodes: content, difficultyTrend: Array.isArray(pathData.difficulty_trend) ? pathData.difficulty_trend : [], resourceDifficultyMatch: Array.isArray(pathData.resource_difficulty_match) ? pathData.resource_difficulty_match : [], progress: Number.isFinite(progress) ? Math.round(progress) : null, completed: pathData.completed === true })
-    goals.value = Array.isArray(overview.goals) ? overview.goals : []
-    nextContent.value = content
-    const summary = overview.summary || {}
-    const diagnosis = overview.diagnosis || {}
-    Object.assign(stats, { studySeconds: Number(summary.total_study_seconds) || 0, examAnswered: Number(diagnosis.answered) || 0, weakPoints: Array.isArray(overview.blind_spots) ? overview.blind_spots : [] })
-    overviewSummary.masteryScore = summary.mastery_score ?? null
-    overviewSummary.text = summary.text || summary.description || overview.recommendation?.reason || overview.recommendation?.judgement || ''
-    mastery.value = Array.isArray(overview.mastery_bars) ? overview.mastery_bars : []
+    const advice = overview.recommendation || {}
+    const activityData = overview.activity || {}
+    Object.assign(profile, { direction: profileData.direction || '', goal: profileData.goal || '' })
+    Object.assign(path, {
+      id: pathData.id || null,
+      completed: pathData.completed === true,
+      trend: Array.isArray(pathData.difficulty_trend) ? pathData.difficulty_trend : [],
+    })
+    Object.assign(diagnosis, { stage: diagnosisData.stage || '', answered: Number(diagnosisData.answered) || 0 })
+    Object.assign(recommendation, {
+      judgement: advice.judgement || '',
+      reason: advice.reason || '',
+      criteria: advice.criteria || '',
+      action: advice.action || '',
+      targetId: advice.target_id ?? null,
+    })
+    Object.assign(activity, {
+      activeDays7d: Number(activityData.active_days_7d) || 0,
+      lastActiveDate: activityData.last_active_date || null,
+      windowDays: Number(activityData.window_days) || 0,
+    })
+    blindSpots.value = Array.isArray(overview.blind_spots) ? overview.blind_spots : []
+    masteryBars.value = Array.isArray(overview.mastery_bars) ? overview.mastery_bars : []
   } catch (error) {
     errorMessage.value = error?.response?.data?.detail || error?.message || '请稍后重试'
   } finally {
@@ -167,133 +289,71 @@ onMounted(loadOverview)
 </script>
 
 <style scoped>
-.overview-page { display: flex; height: calc(100vh - 64px); min-height: 0; flex-direction: column; overflow: hidden; }.overview-page :deep(.page-heading) { flex: 0 0 auto; margin-bottom: 18px; }.overview-dashboard { display: grid; min-height: 0; flex: 1; grid-template-rows: minmax(150px, .5fr) minmax(0, 1fr); gap: 18px; }.overview-columns { display: grid; min-height: 0; grid-template-columns: minmax(0, 1.08fr) minmax(320px, .92fr); gap: 18px; align-items: stretch; }.overview-left { display: grid; min-height: 0; grid-template-rows: minmax(0, .78fr) minmax(0, 1fr); gap: 18px; }.overview-top-cards { display: grid; min-height: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }.surface-pad { padding: 22px; }.path-trend-panel { min-height: 0; padding-bottom: 15px; }.section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }.section-heading--compact { align-items: center; margin-bottom: 16px; }.section-heading h2 { margin: 0; font-size: 18px; }.section-heading .eyebrow { margin-bottom: 6px; }.trend-caption,.muted { color: var(--muted); font-size: 11px; }.trend-chart { position: relative; min-height: 0; height: calc(100% - 47px); }.trend-chart svg { display: block; width: 100%; height: calc(100% - 20px); overflow: visible; }.chart-grid { stroke: var(--line); stroke-width: 1; stroke-dasharray: 4 6; }.trend-line { fill: none; stroke: var(--accent-deep); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }.trend-point { fill: var(--paper); stroke: var(--accent-deep); stroke-width: 2; }.trend-labels { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; }.compact-panel { min-height: 0; }.compact-panel .section-heading svg { color: var(--accent-deep); }.goal-list { display: grid; gap: 14px; margin: 28px 0 0; padding: 0; list-style: none; }.goal-list li { display: flex; align-items: center; gap: 11px; color: var(--ink); font-size: 12px; line-height: 1.4; }.check-circle { flex: 0 0 14px; width: 14px; height: 14px; border: 1px solid var(--accent-deep); border-radius: 50%; }.next-topic { min-height: 0; margin: 29px 0 15px; color: var(--ink); font-size: 14px; line-height: 1.65; }.text-link { display: inline-flex; align-items: center; gap: 5px; color: var(--accent-deep); font-size: 11px; font-weight: 800; text-decoration: none; }.blindspot-panel { min-height: 0; overflow: hidden; }.blindspot-list { display: grid; gap: 0; }.blindspot-item { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(100px, 1.2fr) 26px; align-items: center; gap: 14px; min-height: 50px; border-top: 1px solid var(--line); }.blindspot-item:first-child { border-top: 0; }.blindspot-item strong,.blindspot-item small { display: block; }.blindspot-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }.blindspot-item small { margin-top: 4px; color: var(--muted); font-size: 10px; }.mini-progress { height: 5px; overflow: hidden; border-radius: 99px; background: #e9eee8; }.mini-progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent-deep); }.icon-link { display: grid; width: 26px; height: 26px; place-items: center; border-radius: 50%; color: var(--accent-deep); }.icon-link:hover { background: var(--soft); }.mastery-panel { display: flex; min-height: 0; flex-direction: column; }.mastery-score { color: var(--accent-deep); font-size: 28px; }.mastery-chart { position: relative; display: flex; min-height: 0; flex: 1; padding: 10px 0 0 38px; border-bottom: 1px solid var(--ink); border-left: 1px solid var(--ink); }.mastery-axis { position: absolute; top: 8px; bottom: -4px; left: -36px; display: flex; flex-direction: column; justify-content: space-between; color: var(--muted); font-size: 10px; }.bars { display: flex; flex: 1; align-items: stretch; justify-content: space-around; gap: 14px; }.bar-column { display: grid; flex: 1; grid-template-rows: 1fr auto; gap: 9px; min-width: 0; }.bar-track { position: relative; display: flex; align-items: flex-end; justify-content: center; height: 100%; }.bar-value { display: block; width: min(42px, 70%); min-height: 4px; border: 1px solid var(--accent-deep); border-radius: 5px 5px 0 0; background: var(--accent); }.bar-label { overflow: hidden; color: var(--muted); font-size: 10px; text-align: center; text-overflow: ellipsis; white-space: nowrap; }.mastery-footer { display: flex; justify-content: space-between; gap: 10px; margin-top: 15px; color: var(--muted); font-size: 11px; }.empty-state,.loading-state { color: var(--muted); font-size: 12px; line-height: 1.6; }.empty-state { padding: 20px 0; }
-@media (max-width: 900px) { .overview-page { height: auto; min-height: 0; overflow: visible; }.overview-columns { grid-template-columns: 1fr; }.overview-left { grid-template-rows: auto auto; }.mastery-panel { min-height: 460px; } } @media (max-width: 620px) { .overview-top-cards { grid-template-columns: 1fr; }.compact-panel { min-height: auto; }.mastery-chart { height: 280px; flex: none; }.trend-chart { height: 155px; }.trend-chart svg { height: 135px; }.surface-pad { padding: 17px; }.trend-heading-side { justify-items: start; }.trend-caption { text-align: left; } }
-</style>
+/* 内容驱动的高度：原来用 fr 拉伸面板，于是知识盲区空着也要撑满半屏。整页改成随内容长，
+   由 .page-container 滚动。 */
+.overview-page { display: grid; gap: 16px; align-content: start; }
+.overview-page :deep(.page-heading) { margin-bottom: 2px; }
+.overview-page :deep(.page-heading h1) { color: #1e3c34; font-size: 22px; line-height: 1.4; }
+.overview-page :deep(.page-heading .eyebrow) { color: var(--muted); font-size: 12px; letter-spacing: .08em; }
+.overview-page :deep(.page-heading h1 + p) { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
 
-<style scoped>
-.overview-page :deep(.page-heading) { margin-bottom: 8px; }
-.overview-page :deep(.page-heading h1) { font-size: 20px; line-height: 1.4; }
-.overview-page :deep(.page-heading .eyebrow) { font-size: 12px; line-height: 1.3; letter-spacing: .08em; }
-.overview-page :deep(.page-heading .eyebrow) { color: var(--muted); }
-.overview-page { height: 100%; --ink: #3f4146; }
-.overview-dashboard { grid-template-rows: minmax(236px, .48fr) minmax(0, 1fr); gap: 16px; }
-.overview-columns, .overview-left, .overview-top-cards { gap: 16px; }
-.overview-left { grid-template-rows: minmax(220px, .9fr) minmax(0, 1fr); }
-.path-trend-panel { padding: 0 20px 4px; background: transparent; border: 0; }
-.path-trend-panel { overflow: hidden; }
-.path-trend-panel .trend-chart, .path-trend-panel .trend-chart svg { overflow: hidden; }
-.path-trend-panel { min-height: 210px; }
-.path-trend-panel .trend-chart { min-height: 88px; height: 88px; }
-.path-trend-panel .trend-chart svg { height: 70px; }
-.path-trend-panel .trend-line { stroke: var(--accent-deep); stroke-width: 4; }
-.path-trend-panel .trend-point { stroke: var(--accent-deep); stroke-width: 2.5; }
-.path-trend-panel .trend-caption { display: grid; gap: 3px; text-align: right; }
-.trend-heading-side { display: grid; justify-items: end; gap: 8px; }
-.trend-switch { position: relative; display: inline-flex; gap: 3px; min-width: 148px; padding: 3px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
-.trend-switch-indicator { position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc(50% - 3px); border-radius: 4px; background: var(--ink); transition: transform .22s cubic-bezier(.2,.8,.2,1); }
-.trend-switch.is-resource .trend-switch-indicator { transform: translateX(100%); }
-.trend-switch button { position: relative; z-index: 1; flex: 1; min-height: 25px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 10px; }
-.trend-switch button.is-active { color: #fff; }
-.resource-difficulty-line { stroke: var(--accent-deep); }
-.user-level-line { fill: none; stroke: #8a4c43; stroke-width: 2; stroke-dasharray: 6 5; stroke-linecap: round; }
-.path-trend-panel .trend-caption small { color: var(--muted); font-size: 10px; }
-.path-eyebrow { margin-bottom: 6px; color: var(--muted); }
-.module-eyebrow { margin-bottom: 6px; color: var(--muted); font-size: 11px; line-height: 1.3; }
-.path-subject { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; }
-.goal-panel { border: 0; background: rgba(250, 255, 196, .18); }
-.goal-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-.goal-heading .eyebrow { margin: 0 0 6px; color: var(--muted); font-size: 11px; }
-.goal-heading h2 { margin: 0; font-size: 20px; line-height: 1.4; }
-.goal-count { display: grid; min-width: 28px; height: 28px; place-items: center; border-radius: 50%; background: rgba(255, 255, 255, .72); color: var(--ink); font-size: 12px; font-weight: 800; }
-.next-panel { border: 0; background: #f7f6fb; }
-.next-panel { display: flex; flex-direction: column; }
-.next-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.next-heading .eyebrow { margin: 0 0 6px; color: var(--muted); font-size: 11px; }
-.next-heading h2 { margin: 0; font-size: 20px; line-height: 1.4; }
-.next-mark { display: grid; width: 40px; height: 40px; flex: 0 0 40px; place-items: center; border-radius: 50%; background: rgba(255, 255, 255, .76); color: #403D88; }
-.compact-panel, .blindspot-panel, .mastery-panel { border-radius: 12px; }
-.compact-panel, .blindspot-panel, .mastery-panel { box-sizing: border-box; padding: 20px; }
-.section-heading--compact { margin-bottom: 16px; }
-.section-heading h2 { font-size: 20px; line-height: 1.4; }
-.trend-caption, .muted { font-size: 12px; line-height: 1.4; }
-.goal-list { margin: 0; }
-.goal-list { gap: 12px; }
-.goal-list li { font-size: 14px; line-height: 1.5; }
-.goal-list { gap: 0; }
-.goal-list li { display: grid; grid-template-columns: 28px minmax(0, 1fr) 8px; align-items: center; gap: 10px; min-height: 36px; padding: 6px 0; border-top: 1px solid rgba(63, 65, 70, .12); }
-.goal-list li:first-child { border-top: 0; }
-.goal-index { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.goal-copy { min-width: 0; overflow: hidden; color: var(--ink); font-size: 13px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
-.goal-status { width: 8px; height: 8px; border-radius: 50%; background: #403D88; }
-.next-topic { margin: 0 0 22px; }
-.next-topic { margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
-.next-content { flex: 1; margin: 16px 0 20px; padding-top: 16px; border-top: 1px solid rgba(63, 65, 70, .12); }
-.next-label { display: block; margin-bottom: 8px; color: var(--muted); font-size: 12px; line-height: 1.4; }
-.next-content .next-topic { margin: 0; color: var(--ink); font-size: 16px; line-height: 1.5; }
-.mastery-footer { margin-top: 22px; }
-.mastery-footer { margin-top: 16px; font-size: 12px; line-height: 1.4; }
-.blindspot-item { min-height: 48px; gap: 12px; }
-.blindspot-panel { background: rgba(250, 255, 196, .18); padding: 16px; }
-.blindspot-panel .section-heading { margin-bottom: 8px; }
-.blindspot-copy { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 10px; min-width: 0; }
-.blindspot-index { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.blindspot-item { grid-template-columns: minmax(0, 1fr) minmax(110px, 1.2fr) 28px; min-height: 48px; padding: 4px 0; }
-.blindspot-item strong { font-size: 14px; line-height: 1.4; }
-.blindspot-item small { font-size: 12px; line-height: 1.4; }
-.blindspot-item .mini-progress span { background: #403D88; }
-.blindspot-item .icon-link { background: rgba(255, 255, 255, .68); }
-.mastery-chart { border-color: var(--line); }
-.mastery-chart { padding-left: 0; }
-.mastery-axis { display: none; }
-.mastery-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
-.mastery-headline { display: grid; justify-items: end; gap: 3px; min-width: 94px; }
-.mastery-headline span { color: var(--muted); font-size: 11px; }
-.mastery-headline strong { color: var(--ink); font-size: 28px; line-height: 1; }
-.mastery-headline em { padding: 3px 7px; border-radius: 999px; background: #f8e8e5; color: #8a4c43; font-size: 10px; font-style: normal; font-weight: 800; white-space: nowrap; }
-.mastery-headline em.is-positive { background: #e9f0e3; color: var(--accent-deep); }
-.mastery-legend { display: flex; gap: 15px; margin: 16px 0 8px; color: var(--muted); font-size: 10px; }
-.mastery-legend span { display: inline-flex; align-items: center; gap: 6px; }
-.legend-swatch { width: 8px; height: 8px; border-radius: 2px; background: #1e3c34; }
-.legend-swatch--target { background: #dce3dc; }
-.overview-start-button { border: 0; border-radius: 12px; background: #1e3c34; color: #fff; }
-.overview-start-button:hover { border: 0; border-radius: 12px; background: #142a24; color: #fff; }
-.bar-track { gap: 4px; }
-.bar-value { display: flex; align-items: flex-start; justify-content: center; width: min(26px, 42%); border-color: #1e3c34; background: #1e3c34; transition: height .62s cubic-bezier(.22,1,.36,1), background-color .25s ease; }
-.bar-value--target { border-color: #dce3dc; background: #dce3dc; }
-.bar-value strong { padding-top: 6px; color: #fff; font-size: 10px; font-weight: 800; opacity: 0; transform: translateY(4px); transition: opacity .3s ease .12s, transform .42s cubic-bezier(.22,1,.36,1) .12s; white-space: nowrap; }
-.bar-column:hover .bar-value strong, .bar-value:focus-within strong { opacity: 1; transform: translateY(0); }
+.overview-page .surface { border: 1px solid rgba(63, 91, 49, .28); border-radius: 12px; box-shadow: 0 8px 24px rgba(45, 40, 92, .07); }
+.surface-pad { padding: 20px; }
+
+.panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.panel-heading__copy { min-width: 0; }
+.panel-heading .eyebrow { margin: 0 0 6px; color: var(--muted); font-size: 11px; letter-spacing: .1em; }
+.panel-heading h2 { margin: 0; color: #1e3c34; font-size: 20px; line-height: 1.4; }
+.panel-heading small { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.panel-count { flex: 0 0 auto; color: var(--muted); font-size: 12px; }
+
+.weak-list { display: grid; margin: 0; padding: 0; list-style: none; }
+.weak-item { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 1.1fr) 28px; align-items: center; gap: 14px; min-height: 52px; padding: 6px 0; border-top: 1px solid var(--line); }
+.weak-item:first-child { border-top: 0; }
+.weak-item__copy { min-width: 0; }
+.weak-item strong { display: block; overflow: hidden; color: var(--ink); font-size: 14px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.weak-item small { display: block; margin-top: 4px; overflow: hidden; color: var(--muted); font-size: 12px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.mini-progress { height: 6px; overflow: hidden; border-radius: 99px; background: #e9eee8; }
+.mini-progress span { display: block; height: 100%; border-radius: inherit; background: #1e3c34; }
+.icon-link { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 50%; color: #1e3c34; }
+.icon-link:hover { background: var(--soft); }
+/* 没有复习入口的行也占住这一格，否则右侧的链接会参差不齐 */
+.icon-link--none { visibility: hidden; }
+
+.path-strip { display: flex; gap: 3px; height: 14px; }
+.path-seg { flex: 1 1 0; min-width: 3px; border-radius: 3px; }
+.path-seg--done { background: #1e3c34; }
+.path-seg--current { background: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-deep); }
+.path-seg--locked { background: #dce3dc; }
+.path-caption { margin: 10px 0 18px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+.where-facts { display: grid; gap: 12px 28px; margin: 0; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.where-fact { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: baseline; gap: 12px; }
+.where-fact dt { color: var(--muted); font-size: 12px; }
+.where-fact dd { margin: 0; color: var(--ink); font-size: 13px; line-height: 1.6; }
+
+.empty-state, .loading-state { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.empty-state { margin: 0; padding: 12px 0 2px; }
+.error-state strong { display: block; color: #1e3c34; font-size: 15px; }
+.error-state p { margin: 8px 0 14px; color: var(--muted); font-size: 13px; }
+
 :global(.page-container:has(.overview-page)) { background: #f7f7f7; }
 :global(.app-content:has(.overview-page) .app-header) { border-bottom-color: #e8e8e8; background: #f7f7f7; }
-.overview-page .surface { border: 1px solid rgba(63, 91, 49, .28); box-shadow: 0 8px 24px rgba(45, 40, 92, .07); }
-.overview-page h2 { color: #1e3c34; }
-.overview-page .goal-panel, .overview-page .next-panel { box-shadow: 0 8px 22px rgba(45, 40, 92, .06); }
-.compact-panel .section-heading > svg { width: 32px; height: 32px; padding: 8px; border-radius: 50%; background: rgba(255, 255, 255, .72); }
-.overview-start-button { box-shadow: 0 6px 14px rgba(30, 60, 52, .2); }
-.overview-start-button:hover { box-shadow: 0 8px 18px rgba(30, 60, 52, .26); }
-.path-trend-panel { padding: 12px 20px 4px; border: 1px solid rgba(63, 91, 49, .2); border-radius: 12px; background: #f5f8ef; }
-.path-current-node { display: block; max-width: 520px; margin-top: 8px; overflow: hidden; color: var(--accent-deep); font-size: 11px; font-weight: 800; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
-.path-progress-badge { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 6px; color: var(--ink); font-variant-numeric: tabular-nums; }
-.path-progress-badge b { color: var(--accent-deep); font-size: 21px; line-height: 1; }
-.path-progress-badge small { color: var(--muted); font-size: 10px; }
-.goal-list li:first-child .goal-status { width: 10px; height: 10px; background: var(--accent); box-shadow: 0 0 0 3px rgba(185, 227, 49, .18); }
-.goal-list li:not(:first-child) .goal-status { opacity: .56; }
-.mastery-insight { display: -webkit-box; max-width: 94%; margin: 12px 0 1px; overflow: hidden; -webkit-box-orient: vertical; color: #514c8c; font-size: 11px; line-height: 1.55; -webkit-line-clamp: 2; }
-:global(.page-container:has(.overview-page)) { width: 100%; height: calc(100vh - 64px); box-sizing: border-box; margin: 0; padding: 20px 20px 20px 28px; overflow: hidden; }
+/* 固定视口高度 + 内部滚动。原来是 overflow: hidden，配上被 fr 拉伸的面板，内容一旦变多
+   就被裁掉且滚不动。 */
+:global(.page-container:has(.overview-page)) { width: 100%; height: calc(100vh - 64px); box-sizing: border-box; margin: 0; padding: 20px 20px 28px 28px; overflow-y: auto; }
+
 @media (max-width: 900px) {
-  .overview-page { height: auto; }
-  .overview-dashboard { grid-template-rows: auto auto; }
-  .path-trend-panel { min-height: 180px; }
-  .path-trend-panel .trend-chart { height: 88px; }
-  .overview-left { grid-template-rows: auto auto; }
+  .overview-page :deep(.page-heading h1) { font-size: 20px; }
   :global(.page-container:has(.overview-page)) { height: auto; min-height: 0; padding: 24px 20px 58px 24px; overflow: visible; }
 }
+
 @media (max-width: 620px) {
-  .mastery-card-header { gap: 12px; }
-  .mastery-headline { min-width: 76px; }
-  .mastery-headline strong { font-size: 24px; }
-  .mastery-legend { margin-top: 13px; }
-  .path-current-node { max-width: 260px; }
-  .path-trend-panel { padding: 16px; }
+  .surface-pad { padding: 16px; }
+  /* 窄屏把进度条挪到标题下面独占一行，链接跨两行居中 */
+  .weak-item { grid-template-columns: minmax(0, 1fr) 28px; row-gap: 8px; }
+  .weak-item .mini-progress { grid-column: 1; grid-row: 2; }
+  .weak-item .icon-link { grid-row: 1 / span 2; align-self: center; }
+  .weak-item small { white-space: normal; }
 }
 </style>

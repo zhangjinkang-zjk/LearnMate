@@ -41,7 +41,21 @@ button { cursor: pointer; }
 .sidebar-workflow-launcher > i { position: absolute; top: 1px; right: 1px; width: 7px; height: 7px; border-radius: 50%; background: #70aa63; box-shadow: 0 0 0 4px rgba(112,170,99,.18); animation: workflowLauncherPulse 1.3s ease-out infinite; }
 @keyframes workflowLauncherPulse { 0% { box-shadow: 0 0 0 0 rgba(112,170,99,.35); } 100% { box-shadow: 0 0 0 8px rgba(112,170,99,0); } }
 .sidebar-section { padding: 0; }
+/* **中间那三个图标是一条线，上下那两个不是。** 一列纯图标里，学习概览（总览）、
+   三个步骤、资料库（工具）长得完全一样，看不出"这三步是一条路"。
+   浅绿底用的是 #e8f2de —— 仓库里已有的那支绿（文件树选中行、任务条计数都用它），
+   不新开一个色。取的是这一支而不是更浅的 #f1f6eb（那支是拿来做悬停底色的，
+   压在白胶囊上几乎看不出差别）。**这是挑色时的推断，没实测过观感** ——
+   真觉得太浅或太重，要改的就是这一个值。
+   宽度正好是 dock 的内容区（64 − 10×2 = 44px），和按钮同宽，所以它读起来是
+   "这三个在一起"，而不是一块浮出来的面板。 */
+.sidebar-track { margin: 11px 0; padding: 8px 0; border-radius: 16px; background: #e8f2de; }
+/* 下面两条把 `.sidebar-nav-group` 那组"分组间距"整个盖掉了 —— 那两个组本来就同属
+   一条线，中间留着 11px 会变出一道说不清的分隔。类名只有这一处用法，但定义留着，
+   它是个通用的分组类。 */
 .sidebar-nav-group { margin-top: 11px; padding-top: 11px; border-top: 0; }
+.sidebar-track .sidebar-nav-group { margin-top: 0; padding-top: 0; }
+.sidebar-track .sidebar-nav-group + .sidebar-nav-group { margin-top: 9px; }
 .sidebar-group-label { display: none; margin: 0 10px 9px; color: rgba(239,243,232,.52); font-size: 10px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
 .sidebar-section--secondary { margin-top: 11px; padding-top: 11px; border-top: 0; }
 .sidebar-label { display: none; margin: 0 10px 9px; color: rgba(239,243,232,.52); font-size: 10px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
@@ -127,6 +141,10 @@ button { cursor: pointer; }
   .sidebar-workflow-launcher > span { position: static; padding: 0; background: transparent; color: inherit; font-size: 13px; opacity: 1; pointer-events: auto; transform: none; }
   .sidebar-workflow-launcher > i { top: 10px; right: 12px; }
   .sidebar-nav-group, .sidebar-section--secondary { border-top: 0; }
+  /* 这一档侧边栏是 232px 的深绿整屏抽屉，不是那块白胶囊 —— 上面那层浅绿底放上来
+     会变成深底里一块刺眼的亮块。分组在这一档本来就表达得出来（`.sidebar-group-label`
+     在这里是可见的），不需要底。 */
+  .sidebar-track { margin: 0; padding: 0; border-radius: 0; background: transparent; }
   .sidebar-group-label { display: block; }
   .sidebar-nav { gap: 5px; }
   .sidebar-link { justify-content: flex-start; width: auto; min-height: 40px; margin: 0; padding: 0 11px; border-radius: 6px; font-size: 13px; }

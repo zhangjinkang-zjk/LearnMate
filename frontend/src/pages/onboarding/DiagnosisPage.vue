@@ -14,7 +14,10 @@
           <div v-for="(message, index) in messages" :key="`${message.role}-${index}`" class="chat-message" :class="`chat-message--${message.role}`">
             {{ message.text }}
           </div>
-          <div v-if="isLoading" class="chat-message chat-message--assistant chat-message--typing">...</div>
+          <!-- 三个点只在**还没出字**的时候出现（见 chatTyping）。出题要等 9–156 秒，
+               第一个 delta 一落下问题气泡就已经在长了，那时再挂一串点在下面，屏幕上
+               就有两个"正在回复"的信号。 -->
+          <div v-if="showTyping" class="chat-message chat-message--assistant chat-message--typing">...</div>
         </div>
 
         <form v-if="currentQuestion && !isFinished" class="conversation-input" @submit.prevent="submitAnswer">
@@ -52,6 +55,7 @@ import { useRouter } from 'vue-router'
 import { diagnosisApi } from '@/shared/api/diagnosisApi'
 import { applyWorkflowEvent, finishWorkflow, resetWorkflow } from '@/entities/agent/agentWorkflowState'
 import { learningState } from '@/entities/learning/learningState'
+import { shouldShowTyping } from '@/shared/lib/chatTyping'
 import ImmersiveOnboardingBackdrop from '@/shared/ui/ImmersiveOnboardingBackdrop.vue'
 
 const router = useRouter()
@@ -70,32 +74,54 @@ const sessionId = ref('')
 const loadingMessage = ref('正在分析你的回答')
 
 // 模型是边写边推的（SSE 的 reply_delta）：一轮里有两段 —— 先判分那句回复，再下一题。
-// 每来一段就往对应气泡里追加，所以第一个字一出现就顶掉了"正在等一整段返回"。
-// 值是气泡在 messages 里的下标，收到最终结果时按它把那句话改成服务端认定的版本。
-const liveBubbles = ref({})
+//
+// 这两段在屏幕上**合成同一张卡片**：先点评你上一题答得怎么样，紧接着就是下一题。服务端
+// 本来就是按这个顺序分两段推的（reply 段判分、question 段出题，见 utils/llm_stream 的
+// bind_channel），以前前端给每段各建一个气泡，一轮就散成两张卡；合成一条消息之后，对话
+// 回到干净的一问一答。
+//
+// 两段**必须分开存**，不能共用一个字符串：reply 的定稿要等整条流结束才到（那时下一题早
+// 就在屏幕上长完了），共用一个串的话这次定稿会把已经显示出来的问题冲掉。
+const turnParts = ref({ reply: '', question: '' })
 
-function appendDelta(channel, text) {
-  const key = channel === 'question' ? 'question' : 'reply'
-  if (!text) return
-  const index = liveBubbles.value[key]
-  if (index === undefined || index >= messages.value.length) {
-    messages.value.push({ role: 'assistant', text: '' })
-    liveBubbles.value[key] = messages.value.length - 1
-    messages.value[liveBubbles.value[key]].text = text
+// 本轮那张卡片的 messages 下标，-1 表示还没建。每轮开头都要重置 —— 否则新一轮的字会
+// 接着写进上一轮的卡片。
+const liveBubble = ref(-1)
+
+// 三个点只在**还没出字**的时候出现（见 shared/lib/chatTyping）：这一页的等待特别长
+// （出题 9–156 秒），而第一个 delta 一落下卡片就已经在长了，判据会把点收掉。
+const showTyping = computed(() => shouldShowTyping(messages.value, isLoading.value))
+
+// 把两段合成本轮卡片的正文。空段不参与 —— 第一题没有点评，缺一段不该在卡片顶上留个空行。
+function syncLiveBubble() {
+  const text = [turnParts.value.reply, turnParts.value.question]
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+    .join('\n\n')
+  if (liveBubble.value < 0) {
+    messages.value.push({ role: 'assistant', text })
+    liveBubble.value = messages.value.length - 1
     return
   }
-  messages.value[index].text = (messages.value[index].text || '') + text
+  messages.value[liveBubble.value].text = text
 }
 
-// 结果里的那句话是权威版本：流式那段可能被超时截断，或者模型没按格式写。
+function resetLiveBubble() {
+  turnParts.value = { reply: '', question: '' }
+  liveBubble.value = -1
+}
+
+function appendDelta(channel, text) {
+  if (!text) return
+  turnParts.value[channel === 'question' ? 'question' : 'reply'] += text
+  syncLiveBubble()
+}
+
+// 结果里的那句话是权威版本（流式那段可能被超时截断，或者模型没按格式写）。只替换自己
+// 那一段，另一段原样留着 —— 两段分开存就是为了这里。
 function setChannelText(channel, text) {
-  const index = liveBubbles.value[channel]
-  if (index !== undefined && index < messages.value.length) {
-    messages.value[index].text = text
-    return
-  }
-  messages.value.push({ role: 'assistant', text })
-  liveBubbles.value[channel] = messages.value.length - 1
+  turnParts.value[channel === 'question' ? 'question' : 'reply'] = text
+  syncLiveBubble()
 }
 
 // 出题要等模型，实测同一个提示词 9 秒到 156 秒不等（供应商那边负载波动），等待本身
@@ -145,8 +171,11 @@ async function startDiagnosis() {
   answerDraft.value = ''
   currentQuestion.value = null
   errorMessage.value = ''
-  messages.value = [{ role: 'assistant', text: '我会根据你的学习方向，从基础理解开始了解你的起点。每次只回答一个问题即可。' }]
-  liveBubbles.value = {}
+  // 开局不留气泡：第一题本来就是模型生成的，再垫一句写死的开场白等于替它先开一次口；
+  // 而且它是一条"有字的助手消息"，会跟 showTyping 的判据打架（详见 chatTyping）。
+  // 等待本身仍然可见 —— 列表里的三个点 + 底部状态行的"正在根据你的学习方向生成第一道题"。
+  messages.value = []
+  resetLiveBubble()
   // 诊断是独立的一条工作流（workflowKind='diagnosis'），阶段表只有"学情诊断"。
   resetWorkflow({ title: '学情诊断', workflowKind: 'diagnosis' })
 
@@ -165,7 +194,7 @@ async function startDiagnosis() {
     const result = await diagnosisApi.startStream({ ...context.value, max_steps: totalQuestions }, handleStreamEvent)
     sessionId.value = result.session_id
     currentQuestion.value = result.question
-    // 第一题在流式里已经边写边显示了，这里只把最后那句定稿，不再多推一个气泡。
+    // 第一题在流式里已经边写边显示了，这里只把最后那句定稿，不再多推一张卡片。
     setChannelText('question', questionText(result.question))
   } catch (error) {
     failedStep.value = 'start'
@@ -186,7 +215,7 @@ async function submitAnswer() {
   const answer = answerDraft.value.trim()
   if (!answer || !currentQuestion.value || isLoading.value) return
   messages.value.push({ role: 'user', text: answer })
-  liveBubbles.value = {}
+  resetLiveBubble()
   isLoading.value = true
   loadingMessage.value = '正在结合你的回答调整下一道题'
   startWaiting()
@@ -206,7 +235,7 @@ async function submitAnswer() {
     const feedback = result.feedback || {}
     // 服务端现在直接给一句平铺的 reply（它自己保证非空，真拿不到也会说"已记录你的回答"）。
     // 这句通常在流式里已经写出来了，这里是定稿（流被超时截断时也是它兜住），所以走
-    // setChannelText 复用同一个气泡，而不是再多推一个。后面两个字段是旧响应的写法，
+    // setChannelText 改写卡片里那一段，而不是再多推一张。后面两个字段是旧响应的写法，
     // 留着兼容老版本后端。
     const reply = String(result.reply || feedback.feedback || feedback.analysis || '').trim()
     setChannelText('reply', reply || '已记录你的回答。')
@@ -226,9 +255,12 @@ async function submitAnswer() {
     // 那次作答接着往下推，所以翻车之后仍然能从当前题继续，而不是被"该题已经提交过"钉死。
     failedStep.value = 'answer'
     errorMessage.value = error.response?.data?.detail || error.message || '回答提交失败，请重试。'
+    // 撤回本轮推上去的内容，顺序不能反：流已经开始出字时，最后一条是本轮的卡片，
+    // 只 pop 一次撤掉的是卡片、学生那句回答会留在列表里，重试时再推一遍就成了两条。
+    if (liveBubble.value >= 0) messages.value.pop()
     messages.value.pop()
-    // 弹掉气泡会让记住的下标全部错位，下一次追加就会写到别人身上。
-    liveBubbles.value = {}
+    // 撤过之后记住的下标就失效了，下一次追加必须重新建卡片，否则会写到别人身上。
+    resetLiveBubble()
   } finally {
     isLoading.value = false
     stopWaiting()

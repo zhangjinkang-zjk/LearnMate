@@ -46,6 +46,7 @@ from backend.src.service.path.helpers import (
     frontier_node_id,
 )
 from backend.src.service.path.generation_locks import get_node_generation_lock
+from backend.src.service.path.path_generation_lock import get_path_generation_lock
 from backend.src.service.path.node_resource_jobs import ensure_job, stream_job
 from backend.src.service.path.path_video_jobs import ensure_path_video_job, get_path_video_job
 from backend.src.service.path.teaching_context import (
@@ -191,6 +192,18 @@ def _compute_node_count(subject: str, picture) -> int:
 
     level_adjust = int((kb_level - 3) * 2.0)
     return max(8, min(30, base + level_adjust))
+
+
+# 入口那条路径的节点数上限。
+#
+# 等待时间几乎全在模型调用上：每 4 个节点一组、一组一次调用（`_GROUP_SIZE`），而一次调用光
+# 首字延迟就是二十几到三十几秒。节点数从 20 降到 12 就是 5 组变 3 组、少一整波 —— 实测 20 个
+# 节点的路径要 5 分钟上下。
+#
+# 常量放在这里而不是 router：**两条入口都要用它**（学生点「确认画像」、诊断收尾），而 router
+# 只是其中一条。两条入口起头时第一条都沿用这个上限：学生最先要的是"有一条能进去的路"，节点
+# 可以后补；其余科目按各自的正常长度（`_compute_node_count` 给的是 8-30）在后台生成。
+ENTRY_PATH_NODE_CAP = 12
 
 
 class PathService:
@@ -526,6 +539,63 @@ class PathService:
                 except Exception:
                     logger.exception("删除空的流式路径失败 path_id=%s", path.id)
             yield event({"type": "error", "detail": str(exc) or "Path generation failed"})
+
+    @staticmethod
+    async def generate_subject_paths(
+        user_id: int,
+        subjects: list[str],
+        *,
+        difficulty: str = "medium",
+        node_counts: list[int] | None = None,
+        force_regenerate: bool = False,
+    ) -> list[str]:
+        """给这些科目依次生成路径；同一用户串行，两条入口共用一把锁。
+
+        **为什么要串行、为什么要锁。** 诊断收尾和「确认画像」两条入口相隔通常只有几十秒，
+        都会要求"给这些科目生成路径"。一条路径要跑完整张图（Leader 实测 105-185 秒）才落库，
+        并发跑四条会让模型调用互相挤 —— 第一条反而更晚出来，而学生只需要先有一条能进去的路。
+        锁则保证两条入口不把同一批科目各跑一遍（见 path_generation_lock）。
+
+        node_counts 与 subjects 对齐，0 表示按科目本来的长度（`_compute_node_count` 给 8-30）；
+        不传时**第一条自动封顶到 ENTRY_PATH_NODE_CAP** —— 学生最先要的是"有一条能进去的路"。
+        已存在的科目默认直接复用（`generate_path` 返回 cached），只有 force_regenerate 才重建。
+
+        单个科目失败只记日志、继续下一个：把四条捆在一起抛，等于一条失败就一条路都没有。
+        返回真正落了库的科目名，供调用方记日志。
+        """
+        done: list[str] = []
+        if not subjects:
+            return done
+        caps = list(node_counts or [])
+        lock = await get_path_generation_lock(user_id)
+        async with lock:
+            for index, subject in enumerate(subjects):
+                node_count = caps[index] if index < len(caps) else (ENTRY_PATH_NODE_CAP if index == 0 else 0)
+                try:
+                    existing = None
+                    if force_regenerate:
+                        existing = await LearningPath.filter(user_id=user_id, subject=subject).first()
+                    result = (
+                        await PathService.regenerate_path(existing.id, user_id)
+                        if existing
+                        else await PathService.generate_path(subject, user_id, difficulty, node_count)
+                    )
+                except Exception:
+                    logger.exception("学习路径生成失败 subject=%s user_id=%s", subject, user_id)
+                    continue
+                path_id = result.get("path_id") if isinstance(result, dict) else None
+                if not path_id:
+                    continue
+                # 生成接口也负责把路径接入当前学习进度：新路径在 generate_path 内已经完成
+                # 初始化；复用回来的缓存路径要在这里补齐，否则概览接口读不到它。
+                if result.get("cached"):
+                    try:
+                        await PathService.enroll_path(path_id, user_id)
+                    except Exception:
+                        logger.exception("复用路径接入进度失败 path_id=%s user_id=%s", path_id, user_id)
+                done.append(subject)
+                logger.info("学习路径已就绪 user_id=%s subject=%s path_id=%s", user_id, subject, path_id)
+        return done
 
     @staticmethod
     async def generate_path(

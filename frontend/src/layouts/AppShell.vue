@@ -16,14 +16,23 @@
           </nav>
         </div>
 
-        <div v-for="group in learningNavigationGroups" :key="group.label" class="sidebar-section sidebar-nav-group">
-          <p class="sidebar-group-label">{{ group.label }}</p>
-          <nav class="sidebar-nav" :aria-label="group.label">
-            <RouterLink v-for="item in group.items" :key="item.to" :to="item.to" class="sidebar-link">
-              <component :is="item.icon" :size="17" stroke-width="1.8" />
-              <span>{{ item.label }}</span>
-            </RouterLink>
-          </nav>
+        <!-- 这一块是**一条连续的主线**（① 基础学习 → ② 学习复盘 → ③ 进阶学习），
+             而上下那两个图标是另一种东西：学习概览是总览，资料库是工具。三者平铺在
+             同一列里时完全看不出这个区别，所以给主线这一块单独加个浅色底（见 main.css
+             的 .sidebar-track）。 -->
+        <div class="sidebar-track">
+          <div v-for="group in learningNavigationGroups" :key="group.label" class="sidebar-section sidebar-nav-group">
+            <p class="sidebar-group-label">{{ group.label }}</p>
+            <nav class="sidebar-nav" :aria-label="group.label">
+              <RouterLink v-for="item in group.items" :key="item.to" :to="item.to" class="sidebar-link">
+                <component :is="item.icon" :size="17" stroke-width="1.8" />
+                <!-- 顺序写在**悬停气泡**里，不在图标上挂角标（2026-09-30 去掉的）：
+                     这一排是 44px 的图标按钮，角标会和图标挤在一起，六个图标里三个带角标
+                     看着像状态标记 —— 而它想说的只是"先后"。 -->
+                <span>{{ item.step ? `第 ${item.step} 步 · ${item.label}` : item.label }}</span>
+              </RouterLink>
+            </nav>
+          </div>
         </div>
 
         <div class="sidebar-section sidebar-section--secondary">
