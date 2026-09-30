@@ -59,6 +59,22 @@
           <BookOpenText :size="16" aria-hidden="true" />
           <span><strong>建议先从主讲文档开始</strong><small>先读懂核心内容，再用 PPT、知识结构和视频辅助理解。</small></span>
         </div>
+        <form class="foundation-library__video-search" @submit.prevent="searchExternalVideos">
+          <label class="foundation-library__video-search-input">
+            <Search :size="16" aria-hidden="true" />
+            <span class="sr-only">搜索拓展资源</span>
+            <input v-model.trim="externalVideoSearchTerm" type="search" placeholder="搜索视频，例如：MCP 服务开发教程" />
+          </label>
+          <button class="button button--primary" type="submit" :disabled="isExternalVideoSearchLoading || externalVideoSearchTerm.length < 2">
+            <LoaderCircle v-if="isExternalVideoSearchLoading" class="spin" :size="15" />
+            <Search v-else :size="15" />
+            {{ isExternalVideoSearchLoading ? '搜索中' : '搜索视频' }}
+          </button>
+          <button v-if="hasExternalVideoSearchResults" class="foundation-library__video-search-clear" type="button" title="清除搜索结果" aria-label="清除搜索结果" @click="clearExternalVideoSearch">
+            <X :size="16" />
+          </button>
+        </form>
+        <p v-if="externalVideoSearchError" class="foundation-library__video-search-error">{{ externalVideoSearchError }}</p>
         <div v-if="resourceOverviewLoading" class="foundation-library__state surface" aria-live="polite">
           <LoaderCircle class="spin" :size="22" />
           <strong>正在整理你的学习资源</strong>
@@ -228,11 +244,11 @@
                 :aria-selected="resourceView === 'external_video'"
                 :class="{ 'is-active': resourceView === 'external_video' }"
                 :disabled="isActiveNodeExternalVideoLoading"
-                :title="activeNodeExternalVideoError || '查看当前章节的学习视频'"
+                :title="activeNodeExternalVideoError || '查看当前章节的拓展资源'"
                 @click="showLearningVideos"
               >
                 <PlayCircle :size="16" />
-                <span>{{ isActiveNodeExternalVideoLoading ? '查找中' : activeNodeExternalVideoError ? '重试视频' : '学习视频' }}</span>
+                <span>{{ isActiveNodeExternalVideoLoading ? '查找中' : activeNodeExternalVideoError ? '重试视频' : '拓展资源' }}</span>
               </button>
             </div>
           </nav>
@@ -472,7 +488,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, BookOpenText, CircleAlert, Download, Eye, ListTree, LoaderCircle, LockKeyhole, Network, PlayCircle, Presentation, Route, Video, X } from 'lucide-vue-next'
+import { ArrowLeft, ArrowRight, BookOpenText, CircleAlert, Download, Eye, ListTree, LoaderCircle, LockKeyhole, Network, PlayCircle, Presentation, Route, Search, Video, X } from 'lucide-vue-next'
 import ChapterCheck from '@/features/fundamentals/ChapterCheck.vue'
 import ChapterRail from '@/features/fundamentals/ChapterRail.vue'
 import LearningAssistant from '@/features/fundamentals/LearningAssistant.vue'
@@ -497,6 +513,10 @@ const externalVideoResources = ref([])
 const externalVideoLoadedNodeIds = ref({})
 const externalVideoLoadingNodeIds = ref({})
 const externalVideoErrors = ref({})
+const externalVideoSearchTerm = ref('')
+const isExternalVideoSearchLoading = ref(false)
+const externalVideoSearchError = ref('')
+const externalVideoSearchNodeId = ref(null)
 const selectedExternalVideo = ref(null)
 const previewNodeId = ref(null)
 const learningPath = ref(null)
@@ -564,6 +584,8 @@ const activeNodeLearningVideos = computed(() => externalVideoResources.value
   .filter((video) => Number(video.node_id) === Number(activeNode.value?.id)))
 const isActiveNodeExternalVideoLoading = computed(() => Boolean(externalVideoLoadingNodeIds.value[activeNode.value?.id]))
 const activeNodeExternalVideoError = computed(() => externalVideoErrors.value[activeNode.value?.id] || '')
+const hasExternalVideoSearchResults = computed(() => Number(externalVideoSearchNodeId.value) === Number(previewNode.value?.id)
+  && externalVideoResources.value.some((video) => video.is_manual_search && Number(video.node_id) === Number(previewNode.value?.id)))
 const resourceGroups = computed(() => {
   const nodes = learningPath.value?.nodes || []
   const videosByNodeId = new Map(nodes.map((node) => [Number(node.id), []]))
@@ -595,7 +617,7 @@ const activeResource = computed(() => ({
   video: videoResource.value,
   external_video: selectedExternalVideo.value,
 }[resourceView.value] || null))
-const activeResourceLabel = computed(() => ({ document: '主讲文档', ppt: 'PPT', mindmap: '知识结构', video: '视频讲解', external_video: '学习视频' }[resourceView.value] || '学习材料'))
+const activeResourceLabel = computed(() => ({ document: '主讲文档', ppt: 'PPT', mindmap: '知识结构', video: '视频讲解', external_video: '拓展资源' }[resourceView.value] || '学习材料'))
 const completedNodeCount = computed(() => learningPath.value?.nodes.filter((node) => node.status === 'completed').length || 0)
 const previousNode = computed(() => {
   if (!learningPath.value || activeNodeIndex.value <= 0) return null
@@ -611,10 +633,10 @@ const knowledgeContent = computed(() => extractDocumentSection(documentContent.v
 const exampleContent = computed(() => extractDocumentSection(documentContent.value, ['示例', '例子', '实践', 'example']) || '')
 const resourceStatusLabel = computed(() => {
   if (resourceView.value === 'external_video') {
-    if (isActiveNodeExternalVideoLoading.value) return '正在查找学习视频'
-    if (activeNodeExternalVideoError.value) return '学习视频暂时不可用'
-    if (activeNodeLearningVideos.value.length) return '学习视频已准备'
-    return '暂未找到学习视频'
+    if (isActiveNodeExternalVideoLoading.value) return '正在查找拓展资源'
+    if (activeNodeExternalVideoError.value) return '拓展资源暂时不可用'
+    if (activeNodeLearningVideos.value.length) return '拓展资源已准备'
+    return '暂未找到拓展资源'
   }
   if (isResourceLoading.value) return '正在准备本章'
   if (documentError.value) return '主讲文档异常'
@@ -667,7 +689,7 @@ function resourceTypeLabel(type) {
     ppt: '平台视觉辅助',
     mindmap: '平台知识结构',
     video: '平台视频课件',
-    external_video: '学习视频',
+    external_video: '拓展资源',
   }[type] || '学习资源'
 }
 
@@ -714,8 +736,8 @@ function parseExternalVideo(resource) {
     ...resource,
     ...payload,
     resource_id: resource?.resource_id || resource?.id,
-    title: payload.title || resource?.topic || '学习视频',
-    source_label: payload.source_label || payload.source || '学习视频',
+    title: payload.title || resource?.topic || '拓展资源',
+    source_label: payload.source_label || payload.source || '拓展资源',
     page_url: payload.page_url || resource?.file_url || resource?.url || '',
     embed_url: payload.embed_url || payload.preview_url || '',
   }
@@ -785,9 +807,9 @@ async function loadNodeExternalVideos(node, force = false) {
 
 function externalVideoErrorMessage(error) {
   const status = Number(error?.response?.status)
-  if (status === 404) return '这一章节的学习视频暂时不可用。'
+  if (status === 404) return '这一章节的拓展资源暂时不可用。'
   if (status === 429) return '查找过于频繁，请稍后再试。'
-  return errorDetail(error, '学习视频暂时无法加载，请稍后重试。')
+  return errorDetail(error, '拓展资源暂时无法加载，请稍后重试。')
 }
 
 async function showLearningVideos() {
@@ -814,6 +836,86 @@ async function retryLearningVideos() {
   const videos = await loadNodeExternalVideos(activeNode.value, true)
   const selected = videos.find((video) => video.page_url === selectedExternalVideo.value?.page_url) || videos[0] || null
   selectedExternalVideo.value = selected
+}
+
+function externalVideoSourceLabel(value, fallback = '外部拓展资源') {
+  try {
+    return new URL(value).hostname.replace(/^www\./, '') || fallback
+  } catch {
+    return fallback
+  }
+}
+
+function externalVideoEmbedUrl(value) {
+  const pageUrl = String(value || '')
+  const youtubeMatch = pageUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([\w-]{6,})/i)
+  if (youtubeMatch?.[1]) return `https://www.youtube-nocookie.com/embed/${youtubeMatch[1]}`
+  const bilibiliMatch = pageUrl.match(/\/(BV[\w]+)/i)
+  return bilibiliMatch?.[1] ? `https://player.bilibili.com/player.html?bvid=${bilibiliMatch[1]}&autoplay=0` : ''
+}
+
+function normalizeExternalVideoSearchResult(item, nodeId, index, videoIndex) {
+  const pageUrl = String(item?.url || item?.page_url || '').trim()
+  const title = String(item?.title || item?.name || '').trim()
+  if (!/^https?:\/\//i.test(pageUrl) || !title) return null
+  return {
+    ...item,
+    id: `manual-video-${nodeId}-${Date.now()}-${index}`,
+    node_id: nodeId,
+    resource_type: 'external_video',
+    video_index: videoIndex,
+    title,
+    topic: title,
+    page_url: pageUrl,
+    file_url: pageUrl,
+    url: pageUrl,
+    embed_url: externalVideoEmbedUrl(pageUrl),
+    cover_url: item.cover_url || item.thumbnail_url || item.thumbnail || '',
+    source_label: item.site_name || item.source_label || externalVideoSourceLabel(pageUrl),
+    description: String(item.snippet || item.summary || item.description || '').trim(),
+    is_manual_search: true,
+  }
+}
+
+async function searchExternalVideos() {
+  const query = externalVideoSearchTerm.value.trim()
+  const node = previewNode.value
+  if (query.length < 2 || !node || isExternalVideoSearchLoading.value) return
+  isExternalVideoSearchLoading.value = true
+  externalVideoSearchError.value = ''
+  try {
+    await loadNodeExternalVideos(node)
+    const results = await resourceApi.searchExternal(`${query} 视频教程`, 6)
+    const existingNodeVideos = externalVideoResources.value
+      .filter((video) => Number(video.node_id) === Number(node.id) && !video.is_manual_search)
+    const knownUrls = new Set(existingNodeVideos.map((video) => video.page_url || video.url).filter(Boolean))
+    const manualVideos = (Array.isArray(results) ? results : [])
+      .map((item, index) => normalizeExternalVideoSearchResult(item, node.id, index, existingNodeVideos.length + index))
+      .filter((video) => {
+        if (!video || knownUrls.has(video.page_url)) return false
+        knownUrls.add(video.page_url)
+        return true
+      })
+      .map((video, index) => ({ ...video, video_index: existingNodeVideos.length + index }))
+    externalVideoResources.value = [
+      ...externalVideoResources.value.filter((video) => !(video.is_manual_search && Number(video.node_id) === Number(node.id))),
+      ...manualVideos,
+    ]
+    externalVideoSearchNodeId.value = node.id
+    if (!manualVideos.length) externalVideoSearchError.value = '暂未找到匹配的视频，试试更具体的关键词。'
+  } catch (error) {
+    externalVideoSearchError.value = errorDetail(error, '视频搜索暂时不可用，请稍后重试。')
+  } finally {
+    isExternalVideoSearchLoading.value = false
+  }
+}
+
+function clearExternalVideoSearch() {
+  const nodeId = Number(externalVideoSearchNodeId.value)
+  externalVideoResources.value = externalVideoResources.value
+    .filter((video) => !video.is_manual_search || Number(video.node_id) !== nodeId)
+  externalVideoSearchNodeId.value = null
+  externalVideoSearchError.value = ''
 }
 
 function handleCoverError(event, resource) {
@@ -1267,6 +1369,8 @@ async function loadPage() {
     externalVideoLoadedNodeIds.value = {}
     externalVideoLoadingNodeIds.value = {}
     externalVideoErrors.value = {}
+    externalVideoSearchNodeId.value = null
+    externalVideoSearchError.value = ''
     externalVideoRequests.clear()
     const relatedSubjects = Array.isArray(portrait?.traits?.learning_direction_subjects)
       ? portrait.traits.learning_direction_subjects
@@ -1341,6 +1445,8 @@ async function selectPath(pathId) {
     externalVideoLoadedNodeIds.value = {}
     externalVideoLoadingNodeIds.value = {}
     externalVideoErrors.value = {}
+    externalVideoSearchNodeId.value = null
+    externalVideoSearchError.value = ''
     externalVideoRequests.clear()
     syncPathCatalog(selected)
     await router.replace({ query: { ...route.query, pathId: nextPathId, node: undefined, resource: undefined, resourceId: undefined, videoIndex: undefined } })
@@ -1463,10 +1569,10 @@ async function loadActiveNode() {
         try {
           selectedExternalVideo.value = parseExternalVideo(await resourceApi.get(resourceId))
         } catch (error) {
-          videoError.value = errorDetail(error, '学习视频暂时无法打开。')
+          videoError.value = errorDetail(error, '拓展资源暂时无法打开。')
         }
       }
-      if (!selectedExternalVideo.value && !videoError.value) videoError.value = '未找到这条学习视频。'
+      if (!selectedExternalVideo.value && !videoError.value) videoError.value = '未找到这条拓展资源。'
       isResourceLoading.value = false
       isResourceGenerating.value = false
       return
@@ -1866,6 +1972,16 @@ onBeforeUnmount(() => {
 .foundation-library__start-hint > span { display: grid; min-width: 0; gap: 2px; }
 .foundation-library__start-hint strong { font-size: 12px; }
 .foundation-library__start-hint small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.foundation-library__video-search { display: flex; width: min(100%, 560px); align-items: center; gap: 8px; margin: 0 0 16px; }
+.foundation-library__video-search-input { display: flex; min-width: 0; flex: 1; align-items: center; gap: 8px; min-height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--muted); }
+.foundation-library__video-search-input:focus-within { border-color: var(--accent-deep); box-shadow: 0 0 0 3px rgba(182, 216, 55, .16); }
+.foundation-library__video-search-input input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 11px; }
+.foundation-library__video-search .button { min-height: 36px; gap: 6px; padding: 0 10px; font-size: 11px; white-space: nowrap; }
+.foundation-library__video-search .button:disabled { cursor: not-allowed; opacity: .55; }
+.foundation-library__video-search-clear { display: grid; width: 36px; height: 36px; flex: 0 0 auto; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--muted); }
+.foundation-library__video-search-clear:hover { border-color: #abc28f; background: #edf5e5; color: var(--accent-deep); }
+.foundation-library__video-search-clear:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
+.foundation-library__video-search-error { margin: -9px 0 14px; color: #a66442; font-size: 11px; }
 .foundation-library__header .path-progress { flex: 0 0 220px; }
 .foundation-library__state { display: grid; min-height: 270px; place-items: center; align-content: center; gap: 9px; padding: 32px; color: var(--accent-deep); text-align: center; }
 .foundation-library__state strong { color: var(--ink); font-size: 16px; }
@@ -1997,6 +2113,7 @@ onBeforeUnmount(() => {
   .foundation-library__layout { display: grid; grid-template-columns: 1fr; gap: 18px; }
   .foundation-library__header { align-items: stretch; flex-direction: column; gap: 15px; margin-bottom: 17px; padding-bottom: 14px; }
   .foundation-library__header .path-progress { width: 100%; min-width: 0; }
+  .foundation-library__video-search { width: 100%; }
   .resource-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .resource-group__header h2 { max-width: 230px; }
   .resource-card { grid-template-rows: 54% minmax(0, 1fr); }

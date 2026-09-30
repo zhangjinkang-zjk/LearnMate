@@ -1,9 +1,9 @@
 <template>
-  <section class="learning-video-panel" aria-label="学习视频">
+  <section class="learning-video-panel" aria-label="拓展资源">
     <header class="learning-video-panel__header">
       <div>
-        <p class="eyebrow">LEARNING VIDEOS</p>
-        <h2>学习视频</h2>
+        <p class="eyebrow">EXTENDED RESOURCES</p>
+        <h2>拓展资源</h2>
         <p>为当前章节找到的相关学习内容。</p>
       </div>
       <span v-if="videos.length" class="learning-video-panel__count">{{ videos.length }} 个结果</span>
@@ -11,20 +11,20 @@
 
     <div v-if="isLoading" class="learning-video-panel__state" aria-live="polite">
       <LoaderCircle class="spin" :size="24" />
-      <strong>正在查找学习视频</strong>
+      <strong>正在查找拓展资源</strong>
       <p>结果准备好后会显示在这里。</p>
     </div>
 
     <div v-else-if="error" class="learning-video-panel__state learning-video-panel__state--error" role="status">
       <CircleAlert :size="24" />
-      <strong>学习视频暂时不可用</strong>
+      <strong>拓展资源暂时不可用</strong>
       <p>{{ error }}</p>
       <button class="button button--quiet" type="button" @click="$emit('retry')"><RotateCw :size="14" />重新查找</button>
     </div>
 
     <div v-else-if="!videos.length" class="learning-video-panel__state">
       <PlayCircle :size="24" />
-      <strong>暂未找到合适的学习视频</strong>
+      <strong>暂未找到合适的拓展资源</strong>
       <p>可以先继续阅读主讲文档，稍后再回来查看。</p>
     </div>
 
@@ -34,7 +34,7 @@
         class="learning-video-panel__player"
         :src="selectedVideo.embed_url"
         :title="selectedVideo.title"
-        label="学习视频"
+        label="拓展资源"
         referrer-policy="no-referrer"
       />
       <a
@@ -51,8 +51,8 @@
       <section v-else-if="selectedVideo" class="learning-video-panel__fallback">
         <PlayCircle :size="25" />
         <div>
-          <strong>{{ selectedVideo.title || '学习视频' }}</strong>
-          <p>{{ selectedVideo.description || '该学习视频需要在原页面打开观看。' }}</p>
+          <strong>{{ selectedVideo.title || '拓展资源' }}</strong>
+          <p>{{ selectedVideo.description || '该拓展资源需要在原页面打开观看。' }}</p>
         </div>
         <a v-if="selectedVideo.page_url" class="button button--primary" :href="selectedVideo.page_url" target="_blank" rel="noreferrer">
           打开视频
@@ -70,13 +70,13 @@
           @click="$emit('select', video)"
         >
           <span class="learning-video-card__cover">
-            <img :src="resourceCoverUrl(video)" :alt="`${video.title || '学习视频'}封面`" @error="handleCoverError($event, video)" />
+            <img :src="resourceCoverUrl(video)" :alt="`${video.title || '拓展资源'}封面`" @error="handleCoverError($event, video)" />
             <span class="learning-video-card__play"><PlayCircle :size="22" /></span>
             <span v-if="video.duration_text" class="learning-video-card__duration">{{ video.duration_text }}</span>
           </span>
           <span class="learning-video-card__content">
-            <span class="learning-video-card__source">{{ video.source_label || '学习视频' }}</span>
-            <strong>{{ video.title || '学习视频' }}</strong>
+            <span class="learning-video-card__source">{{ video.source_label || '拓展资源' }}</span>
+            <strong>{{ video.title || '拓展资源' }}</strong>
             <small>{{ videoMeta(video) || '相关学习内容' }}</small>
           </span>
         </button>

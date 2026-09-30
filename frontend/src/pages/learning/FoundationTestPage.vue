@@ -46,6 +46,12 @@
         </label>
       </section>
 
+      <StudyGarden
+        :nodes="learningPath.nodes || []"
+        :active-node-id="activeNodeId"
+        @select="selectNode"
+      />
+
       <section class="test-context">
         <div>
           <p class="eyebrow">CHAPTER CHECK</p>
@@ -139,6 +145,7 @@ import { computed, onMounted, ref } from 'vue'
 import { ArrowRight, BookOpenText, CircleAlert, LoaderCircle, MessageCircle, Route, SquareCheck } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 import FeynmanCoach from '@/features/fundamentals/FeynmanCoach.vue'
+import StudyGarden from '@/features/fundamentals/StudyGarden.vue'
 import PageTitle from '@/shared/ui/PageTitle.vue'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { learningApi } from '@/shared/api/learningApi'
