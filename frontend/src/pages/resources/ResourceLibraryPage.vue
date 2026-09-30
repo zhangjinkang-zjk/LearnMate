@@ -1,40 +1,11 @@
 <template>
   <div class="library-page">
-    <PageTitle eyebrow="RESOURCE LIBRARY" title="资料库" description="探索学习资源、查看个性化推荐，也可以管理你自己的学习资料">
+    <PageTitle eyebrow="MY RESOURCES" title="我的资源" description="你生成、上传和收藏的学习资料都在这里。">
       <template #actions>
         <RouterLink class="button button--quiet" to="/resources/knowledge"><Upload :size="15" />上传知识库</RouterLink>
         <button class="button button--primary" type="button" @click="generationOpen = true"><Sparkles :size="15" />生成资料</button>
       </template>
     </PageTitle>
-    <section class="resource-discovery">
-      <div class="discovery-search surface">
-        <div class="discovery-heading"><span class="discovery-icon"><BookOpen :size="20" /></span><div><p class="eyebrow">EXPLORE LEARNING</p><h2>探索学习资源</h2><p>查找课程、文档和实践教程，打开后即可开始学习。</p></div></div>
-        <form class="external-search-form" @submit.prevent="submitExternalSearch">
-          <label class="external-search-input"><Search :size="17" /><span class="sr-only">搜索学习资源</span><input v-model.trim="externalSearchTerm" type="search" placeholder="例如：Vue 3 响应式原理、Python 入门课程" /></label>
-          <button class="button button--primary" type="submit" :disabled="externalSearchLoading || externalSearchTerm.length < 2"><LoaderCircle v-if="externalSearchLoading" class="spin" :size="15" /><Search v-else :size="15" />{{ externalSearchLoading ? '搜索中' : '搜索资源' }}</button>
-        </form>
-        <p v-if="externalSearchError" class="discovery-error">{{ externalSearchError }}</p>
-      </div>
-      <aside class="discovery-ai surface"><span class="ai-mark"><Sparkles :size="19" /></span><div><p class="eyebrow">LEARNMATE AI</p><h2>按你的目标生成</h2><p>把学习目标交给 AI，生成文档、练习或视频资料。</p></div><button class="button button--quiet" type="button" @click="generationOpen = true">开始生成 <ArrowRight :size="14" /></button></aside>
-    </section>
-    <section class="recommended-section">
-      <div class="section-heading"><div><p class="eyebrow">RECOMMENDED FOR YOU</p><h2>{{ hasSearchedExternal ? '搜索结果' : '推荐资源' }}</h2><p>{{ hasSearchedExternal ? `关于「${externalSearchTerm}」的学习资源` : '根据你的学习方向精选的内容' }}</p></div><button v-if="hasSearchedExternal" class="button button--quiet" type="button" @click="clearExternalSearch">返回推荐</button></div>
-      <div v-if="externalSearchLoading" class="recommendation-state surface"><LoaderCircle class="spin" :size="18" />正在查找学习资源</div>
-      <div v-else-if="hasSearchedExternal && !externalResults.length" class="recommendation-state surface"><BookOpen :size="18" /><div><strong>暂时没有找到匹配资源</strong><p>换个关键词继续查找。</p></div></div>
-      <div v-else class="recommendation-grid">
-        <article v-for="item in (hasSearchedExternal ? externalResults : recommendedResources)" :key="item.key || item.resource_id || item.url" class="recommendation-card surface">
-          <div class="recommendation-card__cover"><img :src="resourceCoverUrl(item)" alt="" loading="lazy" /></div>
-          <div class="recommendation-card__content">
-            <div class="recommendation-card__top"><span class="recommendation-card__icon"><BookOpen :size="17" /></span><span>{{ item.site_name || item.source_label || typeLabel(item.resource_type) }}</span></div>
-            <h3>{{ item.title || item.topic }}</h3>
-            <p>{{ item.snippet || item.preview || item.match_reason || '适合当前学习方向的学习资源。' }}</p>
-            <a v-if="item.url" class="recommendation-link" :href="item.url" target="_blank" rel="noopener noreferrer">打开资源 <ExternalLink :size="13" /></a>
-            <button v-else class="recommendation-link" type="button" @click="openPreview(item)">查看资源 <ArrowUpRight :size="13" /></button>
-          </div>
-        </article>
-      </div>
-    </section>
-    <div class="my-resources-heading"><div><p class="eyebrow">MY RESOURCES</p><h2>我的资源</h2><p>你生成、上传和收藏的学习资料都在这里。</p></div></div>
     <section class="library-context surface">
       <div class="context-copy"><span class="context-icon"><Target :size="18" /></span><div><p class="eyebrow">PERSONALIZED FOR YOU</p><h2>{{ profile.direction || '正在生成学习方向…' }}</h2><p>{{ profile.stage || '正在生成学习阶段…' }}<span v-if="profile.goal"> · {{ profile.goal }}</span></p></div></div>
       <div class="context-stats"><div><strong>{{ filteredResources.length }}</strong><span>匹配材料</span></div><div><strong>{{ unreadCount }}</strong><span>待阅读</span></div><div><strong>{{ favoriteCount }}</strong><span>已收藏</span></div></div>
@@ -55,25 +26,17 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { ArrowRight, ArrowUpRight, BarChart3, BookOpen, ChevronDown, CircleAlert, Clock3, Code2, Compass, ExternalLink, FileText, ListChecks, LoaderCircle, PlayCircle, Search, Sparkles, Star, Target, Upload, X } from 'lucide-vue-next'
+import { ArrowUpRight, BarChart3, BookOpen, ChevronDown, CircleAlert, Clock3, Compass, LoaderCircle, Search, Sparkles, Star, Target, Upload, X } from 'lucide-vue-next'
 import PageTitle from '@/shared/ui/PageTitle.vue'
 import { learningApi } from '@/shared/api/learningApi'
 import { resourceApi } from '@/shared/api/resourceApi'
 import ResourceGenerationDialog from '@/features/resources/ResourceGenerationDialog.vue'
 import { resourceCoverUrl } from '@/utils/resourceCover'
-import mdnCover from '@/shared/assets/resource-covers/mdn-web-docs.jpg'
-import freeCodeCampCover from '@/shared/assets/resource-covers/freecodecamp.jpg'
-import runoobCover from '@/shared/assets/resource-covers/runoob.jpg'
 
 const unwrap = (response) => response?.data?.data ?? response?.data ?? []
-const loading = ref(true); const errorMessage = ref(''); const resources = ref([]); const publicResources = ref([]); const activeType = ref('all'); const searchTerm = ref(''); const previewResource = ref(null); const expandedResourceId = ref(null); const generationOpen = ref(false); const notice = ref(''); const externalSearchTerm = ref(''); const externalResults = ref([]); const externalSearchLoading = ref(false); const externalSearchError = ref(''); const hasSearchedExternal = ref(false); let noticeTimer = null
+const loading = ref(true); const errorMessage = ref(''); const resources = ref([]); const activeType = ref('all'); const searchTerm = ref(''); const previewResource = ref(null); const expandedResourceId = ref(null); const generationOpen = ref(false); const notice = ref(''); let noticeTimer = null
 const profile = reactive({ direction: '', goal: '', stage: '' })
 const tabs = [{ key: 'all', label: '全部' }, { key: 'document', label: '文档' }, { key: 'video', label: '视频' }, { key: 'code', label: '代码模板' }, { key: 'exercise', label: '练习题' }]
-const curatedRecommendations = [
-  { key: 'mdn', title: 'MDN Web Docs', site_name: 'MDN', resource_type: 'document', cover_url: mdnCover, snippet: '权威的 Web 平台、JavaScript 和 CSS 文档，适合随时查阅。', url: 'https://developer.mozilla.org/zh-CN/' },
-  { key: 'freecodecamp', title: 'freeCodeCamp', site_name: 'freeCodeCamp', resource_type: 'exercise', cover_url: freeCodeCampCover, snippet: '从基础到项目实践的免费编程课程与练习。', url: 'https://www.freecodecamp.org/learn/' },
-  { key: 'runoob', title: '菜鸟教程', site_name: '菜鸟教程', resource_type: 'reading', cover_url: runoobCover, snippet: '覆盖多种编程语言和开发工具的中文入门教程。', url: 'https://www.runoob.com/' },
-]
 const typeLabel = (type) => ({ document: '文档', reading: '阅读材料', video: '视频', external_video: '视频', code: '代码模板', template: '代码模板', exercise: '练习题', case: '案例' }[type] || '学习材料')
 const difficultyLabel = (resource) => resource.difficulty || resource.level || ''
 const normalize = (item) => {
@@ -83,7 +46,6 @@ const normalize = (item) => {
   return { ...item, resource_id: resourceId, topic, match_reason: item.match_reason || item.reason || '', source_label: item.source_label || item.source || '', is_read: Boolean(item.is_read), favorited: Boolean(item.favorited) }
 }
 const filteredResources = computed(() => resources.value.filter((item) => { const typeMatch = activeType.value === 'all' || item.resource_type === activeType.value || (activeType.value === 'video' && item.resource_type === 'external_video') || (activeType.value === 'code' && item.resource_type === 'template'); const needle = searchTerm.value.toLowerCase(); return typeMatch && (!needle || [item.topic, item.match_reason, item.source_label, typeLabel(item.resource_type)].join(' ').toLowerCase().includes(needle)) }))
-const recommendedResources = computed(() => publicResources.value.length ? publicResources.value.slice(0, 4) : curatedRecommendations)
 const countByType = (type) => type === 'all' ? resources.value.length : resources.value.filter((item) => item.resource_type === type || (type === 'video' && item.resource_type === 'external_video') || (type === 'code' && item.resource_type === 'template')).length
 const unreadCount = computed(() => resources.value.filter((item) => !item.is_read).length); const favoriteCount = computed(() => resources.value.filter((item) => item.favorited).length)
 async function loadResources() {
@@ -91,46 +53,20 @@ async function loadResources() {
   errorMessage.value = ''
   Object.assign(profile, { direction: '', goal: '', stage: '' })
   try {
-    const [resourceResult, overviewResult, publicResult] = await Promise.allSettled([resourceApi.list(), learningApi.getOverview(), resourceApi.list('public')])
+    const [resourceResult, overviewResult] = await Promise.allSettled([resourceApi.list(), learningApi.getOverview()])
     if (resourceResult.status === 'rejected') throw resourceResult.reason
     resources.value = (Array.isArray(resourceResult.value) ? resourceResult.value : []).map(normalize).filter(Boolean)
-    publicResources.value = publicResult.status === 'fulfilled' ? (Array.isArray(publicResult.value) ? publicResult.value : []).map(normalize).filter(Boolean) : []
     if (overviewResult.status === 'fulfilled') {
       const overview = unwrap(overviewResult.value) || {}
       Object.assign(profile, { direction: overview.profile?.direction || overview.subjects?.[0]?.name || '', goal: overview.profile?.goal || overview.goals?.[0]?.title || '', stage: overview.diagnosis?.stage || '' })
     }
   } catch (error) {
     resources.value = []
-    publicResources.value = []
     errorMessage.value = error?.response?.data?.detail || error?.message || '请稍后重试'
   } finally {
     loading.value = false
   }
 }
-function normalizeExternal(item) {
-  const url = String(item?.url || '').trim()
-  const title = String(item?.title || item?.name || '').trim()
-  if (!/^https?:\/\//i.test(url) || !title) return null
-  const resourceType = /(?:youtube\.com|youtu\.be|bilibili\.com)/i.test(url) ? 'video' : 'reading'
-  return { ...item, key: url, url, title, resource_type: item.resource_type || resourceType, snippet: String(item.snippet || item.summary || '').trim() }
-}
-async function submitExternalSearch() {
-  const query = externalSearchTerm.value.trim()
-  if (query.length < 2 || externalSearchLoading.value) return
-  externalSearchLoading.value = true
-  externalSearchError.value = ''
-  hasSearchedExternal.value = true
-  try {
-    const result = await resourceApi.searchExternal(query)
-    externalResults.value = (Array.isArray(result) ? result : []).map(normalizeExternal).filter(Boolean)
-  } catch (error) {
-    externalResults.value = []
-    externalSearchError.value = error?.response?.data?.detail || '搜索服务暂时不可用，请稍后重试。'
-  } finally {
-    externalSearchLoading.value = false
-  }
-}
-function clearExternalSearch() { hasSearchedExternal.value = false; externalResults.value = []; externalSearchError.value = '' }
 async function markRead(resource) { if (resource.is_read) return; const previous = resource.is_read; resource.is_read = true; try { await resourceApi.markRead(resource.resource_id) } catch { resource.is_read = previous } }
 function showNotice(message) { notice.value = message; window.clearTimeout(noticeTimer); noticeTimer = window.setTimeout(() => { notice.value = '' }, 2200) }
 async function handleGeneratedResources() { showNotice('资料已保存到资料库'); await loadResources() }
@@ -160,47 +96,8 @@ onBeforeUnmount(() => window.clearTimeout(noticeTimer))
 </script>
 
 <style scoped>
-.resource-discovery { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(260px, .8fr); gap: 14px; margin-bottom: 26px; }
-.discovery-search, .discovery-ai { min-width: 0; padding: 20px; }
-.discovery-search { background: #f7f6fb; border-color: transparent; }
-.discovery-heading { display: flex; align-items: flex-start; gap: 12px; }
-.discovery-heading h2, .discovery-ai h2 { margin: 0; font-size: 19px; line-height: 1.35; }
-.discovery-heading p:last-child, .discovery-ai p:last-of-type { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
-.discovery-icon, .ai-mark { display: grid; width: 40px; height: 40px; flex: 0 0 40px; place-items: center; border-radius: 11px; background: #1e3c34; color: #e2f452; }
-.external-search-form { display: flex; gap: 9px; margin-top: 18px; }
-.external-search-input { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; min-height: 42px; padding: 0 13px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--muted); }
-.external-search-input:focus-within { border-color: var(--accent-deep); box-shadow: 0 0 0 3px rgba(182, 216, 55, .16); }
-.external-search-input input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 12px; }
-.external-search-form .button { min-height: 42px; white-space: nowrap; }
-.external-search-form .button:disabled { cursor: not-allowed; opacity: .55; }
-.discovery-error { margin: 9px 0 0; color: #a55342; font-size: 11px; }
-.discovery-ai { display: grid; align-content: start; gap: 14px; background: rgba(250, 255, 196, .35); border-color: transparent; }
-.discovery-ai .button { justify-self: start; gap: 6px; }
-.recommended-section { margin-bottom: 28px; }
-.section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 13px; }
-.section-heading h2, .my-resources-heading h2 { margin: 0; font-size: 21px; line-height: 1.35; }
-.section-heading p:last-child, .my-resources-heading p:last-child { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
-.recommendation-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; }
-.recommendation-card { display: flex; min-width: 0; min-height: 274px; flex-direction: column; overflow: hidden; padding: 0; transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease; }
-.recommendation-card:hover { border-color: #a8ba9e; box-shadow: 0 8px 22px rgba(45,70,40,.08); transform: translateY(-1px); }
-.recommendation-card__cover { height: 150px; overflow: hidden; border-bottom: 1px solid var(--line); background: #1e3c34; }
-.recommendation-card__cover img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.recommendation-card__content { display: flex; min-height: 0; flex: 1; flex-direction: column; padding: 11px 16px 13px; }
-.recommendation-card__top { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
-.recommendation-card__icon { display: grid; width: 29px; height: 29px; place-items: center; border-radius: 8px; background: #1e3c34; color: #e2f452; }
-.recommendation-card h3 { overflow: hidden; margin: 8px 0 0; color: var(--ink); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
-.recommendation-card p { display: -webkit-box; overflow: hidden; margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.recommendation-link { display: inline-flex; align-items: center; gap: 5px; width: max-content; max-width: 100%; padding: 0; margin-top: auto; border: 0; background: transparent; color: var(--accent-deep); font-size: 11px; font-weight: 800; text-decoration: none; }
-.recommendation-link:hover { color: var(--ink); }
-.recommendation-state { display: flex; align-items: center; gap: 11px; min-height: 72px; padding: 16px; color: var(--muted); font-size: 12px; }
-.recommendation-state strong { color: var(--ink); }
-.recommendation-state p { margin: 4px 0 0; font-size: 11px; }
-.recommendation-state .button { margin-left: auto; gap: 5px; white-space: nowrap; }
-.my-resources-heading { display: flex; align-items: flex-end; justify-content: space-between; margin: 4px 0 13px; }
 .library-page { min-width: 0; }.library-page :deep(.page-heading) { margin-bottom: 24px; }.library-page :deep(.page-heading h1) { font-size: 30px; }.library-page :deep(.page-heading p) { max-width: 590px; }.library-context { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 20px 22px; margin-bottom: 18px; background: rgba(250,255,196,.2); border-color: transparent; }.context-copy { display: flex; align-items: center; gap: 13px; min-width: 0; }.context-icon { display: grid; width: 40px; height: 40px; flex: 0 0 40px; place-items: center; border-radius: 50%; background: #fff; color: var(--accent-deep); }.context-copy h2 { margin: 0; font-size: 18px; }.context-copy p:last-child { margin: 4px 0 0; color: var(--muted); font-size: 12px; }.context-stats { display: flex; gap: 28px; }.context-stats div { display: grid; gap: 2px; text-align: right; }.context-stats strong { color: var(--accent-deep); font-size: 22px; }.context-stats span { color: var(--muted); font-size: 11px; }.library-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 15px; }.filter-tabs { display: flex; gap: 4px; overflow-x: auto; }.filter-tabs button { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 11px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 12px; white-space: nowrap; }.filter-tabs button:hover { background: var(--soft); color: var(--ink); }.filter-tabs button.is-active { background: var(--ink); color: #fff; }.filter-tabs button span { opacity: .65; font-size: 10px; }.search-box { display: flex; align-items: center; gap: 8px; width: min(255px, 100%); min-height: 35px; padding: 0 11px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); }.search-box input { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--ink); font-size: 12px; }.resource-list { display: grid; gap: 10px; }.resource-row { display: grid; grid-template-columns: 46px minmax(0,1fr) auto; align-items: center; gap: 15px; padding: 16px 18px; transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease; }.resource-row:hover { border-color: #a8ba9e; box-shadow: 0 8px 22px rgba(45,70,40,.08); transform: translateY(-1px); }.resource-row.is-read { background: #fcfdfb; }.resource-mark { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 10px; color: var(--accent-deep); background: #e9f0e3; }.mark-video { color: #514c8c; background: #eeeef9; }.mark-code { color: #79602b; background: #f8efd7; }.mark-exercise { color: #8a4c43; background: #f8e8e5; }.resource-main { min-width: 0; }.resource-title-line { display: flex; align-items: center; gap: 9px; min-width: 0; }.resource-title-line h2 { overflow: hidden; margin: 0; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }.type-label { flex: 0 0 auto; padding: 3px 7px; border-radius: 3px; background: var(--soft); color: var(--muted); font-size: 10px; }.resource-reason { overflow: hidden; margin: 7px 0 9px; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.resource-reason span { margin-right: 7px; color: var(--accent-deep); font-size: 10px; font-weight: 800; }.resource-meta { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: 11px; }.resource-meta span { display: inline-flex; align-items: center; gap: 5px; }.resource-actions { display: flex; align-items: center; gap: 9px; }.icon-button { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid transparent; border-radius: 50%; background: transparent; color: var(--muted); }.icon-button:hover, .icon-button.is-favorite { border-color: #d9e1d5; background: #f2f6ef; color: var(--accent-deep); }.open-button { gap: 5px; min-height: 34px; padding: 0 10px; font-size: 11px; }.library-state { display: flex; align-items: center; gap: 12px; padding: 24px; color: var(--muted); font-size: 13px; }.library-state strong { color: var(--ink); }.library-state p { margin: 4px 0 0; font-size: 12px; }.library-state--error { color: #9a4a43; }.library-state .button { margin-left: auto; }.spin { animation: spin 1s linear infinite; } .preview-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(25,38,31,.45); }.preview-modal { position: relative; width: min(620px, 100%); padding: 28px; box-shadow: 0 22px 60px rgba(13,28,20,.22); }.preview-close { position: absolute; top: 16px; right: 16px; }.preview-modal h2 { margin: 0; padding-right: 25px; font-size: 22px; }.preview-source { margin: 9px 0 20px; color: var(--muted); font-size: 12px; }.preview-content { max-height: 300px; overflow: auto; padding: 17px; border: 1px solid var(--line); background: #fafcf9; color: var(--ink); font-size: 13px; line-height: 1.75; white-space: pre-wrap; }.preview-footer { display: flex; justify-content: flex-end; gap: 9px; margin-top: 20px; }@keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 700px) { .library-context { align-items: flex-start; flex-direction: column; }.context-stats { width: 100%; justify-content: space-between; gap: 12px; }.context-stats div { text-align: left; }.library-toolbar { align-items: stretch; flex-direction: column-reverse; }.search-box { width: 100%; }.resource-row { grid-template-columns: 40px minmax(0,1fr); gap: 12px; }.resource-mark { width: 38px; height: 38px; }.resource-actions { grid-column: 2; justify-content: flex-end; }.resource-title-line { align-items: flex-start; flex-direction: column; gap: 5px; }.resource-title-line h2 { white-space: normal; }.resource-reason { white-space: normal; }.library-page :deep(.page-heading h1) { font-size: 25px; } }
-@media (max-width: 820px) { .resource-discovery { grid-template-columns: 1fr; }.recommendation-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 540px) { .external-search-form { align-items: stretch; flex-direction: column; }.external-search-form .button { width: 100%; }.recommendation-grid { grid-template-columns: 1fr; }.discovery-search, .discovery-ai { padding: 16px; }.section-heading { align-items: flex-start; flex-direction: column; gap: 9px; }.recommendation-state { align-items: flex-start; flex-wrap: wrap; }.recommendation-state .button { width: 100%; margin-left: 29px; } }
 .library-page .surface,
 .library-page .search-box,
 .library-page .filter-tabs button,
