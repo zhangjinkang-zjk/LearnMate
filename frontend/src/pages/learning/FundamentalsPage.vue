@@ -501,6 +501,7 @@ import VideoLessonFrame from '@/features/fundamentals/VideoLessonFrame.vue'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { readPortrait } from '@/shared/api/portraitApi'
 import { applyWorkflowEvent, applyWorkflowProgress, finishWorkflow, resetWorkflow } from '@/entities/agent/agentWorkflowState'
+import { clearCurrentPage, setCurrentPage } from '@/entities/learning/currentPageContext'
 import { resourceApi } from '@/shared/api/resourceApi'
 import { generatedResourceCover, resourceCoverUrl } from '@/utils/resourceCover'
 
@@ -574,6 +575,16 @@ const VIDEO_RESTART_BACKOFF_MS = 5000
 
 const activeNodeIndex = computed(() => learningPath.value?.nodes.findIndex((node) => node.id === activeNodeId.value) ?? -1)
 const activeNode = computed(() => learningPath.value?.nodes[activeNodeIndex.value] || null)
+
+// 把"我在哪一页"报给跨界面助手（罗伯特）。**只报标识** —— 节点名、教材正文都由
+// 服务端按 id 重查（见 schemas/chat.py 的信任规则）。章节没定位到时就只报页面名，
+// 后端拿不到定位会整块不渲染，不会猜。
+watch(
+  () => activeNode.value?.id,
+  () => setCurrentPage('fundamentals', { nodeId: activeNode.value?.id }),
+  { immediate: true },
+)
+onBeforeUnmount(() => clearCurrentPage('fundamentals'))
 const previewNode = computed(() => {
   const nodes = learningPath.value?.nodes || []
   const selected = nodes.find((node) => Number(node.id) === Number(previewNodeId.value) && node.status !== 'locked')

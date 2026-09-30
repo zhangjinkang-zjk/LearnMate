@@ -15,7 +15,8 @@
           <div class="message-bubble" v-html="renderMarkdown(message.text)"></div>
         </div>
       </template>
-      <div v-if="isStreaming" class="assistant-message is-assistant">
+      <!-- 三个点只在**还没出字**的时候出现（见 chatTyping）。 -->
+      <div v-if="showTyping" class="assistant-message is-assistant">
         <span class="message-avatar">LM</span>
         <div class="message-bubble typing" aria-label="正在回复"><span></span><span></span><span></span></div>
       </div>
@@ -37,9 +38,8 @@
         rows="3"
         maxlength="1200"
         :disabled="isStreaming"
-        placeholder="围绕本章继续追问…"
-        @keydown.ctrl.enter.prevent="sendMessage"
-        @keydown.meta.enter.prevent="sendMessage"
+        placeholder="围绕本章继续追问…（Enter 发送，Shift + Enter 换行）"
+        @keydown="onComposerKeydown"
       ></textarea>
       <div class="composer-actions">
         <span>{{ draft.length }} / 1200</span>
@@ -53,10 +53,12 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { LoaderCircle, Send, Sparkles } from 'lucide-vue-next'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { renderMarkdown } from '@/shared/lib/markdown'
+import { shouldSendOnKeydown } from '@/shared/lib/composerKeys'
+import { shouldShowTyping } from '@/shared/lib/chatTyping'
 
 const props = defineProps({
   pathId: { type: [Number, String], required: true },
@@ -72,6 +74,7 @@ const errorMessage = ref('')
 const isStreaming = ref(false)
 const messageList = ref(null)
 const messages = ref([])
+const showTyping = computed(() => shouldShowTyping(messages.value, isStreaming.value))
 let requestController = null
 
 function createWelcomeMessage() {
@@ -97,6 +100,13 @@ async function scrollToLatest() {
 
 function useStarter(text) {
   draft.value = text
+  sendMessage()
+}
+
+// Enter 发送、Shift + Enter 换行，输入法选字期间的回车不算发送（见 composerKeys）。
+function onComposerKeydown(event) {
+  if (!shouldSendOnKeydown(event)) return
+  event.preventDefault()
   sendMessage()
 }
 

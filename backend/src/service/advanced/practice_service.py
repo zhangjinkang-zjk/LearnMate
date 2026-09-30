@@ -100,6 +100,15 @@ def _transcript_text(messages: Any, *, limit: int = 20, item_limit: int = 260) -
     return "\n".join(lines)
 
 
+# 「无任务」：学生不挑任务，带着自己的项目来，聊什么由他说了算。
+#
+# 这不是"任务字段为空" —— 那是个**能被读成两种意思**的信号（"前端没传"还是"确实没有"），
+# 而教练那边本来就是按任务办事的（会问"要交付什么""验收标准是什么"）。所以这里给一个
+# 显式的模式标记，让 `classroom_chat._render_task_block` 能明说"这次没有任务"，
+# 而不是让任务块凭空消失、再由模型去猜。
+FREE_TASK_MODE = "free"
+
+
 def _task_snapshot(task: Any) -> dict:
     """会话自己那份任务快照。
 
@@ -107,10 +116,15 @@ def _task_snapshot(task: Any) -> dict:
     `kind` / `support_level` / `stages`，那是给阶段机选词汇、定提示强度用的；阶段机
     没了，它们就只剩"看起来很像重要状态"的副作用 —— 谁读到都会以为会话记得自己的
     类型，从而去猜一套不存在的流程。不存了。
+
+    `mode` 是唯一的例外，而且只在自己的值非空时才写：它不描述任务的类型，它说的是
+    "这次压根没有任务" —— 那是渲染层必须知道、又无法从其余字段推出来的事。
+    常规任务的快照里**没有这个键**，读到缺失就是常规任务；不塞个空串进去，省得下游
+    去分辨 `""` 和缺失的差别。
     """
     if not isinstance(task, dict):
         return {}
-    return {
+    snapshot = {
         "id": _clip_text(task.get("id"), 128),
         "title": _clip_text(task.get("title"), 240),
         "problem": _clip_text(task.get("problem") or task.get("scenario"), 1200),
@@ -121,6 +135,10 @@ def _task_snapshot(task: Any) -> dict:
             limit=8,
         ),
     }
+    mode = _clip_text(task.get("mode"), 24)
+    if mode:
+        snapshot["mode"] = mode
+    return snapshot
 
 
 def _welcome_message(snapshot: Any = None) -> dict[str, str]:
@@ -135,6 +153,17 @@ def _welcome_message(snapshot: Any = None) -> dict[str, str]:
     阶段名，而任务说明在后面。直接讲任务。
     """
     snapshot = snapshot if isinstance(snapshot, dict) else {}
+    # 「无任务」要单独开口：下面两句话都在讲"这个任务"，而这里根本没有任务，
+    # 学生打开页面第一眼就会看到一句凭空指代的话。
+    if _clip_text(snapshot.get("mode"), 24) == FREE_TASK_MODE:
+        return {
+            "role": "assistant",
+            "text": (
+                "这次不挑任务，你带什么来就聊什么。"
+                "先说一句你想看的是什么 —— 手上某个项目的某段代码、一个拿不准的设计，"
+                "还是某个一直没想通的问题？"
+            ),
+        }
     title = _clip_text(snapshot.get("title"), 120)
     if title:
         text = (

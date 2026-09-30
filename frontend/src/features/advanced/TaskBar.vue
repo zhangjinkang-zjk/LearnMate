@@ -24,7 +24,7 @@
       class="button button--quiet task-bar__toggle"
       type="button"
       :aria-expanded="detailsOpen"
-      @click="detailsOpen = !detailsOpen"
+      @click="toggleDetails"
     >
       <ClipboardList :size="13" />任务说明
       <ChevronDown class="task-bar__chevron" :class="{ 'is-open': detailsOpen }" :size="13" />
@@ -36,7 +36,7 @@
         type="button"
         :aria-expanded="open"
         :disabled="!options.length"
-        @click="open = !open"
+        @click="toggleMenu"
       >
         <Repeat2 :size="13" />换一个
         <span v-if="options.length" class="task-bar__count">{{ options.length }}</span>
@@ -53,8 +53,12 @@
       </ul>
     </div>
 
-    <!-- 展开后整行铺满（flex-basis: 100%），不挤压上面那排。用内联展开而不是浮层：
-         浮层要处理层级和裁剪，而这里的内容本来就该被完整读到。 -->
+    <!-- **必须浮层，不能内联展开。** 这一段最长能到几屏，以前是 flex-basis:100% 挤在
+         文档流里，一展开就把下面的编辑器整体推下去 —— 而这一页的主体就是编辑器，
+         学生点"任务说明"是想**边看边写**，不是想看它把工作区顶开。
+         浮层常有的两个代价在这里都不成立：它盖住的那块本来就不用透出去，位置也就
+         固定在任务条正下方，不需要跟着滚动走。点外面收起，和"换一个"共用一套遮罩。 -->
+    <div v-if="detailsOpen && hasDetails" class="task-bar__backdrop" @click="detailsOpen = false"></div>
     <section v-if="detailsOpen && hasDetails" class="task-bar__details">
       <div v-if="briefText" class="task-bar__field">
         <span class="task-bar__field-label">任务情境</span>
@@ -96,9 +100,21 @@ const props = defineProps({
 const emit = defineEmits(['select', 'regenerate'])
 
 const open = ref(false)
-// **默认收起。** 这一页是全屏工作区，展开的任务说明会把它整块往下挤 ——
+// **默认收起。** 这一页是全屏工作区，展开的任务说明会盖住它 ——
 // 试过默认展开，代价是编辑器少一大截，不值得。按钮本身就在那儿，找得到的。
 const detailsOpen = ref(false)
+
+// 两个浮层互斥：两块内容各自都有遮罩，同时开着会多出一层看不出区别的"点一下没反应"
+// （点中的是下面那层遮罩，关的是另一个）。开一个就关另一个，行为才是确定的。
+function toggleDetails() {
+  detailsOpen.value = !detailsOpen.value
+  if (detailsOpen.value) open.value = false
+}
+
+function toggleMenu() {
+  open.value = !open.value
+  if (open.value) detailsOpen.value = false
+}
 
 // 任务说明的四段都来自服务端任务负载（router 整体透传）。任何一段缺失就不渲染它，
 // 全缺时连开关都不出现 —— 空荡荡的"任务说明"比没有更让人困惑。
@@ -136,8 +152,9 @@ function choose(taskId) {
 </script>
 
 <style scoped>
-/* flex-wrap 是为了让展开的任务说明能独占一整行，而不是把标题压扁 */
-.task-bar { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 10px; padding: 9px 14px; border: 1px solid rgba(63, 91, 49, .28); border-radius: 12px; background: var(--paper); box-shadow: 0 8px 24px rgba(45, 40, 92, .07); }
+/* `position: relative` 是任务说明浮层的定位基准。flex-wrap 现在只剩窄屏那条规则在用
+   （标题整行换行），浮层已经不参与排版了。 */
+.task-bar { position: relative; display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 10px; padding: 9px 14px; border: 1px solid rgba(63, 91, 49, .28); border-radius: 12px; background: var(--paper); box-shadow: 0 8px 24px rgba(45, 40, 92, .07); }
 .task-bar__kind { flex: 0 0 auto; color: var(--accent-deep); font-size: 11px; font-weight: 800; }
 .task-bar__difficulty { flex: 0 0 auto; padding: 3px 8px; border: 1px solid #d5e2c8; border-radius: 99px; background: #f3f8ea; color: var(--accent-deep); font-size: 10px; font-weight: 800; }
 .task-bar__title { min-width: 0; flex: 1; margin: 0; overflow: hidden; color: var(--ink); font-size: 14px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
@@ -160,17 +177,24 @@ function choose(taskId) {
 .task-bar__toggle:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
 .task-bar__chevron { transition: transform .2s ease; }
 .task-bar__chevron.is-open { transform: rotate(180deg); }
-/* 整行铺满：flex-basis 100% 让它换到下一行，上面那排的宽度一点都不受影响。
-   `max-height` 是硬的：展开也**绝不能**把下面的编辑器挤没 —— 这一页的主体是工作区，
-   任务说明是附属信息，它该在不看的时候收起、在看的时候滚动，而不是无限长下去。 */
+/* 浮在下面那排之上，**不占流**：展开它，工作区一像素都不动。
+   `max-height` 用 vh 而不是 px 为主 —— 窄屏上 320px 可能比编辑器还高，而这里的原则是
+   "说明永远不能比它说明的东西还占地方"。超出就自己滚动（overscroll-behavior 挡住
+   滚动穿透到下面的编辑器）。 */
 .task-bar__details {
+  position: absolute;
+  z-index: 21;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
   display: grid;
-  flex: 1 1 100%;
   gap: 10px;
-  max-height: min(32vh, 320px);
-  margin-top: 2px;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
+  max-height: min(50vh, 420px);
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  box-shadow: 0 14px 34px rgba(31, 49, 40, .16);
   overflow-y: auto;
   overscroll-behavior: contain;
 }

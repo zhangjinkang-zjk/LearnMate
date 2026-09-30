@@ -49,7 +49,9 @@
             <div class="practice-bubble" v-html="renderMarkdown(message.text)"></div>
           </div>
         </template>
-        <div v-if="isStreaming" class="practice-message is-assistant">
+        <!-- 三个点只在**还没出字**的时候出现（见 chatTyping）。整段流式期间都挂着的话，
+             屏幕上就有两个"正在回复"的信号：正在长的那条气泡，和它下面这串点。 -->
+        <div v-if="showTyping" class="practice-message is-assistant">
           <span class="practice-avatar">LM</span>
           <div class="practice-bubble typing" aria-label="正在回复"><span></span><span></span><span></span></div>
         </div>
@@ -58,24 +60,16 @@
 
     <p v-if="errorMessage" class="practice-error" role="status">{{ errorMessage }}</p>
     <form v-if="!isLoadingSession" class="practice-composer" @submit.prevent="sendMessage()">
-      <!-- 提示本质是预设提问（它发的就是一句固定话术，见 requestHint），所以做成一角建议，
-           不跟发送并排。VS Code 那边同类东西走 `/` 命令，这里退一步用建议角更直白。
-           顺带修掉 hintIsProminent 的老毛病：同一个位置按 support_level 在 quiet/secondary
-           之间变形，本身就是"这按钮放错地方了"的信号 —— 建议角天然可选，只换配色就够了。 -->
-      <button class="practice-suggest" :class="{ 'is-prominent': hintIsProminent }" type="button" :disabled="isBusy" @click="requestHint">
-        <Lightbulb :size="13" />{{ hintIsProminent ? '先要一个提示' : '要一个提示' }}
-      </button>
-
       <div ref="composerBox" class="practice-composer__box">
         <label class="sr-only" for="practice-answer">你的方案思考</label>
         <!-- 1800 → 10000（2026-09-30）。原来的额度是按"写一段判断"定的，可这个框现在是
              学生报错、贴栈、贴片段的地方，1800 字符粘一段 traceback 就被浏览器静默截掉了。
              服务端那条路没有长度限制（chat_history.req 是 TextField，只有 .strip()），
              卡点一直只在这个 maxlength 上。 -->
-        <textarea ref="composerInput" id="practice-answer" v-model="draft" rows="1" maxlength="10000" :disabled="isLoadingSession" placeholder="写下你的判断…（Ctrl + Enter 发送）" @keydown.ctrl.enter.prevent="sendMessage()" @keydown.meta.enter.prevent="sendMessage()"></textarea>
+        <textarea ref="composerInput" id="practice-answer" v-model="draft" rows="1" maxlength="10000" :disabled="isLoadingSession" placeholder="写下你的判断…（Enter 发送，Shift + Enter 换行）" @keydown="onComposerKeydown"></textarea>
         <!-- 发送和停止是同一个位置的两个状态。以前流式期间只是把发送置灰，
              等于用户根本没有中断手段。 -->
-        <button v-if="!isStreaming" class="practice-send" type="submit" :disabled="!draft.trim() || isLoadingSession" aria-label="发送" title="发送（Ctrl + Enter）"><Send :size="16" /></button>
+        <button v-if="!isStreaming" class="practice-send" type="submit" :disabled="!draft.trim() || isLoadingSession" aria-label="发送" title="发送（Enter）"><Send :size="16" /></button>
         <button v-else class="practice-send practice-send--stop" type="button" aria-label="停止生成" title="停止生成" @click="stopStreaming"><Square :size="13" /></button>
       </div>
     </form>
@@ -84,10 +78,12 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ChevronDown, ChevronUp, Ellipsis, Eye, EyeOff, Lightbulb, Send, Square } from 'lucide-vue-next'
+import { ChevronDown, ChevronUp, Ellipsis, Eye, EyeOff, Send, Square } from 'lucide-vue-next'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { advancedLearningApi } from '@/shared/api/advancedLearningApi'
 import { renderMarkdown } from '@/shared/lib/markdown'
+import { shouldSendOnKeydown } from '@/shared/lib/composerKeys'
+import { shouldShowTyping } from '@/shared/lib/chatTyping'
 import { describeWorkspaceSnapshot } from './workspace/workspaceSnapshot'
 
 const props = defineProps({
@@ -120,10 +116,8 @@ const openingPending = ref(false)
 let requestController = null
 let openingController = null
 let sessionLoadVersion = 0
-// 支持强度决定提示的分量：引导练习（high）把提示摆在明面上，开放挑战（low）保持低调 ——
-// 这两种任务本来就该由不同分量的脚手架陪着做。
-const hintIsProminent = computed(() => props.task?.support_level === 'high')
 const isBusy = computed(() => isStreaming.value || isLoadingSession.value)
+const showTyping = computed(() => shouldShowTyping(messages.value, isStreaming.value))
 const menuOpen = ref(false)
 // 本轮教练能看到的工作区。**只在发送时（含开场轮）刷新** —— 页头那条提示显示的就是
 // 这一份，语义是"这一轮教练看到的是这个"，不是"此刻编辑器里是什么"。
@@ -256,10 +250,6 @@ async function saveSessionState() {
 }
 
 
-function requestHint() {
-  sendMessage(`请围绕“${props.task.title}”给我一个不直接泄露答案的提示。`)
-}
-
 // 中断当前这一轮。开场白也算一轮 —— 它虽然不占 requestController，但同样是用户在等的一段回复。
 // 已经吐出来的文字留着（见 sendMessage 的 AbortError 分支），只是不再往下接。
 function stopStreaming() {
@@ -295,13 +285,27 @@ function clientChapterSummary() {
 //
 // `workspace` 是**发送这一刻**现取的工作区只读快照（见 workspaceReader）。永远给一份
 // 带 available 字段的对象，绝不漏字段 —— 让后端去猜"这个键为什么没有"是丢信息的做法。
+// **空字段不能拼出半个标签。** 原来的写法是 `重点能力：${focus}`，自由任务没有 focus，
+// 于是拼出一句「重点能力：」—— 它非空，`filter(Boolean)` 留不住也拦不住，就成了
+// 一条只有标签没有内容的行。所以每段都先有内容才拼标签。
+function taskScriptParts() {
+  const task = props.task
+  const criteria = (task.criteria || []).join('；')
+  return [
+    task.brief,
+    task.problem,
+    task.focus && `重点能力：${task.focus}`,
+    criteria && `验收标准：${criteria}`,
+  ]
+}
+
 function practiceSegment() {
   readWorkspaceShown()
   return {
     id: `practice-${props.task.id}`,
     type: 'practice',
     title: props.task.title,
-    script: [props.task.brief, props.task.problem, `重点能力：${props.task.focus}`, `验收标准：${(props.task.criteria || []).join('；')}`, clientChapterSummary()].filter(Boolean).join('\n'),
+    script: [...taskScriptParts(), clientChapterSummary()].filter(Boolean).join('\n'),
     points: (props.task.constraints || []).slice(0, 6),
     question: { prompt: '请围绕这个任务推进对话。' },
     workspace: workspaceShown.value,
@@ -378,6 +382,20 @@ async function requestOpening() {
   } catch {
     // 存不上不影响这次使用；下次进这个会话会重新开口一次。
   }
+}
+
+// Enter 发送、Shift + Enter 换行，输入法选字期间的回车不算发送（见 composerKeys）。
+// **`sendMessage()` 必须显式不带参数**：它的第一个形参是 `forcedText`，直接把事件对象
+// 传进去会变成 `String(event)` —— 发出去一句 "[object KeyboardEvent]"。
+//
+// 教练还在生成时**不抢回车**：这个输入框在流式期间是**故意不禁用**的（学生可以先把
+// 下一句写好），而那一轮的 `sendMessage` 会被自己挡掉。拦下来只会让回车既发不出去、
+// 也换不了行 —— 什么都发生，最难猜。
+function onComposerKeydown(event) {
+  if (!shouldSendOnKeydown(event)) return
+  if (isBusy.value) return
+  event.preventDefault()
+  sendMessage()
 }
 
 async function sendMessage(forcedText = '') {
@@ -588,14 +606,6 @@ onBeforeUnmount(() => {
 /* ── 输入区 ─────────────────────────────────────────── */
 .practice-error { margin: 0; padding: 0 20px 8px; color: #a66442; font-size: 11px; }
 .practice-composer { padding: 10px 15px 13px; border-top: 1px solid var(--line); }
-/* 建议角：一条可选的预设提问，不占按钮位，也不抢发送的视觉重量。 */
-.practice-suggest { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 8px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 99px; background: #fff; color: var(--muted); font-size: 11px; }
-.practice-suggest:hover:not(:disabled) { border-color: #b9c9b2; background: #f1f6eb; color: var(--accent-deep); }
-.practice-suggest:disabled { cursor: not-allowed; opacity: .55; }
-.practice-suggest svg { color: var(--accent-deep); }
-/* support_level=high（迁移练习）本该有人扶着走，所以这一角提示给它上色 —— 只是配色不同，
-   位置和尺寸都不变，不像以前那样整块控件换一种样式。 */
-.practice-suggest.is-prominent { border-color: #c8d9b7; background: #eef5e6; color: var(--accent-deep); font-weight: 700; }
 
 /* 输入框和发送是同一块：发送贴在框内右下角。发出去之后同一个位置变成停止。 */
 .practice-composer__box { position: relative; }

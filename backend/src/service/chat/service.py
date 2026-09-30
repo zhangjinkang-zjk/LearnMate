@@ -7,18 +7,111 @@ from collections import OrderedDict
 from backend.src.ai_core.brain import Brain
 from backend.src.models.chat_history_model import ChatHistory
 from backend.src.models.usermodel import User
+from backend.src.schemas.chat import PageContext
 from backend.src.service.portrait.service import extract_portrait_from_chat, record_learning_event
 from backend.src.utils.chat_utils import allocate_chat_group_id
 
 logger = logging.getLogger(__name__)
+
+# ── 页面上下文 ────────────────────────────────────────────────────
+#
+# 主对话（罗伯特）过去只拿到 `{chat_group_id, user_req}`，所以它**不知道你在哪一页**：
+# 它知道你是谁、在学什么路径、你的画像，却不知道你正站在进阶学习页还是基础讲解页。
+# 后果是学生盯着任务卡问"这个任务要我做啥"，它只能让他自己去看。
+#
+# 这个块只解决"定位"，不搬内容：所以它**只有三行、硬上限 400 字符**。任务说明、教材
+# 正文这些服务端有权威副本的东西，该由工具去取，不该预先塞进 prompt。
+
+_PAGE_CONTEXT_MAX_CHARS = 400
+
+# 页面标识 → 中文名。**白名单**：客户端传什么都只能落到这里，落不到就整行不渲染。
+# 不认识的页面不猜，也不回显客户端给的字符串（那等于给它一个往 prompt 里写字的口子）。
+_PAGE_LABELS = {
+    "overview": "学习概览",
+    "fundamentals": "基础讲解",
+    "foundation_test": "学习复盘",
+    "advanced": "进阶学习",
+    "resources": "资料库",
+    "profile": "个人画像",
+}
+
+
+def _clip_text(value: object, limit: int) -> str:
+    """按字符截断的单行文本。这里只处理服务端自己查出来的短字段，不走 _clip。"""
+    text = str(value or "").strip().replace("\r", " ").replace("\n", " ")
+    return text[:limit]
 
 _MAX_CHAT_INSTANCES = 100
 
 _chat_instances: OrderedDict[str, Brain] = OrderedDict()
 
 
-async def _build_path_context(user_id: int) -> str:
-    """构建当前学习路径的上下文文本，注入聊天 prompt"""
+async def _current_task_title(user_id: int, task_id: str) -> str:
+    """按 (user_id, task_key) 查这次进阶实践的任务名，查不到返回空串。
+
+    `user_id` 这个条件**是安全边界，不是优化**：少了它，学生只要把请求体里的
+    `task_id` 换成别人的，就能把别人的任务说明读进自己的上下文。
+    任务名取服务端账本里的 `task_snapshot`，不采信客户端说的任何正文。
+    """
+    if not task_id:
+        return ""
+    try:
+        from backend.src.models.advanced_practice_model import AdvancedPracticeSession
+        row = await AdvancedPracticeSession.filter(
+            user_id=user_id, task_key=task_id
+        ).order_by("-id").first()
+        if not row:
+            return ""
+        snapshot = row.task_snapshot if isinstance(row.task_snapshot, dict) else {}
+        return _clip_text(snapshot.get("title"), 120)
+    except Exception:
+        logger.exception("查询页面上下文的任务名失败 user_id=%s", user_id)
+        return ""
+
+
+async def _describe_current_page(user_id: int, current: dict, page_context: PageContext | None) -> list[str]:
+    """渲染"用户此刻在哪一页"。拿不到任何有效信息时返回空列表（整块消失，不留空壳）。
+
+    `node_id` 只在**该用户自己的当前路径**里找 —— 所以客户端传的 id 越权不到别人的
+    路径上，不需要额外的归属校验。
+    """
+    if page_context is None:
+        return []
+    label = _PAGE_LABELS.get(_clip_text(page_context.page, 32))
+    if not label:
+        return []
+
+    lines = ["【用户此刻在这一页】", f"页面：{label}"]
+
+    if page_context.node_id:
+        node = next(
+            (n for n in current.get("nodes", []) if n.get("id") == page_context.node_id),
+            None,
+        )
+        title = _clip_text(node.get("title") if node else "", 80)
+        if title:
+            lines.append(f"正在看的节点：「{title}」")
+
+    task_title = await _current_task_title(user_id, _clip_text(page_context.task_id, 128))
+    if task_title:
+        lines.append(f"这个页面上的任务：{task_title}")
+
+    # 只有标题行、没有实质定位信息时不渲染 —— 否则模型会以为自己知道你在哪。
+    if len(lines) <= 2:
+        return []
+
+    body = "\n".join(lines)
+    if len(body) > _PAGE_CONTEXT_MAX_CHARS:
+        body = body[:_PAGE_CONTEXT_MAX_CHARS] + "…"
+    return [body]
+
+
+async def _build_path_context(user_id: int, page_context: PageContext | None = None) -> str:
+    """构建当前学习路径的上下文文本，注入聊天 prompt。
+
+    `page_context` 非空时，在路径信息之后追加一小段"用户此刻在哪一页"。两块共用
+    这一次 `get_current_path` 查询 —— 顺便也让节点归属天然落在该用户自己的路径里。
+    """
     try:
         from backend.src.service.path.service import PathService
         current = await PathService.get_current_path(user_id)
@@ -37,6 +130,7 @@ async def _build_path_context(user_id: int) -> str:
         weak_points = current.get("diagnosis", {}).get("weak_points", [])
         if weak_points:
             lines.append(f"薄弱知识点：{', '.join(w['tag'] if isinstance(w, dict) else str(w) for w in weak_points)}。")
+        lines.extend(await _describe_current_page(user_id, current, page_context))
         return "\n".join(lines)
     except Exception:
         logger.exception("构建路径上下文失败 user_id=%s", user_id)
@@ -249,7 +343,10 @@ async def chat_group_belongs_to_user(user_id: int, chat_group_id: int) -> bool:
 
 
 
-async def create_new_history(user_id: int, user_req: str, agent_id: int | None = None):
+async def create_new_history(
+    user_id: int, user_req: str, agent_id: int | None = None,
+    page_context: PageContext | None = None,
+):
     user = await User.filter(id=user_id).first()
     if not user:
         return None, "未查找到用户"
@@ -259,7 +356,7 @@ async def create_new_history(user_id: int, user_req: str, agent_id: int | None =
     )
     bot = _get_or_create_chat(user_id, chat_group_id, agent_id)
     await bot.hydrate_history(before_id=message.id)
-    path_context = await _build_path_context(user_id)
+    path_context = await _build_path_context(user_id, page_context)
     portrait_context = await _build_portrait_context(user_id)
     memory_context = await _build_memory_context(user_id, chat_group_id, user_req)
     res = await bot.chat(user_req, path_context=path_context, portrait_context=portrait_context, memory_context=memory_context)
@@ -268,7 +365,10 @@ async def create_new_history(user_id: int, user_req: str, agent_id: int | None =
     schedule_post_chat_enrichment(user_id, chat_group_id, agent_id, evidence=user_req)
     return message, "新对话保存成功"
 
-async def create_message_into_history(user_id: int, chat_group_id: int, user_req: str, agent_id: int | None = None):
+async def create_message_into_history(
+    user_id: int, chat_group_id: int, user_req: str, agent_id: int | None = None,
+    page_context: PageContext | None = None,
+):
     user = await User.filter(id=user_id).first()
     if not user:
         return None, "未查找到用户"
@@ -281,7 +381,7 @@ async def create_message_into_history(user_id: int, chat_group_id: int, user_req
     )
     bot = _get_or_create_chat(user_id, chat_group_id, agent_id)
     await bot.hydrate_history(before_id=message.id)
-    path_context = await _build_path_context(user_id)
+    path_context = await _build_path_context(user_id, page_context)
     portrait_context = await _build_portrait_context(user_id)
     memory_context = await _build_memory_context(user_id, chat_group_id, user_req)
     res = await bot.chat(user_req, path_context=path_context, portrait_context=portrait_context, memory_context=memory_context)
@@ -292,13 +392,16 @@ async def create_message_into_history(user_id: int, chat_group_id: int, user_req
 
 # ── 流式 ──
 
-async def _stream_chat(user_id: int, chat_group_id: int, user_req: str, agent_id: int | None = None):
+async def _stream_chat(
+    user_id: int, chat_group_id: int, user_req: str, agent_id: int | None = None,
+    page_context: PageContext | None = None,
+):
     """流式对话核心逻辑"""
     if agent_id is None:
         existing = await ChatHistory.filter(user_id=user_id, chat_group_id=chat_group_id).first()
         agent_id = existing.agent_id if existing else None
     bot = _get_or_create_chat(user_id, chat_group_id, agent_id)
-    path_context = await _build_path_context(user_id)
+    path_context = await _build_path_context(user_id, page_context)
     portrait_context = await _build_portrait_context(user_id)
 
     # 先写用户消息到历史，确保工具调用时能查到当前消息
@@ -325,23 +428,29 @@ async def _stream_chat(user_id: int, chat_group_id: int, user_req: str, agent_id
     yield f"data: {json.dumps({'role': 'system', 'type': 'done', 'chat_group_id': chat_group_id}, ensure_ascii=False)}\n\n"
     yield "data: [DONE]\n\n"
 
-async def stream_create_new_history(user_id: int, user_req: str, agent_id: int | None = None):
+async def stream_create_new_history(
+    user_id: int, user_req: str, agent_id: int | None = None,
+    page_context: PageContext | None = None,
+):
     user = await User.filter(id=user_id).first()
     if not user:
         yield f"data: {json.dumps({'error': '未查找到用户'})}\n\n"
         yield "data: [DONE]\n\n"
         return
     chat_group_id = await allocate_chat_group_id(user_id)
-    async for event in _stream_chat(user_id, chat_group_id, user_req, agent_id):
+    async for event in _stream_chat(user_id, chat_group_id, user_req, agent_id, page_context):
         yield event
 
-async def stream_create_message_into_history(user_id: int, chat_group_id: int, user_req: str, agent_id: int | None = None):
+async def stream_create_message_into_history(
+    user_id: int, chat_group_id: int, user_req: str, agent_id: int | None = None,
+    page_context: PageContext | None = None,
+):
     user = await User.filter(id=user_id).first()
     if not user:
         yield f"data: {json.dumps({'error': '未查找到用户'})}\n\n"
         yield "data: [DONE]\n\n"
         return
-    async for event in _stream_chat(user_id, chat_group_id, user_req, agent_id):
+    async for event in _stream_chat(user_id, chat_group_id, user_req, agent_id, page_context):
         yield event
 
 # ── 读取、删除 ──

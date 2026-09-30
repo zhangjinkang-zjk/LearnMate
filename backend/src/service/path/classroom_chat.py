@@ -19,7 +19,7 @@ from backend.src.models.resource_model import GeneratedResource
 from backend.src.models.usermodel import User
 from backend.src.models.user_agent_model import UserAgent
 from backend.src.models.path_model import PathNode, UserPathProgress
-from backend.src.service.advanced.practice_service import practice_record_text
+from backend.src.service.advanced.practice_service import FREE_TASK_MODE, practice_record_text
 from backend.src.service.agent.service import create as _agent_create
 from backend.src.service.chat.service import (
     _build_portrait_context as _build_global_portrait_context,
@@ -474,6 +474,16 @@ def _task_item_label(item: object) -> str:
     return str(item or "")
 
 
+def _is_free_task(task_snapshot: object) -> bool:
+    """这次会话是不是「无任务」模式（学生带着自己的项目来聊，没有任务卡）。
+
+    判据取**服务端账本里的 `mode`**，不看客户端 `segment` —— 和任务说明同一套信任规则。
+    少了它，下面三处都会把"没有任务"当成"任务是空的"来处理：任务块消失、开场白
+    去点明一件不存在的事、每一轮都告诉模型"学生正在做上面那个任务"。
+    """
+    return isinstance(task_snapshot, dict) and _clip(task_snapshot.get("mode"), 24) == FREE_TASK_MODE
+
+
 def _render_task_block(task_snapshot: object) -> str:
     """渲染本次实践任务说明，数据来自服务端账本而不是客户端字段。
 
@@ -482,6 +492,17 @@ def _render_task_block(task_snapshot: object) -> str:
     """
     if not isinstance(task_snapshot, dict):
         return ""
+    # 「无任务」：学生带着自己的项目来，没有任务卡。**必须显式说出来**，不能让任务块
+    # 就那么消失 —— 教练是按任务办事的（会问"要交付什么""验收标准是什么"），块没了它
+    # 只会换个说法继续问，或者更糟：自己编一个任务出来。缺席在这里是个不可靠的信号。
+    if _is_free_task(task_snapshot):
+        return "\n".join([
+            "【本次实践任务】",
+            "学生这次没有选任务：他带着自己的项目来，聊什么由他决定。不要替他挑一个任务，"
+            "也不要按任务的方式问他「要交付什么」「验收标准是什么」——这次根本没有。"
+            "他问代码就看代码，他问设计就谈设计，他说不清楚想干什么就先问他想解决什么问题。",
+            "【任务说明结束】",
+        ])
     lines: list[str] = []
     # 逐字段的行内长度：任务说明 2026-09-30 起改成大白话，同样一件事的字数比原来的术语版多，
     # 这几档跟着放宽；`_clip` 不还省略号，切了就**看不出来被切过**，所以宁可给足。
@@ -710,11 +731,17 @@ def _practice_session_blocked(session) -> bool:
     return session is None
 
 
-def _compose_user_prompt(scenario: str, text: str, segment: dict, record: str = "") -> str:
+def _compose_user_prompt(
+    scenario: str, text: str, segment: dict, record: str = "", is_free_task: bool = False,
+) -> str:
     """把学生的反讲、开放回答或提问翻译成给模型的输入。
 
     `record` 是服务端拼的会话记录（见 `practice_record_text`），目前只有总结场景用得到。
     `practice_opening` 是唯一没有学生输入的场景：它要模型自己开口提第一问。
+
+    `is_free_task`（「无任务」）只改 practice 两个分支里的**框定语**：它们原本断言
+    "学生正在做上面那个任务"，而自由模式下上面那块说的是"这次没有任务" —— 同一份
+    提示词里自相矛盾，模型会挑对它更省事的那个信。要他做什么那几句照旧。
     """
     text = str(text or "").strip()
     question = segment.get("question") or {}
@@ -737,6 +764,15 @@ def _compose_user_prompt(scenario: str, text: str, segment: dict, record: str = 
         # 而这一轮学生还没说话 —— 这正是它以前只能发一句写死的通用话术的原因。
         # 那句话不提任务名，学生看完不知道要回答什么（"你在说啥"），要等第二轮
         # 模型才把任务讲清楚。所以这里要模型自己开口：先点明任务要产出什么，再提问。
+        if is_free_task:
+            # 自由模式没有任务可点明，但**开场这件事本身照旧**：还是要他先开口说想看什么，
+            # 不能只回一句招呼。要模型点的是他带来的那个项目，不是不存在的任务。
+            return (
+                "【实践对话·开场】这是本次对话的第一轮，学生还没有任何发言，而且这次没有任务："
+                "他自己带了项目和问题来。请先用一到两句话说明这里的用法——想聊什么由他说了算，"
+                "他能让你看到工作区里的代码，然后只问一个问题，问的是**他想从哪儿开始**。\n"
+                "这一轮只问一个问题，不要连续追问，不要替他挑任务，也不要问他产出什么、验收标准是什么。"
+            )
         return (
             "【实践对话·开场】这是本次实践对话的第一轮，学生还没有任何发言。"
             "请依据上面给出的任务信息，先用一到两句话点明这个任务要他产出什么、"
@@ -750,8 +786,13 @@ def _compose_user_prompt(scenario: str, text: str, segment: dict, record: str = 
         # 上一句"把他引进下一步"继续追问，于是学生问"看看我的代码"也得不到回应，
         # 只换来一句"我们先完成任务定义"。现在这一轮只说三件事：他的原话、这里的
         # 材料（任务/工作区在 path_context 里）、要他做什么。
+        opening = (
+            "【实践对话】学生这次没有任务，他带着自己的项目来，刚才说的是："
+            if is_free_task
+            else "【实践对话】学生正在做上面【本次实践任务】里的那个任务，他的发言是："
+        )
         return (
-            f"【实践对话】学生正在做上面【本次实践任务】里的那个任务，他的发言是：\n"
+            f"{opening}\n"
             f"{_clip(text, 1000)}\n"
             "请针对他说的这件事本身回应：先指出其中一个明确的有效判断或缺口，"
             "再只追问一个能让他往前走的问题。如果他是在问你问题、或请你看代码，"
@@ -782,7 +823,7 @@ _FALLBACK_REPLIES = {
 }
 
 
-def _opening_fallback(segment: dict) -> str:
+def _opening_fallback(segment: dict, is_free_task: bool = False) -> str:
     """开场那一轮的兜底：其它场景的兜底可以是一句通用话术，开场不行。
 
     学生看不到任务名就回答不了 —— 这次改动之前，开场恰好就是那句通用话术，于是
@@ -790,10 +831,19 @@ def _opening_fallback(segment: dict) -> str:
     条路本来就发 `props.task.title`）。拿不到任务名时退回
     `_FALLBACK_REPLIES["practice_opening"]`，但**不能**拼出「」这种空引用。
 
+    `is_free_task` 时**根本不能提任务**：自由模式那一下 `segment["title"]` 是界面上
+    的选项标签（"拿你自己的项目来聊"），拿它去套「这个任务是「…」」等于凭空造一个
+    任务出来。这里看的是服务端账本，不是那个标题。
+
     措辞要和 `practice_service._welcome_message` 种下的那句**明显不同**：那句是同步
     显示给学生看的开场白，这句是模型没出话时的替代品。两者字面相同的话，
     `_opening_pending` 会认为"助手还没说过开场以外的话"，于是每轮都重新请求一次开场。
     """
+    if is_free_task:
+        return (
+            "这次没有指定任务，你带什么来就聊什么。"
+            "先说一句你想看的是什么 —— 哪一段代码、哪个拿不准的设计，还是哪个一直没想通的问题？"
+        )
     segment = segment or {}
     title = _clip(segment.get("title"), 120)
     if not title:
@@ -819,13 +869,8 @@ async def stream_classroom_chat(
     practice_session_id: str | None = None,
 ):
     """async generator：以普通聊天相同的持久化和流式顺序产出 SSE 事件。"""
-    # 开场的兜底要带上任务名，所以不能像其它场景那样从静态表里取一句。
-    fallback = (
-        _opening_fallback(segment)
-        if scenario == "practice_opening"
-        else _FALLBACK_REPLIES.get(scenario, _FALLBACK_REPLIES["free"])
-    )
     practice_session = None
+    task_snapshot = None
     try:
         if scenario in _PRACTICE_SESSION_SCENARIOS and practice_session_id:
             from backend.src.models.advanced_practice_model import AdvancedPracticeSession
@@ -840,6 +885,21 @@ async def stream_classroom_chat(
                 yield _sse({"error": "实践会话不存在或无权访问"})
                 yield _sse(None, done=True)
                 return
+            # 任务说明取服务端账本那一份，不取客户端 segment —— 权威副本在服务端。
+            # 用 getattr 而不是直接取属性：这个会话对象在测试里是假的，也可能来自
+            # 旧结构，缺字段这件事不该让整轮对话挂掉。
+            task_snapshot = getattr(practice_session, "task_snapshot", None)
+
+        # 「这次有没有任务」也得等服务端账本查出来才知道，所以它不能和别的兜底一样
+        # 在 try 之前就算好：开场的兜底和后面每一轮的用户提示词都要照它换措辞。
+        is_free_task = _is_free_task(task_snapshot)
+
+        # 开场的兜底要带上任务名，所以不能像其它场景那样从静态表里取一句。
+        fallback = (
+            _opening_fallback(segment, is_free_task=is_free_task)
+            if scenario == "practice_opening"
+            else _FALLBACK_REPLIES.get(scenario, _FALLBACK_REPLIES["free"])
+        )
 
         path_ctx = await _build_classroom_path_context(
             path_id,
@@ -848,10 +908,7 @@ async def stream_classroom_chat(
             user_id=user_id,
             resource_id=resource_id,
             user_question=text,
-            # 任务说明取服务端账本那一份，不取客户端 segment —— 权威副本在服务端。
-            # 用 getattr 而不是直接取属性：这个会话对象在测试里是假的，也可能来自
-            # 旧结构，缺字段这件事不该让整轮对话挂掉。
-            task_snapshot=getattr(practice_session, "task_snapshot", None),
+            task_snapshot=task_snapshot,
         )
         agent_id = await get_or_create_classroom_agent(user_id)
         if agent_id is None:
@@ -871,6 +928,7 @@ async def stream_classroom_chat(
                 text,
                 segment,
                 record=practice_record_text(practice_session) if practice_session is not None else "",
+                is_free_task=is_free_task,
             )
             portrait_ctx = await _build_global_portrait_context(user_id)
             chat_group_id = _classroom_group_id(user_id, path_id, node_id, practice_scope)

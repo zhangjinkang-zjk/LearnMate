@@ -28,7 +28,7 @@
     <p v-if="notice" class="workspace__notice" role="status">{{ notice }}</p>
     <p v-if="errorMessage" class="workspace__notice workspace__notice--error" role="status">{{ errorMessage }}</p>
 
-    <div class="workspace__body" :class="{ 'is-explorer-hidden': !showExplorer }">
+    <div ref="bodyRef" class="workspace__body" :class="{ 'is-explorer-hidden': !showExplorer, 'is-resizing': explorerDragging }" :style="bodyStyle">
       <aside v-if="showExplorer" class="workspace__explorer">
         <FileExplorer
           :entries="entries"
@@ -40,6 +40,25 @@
           @move="moveEntry"
         />
       </aside>
+
+      <!-- 拖这条改文件面板的宽度。交互和右边那条（对话区）一样：指针捕获、双击复位、
+           键盘左右键也能调 —— 只想微调、或者手上是触控板的时候，拖拽是条不好走的路。 -->
+      <div
+        v-if="showExplorer"
+        class="workspace__splitter"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="拖动调整文件面板的宽度"
+        :aria-valuenow="Math.round(explorerWidth)"
+        :aria-valuemin="EXPLORER_MIN_WIDTH"
+        :aria-valuemax="EXPLORER_MAX_WIDTH"
+        tabindex="0"
+        @pointerdown="startExplorerDrag"
+        @keydown="onExplorerKey"
+        @dblclick="resetExplorerWidth"
+      >
+        <span class="workspace__splitter-grip" aria-hidden="true"></span>
+      </div>
 
       <div class="workspace__main">
         <div v-if="tabs.length" class="workspace__tabs" role="tablist">
@@ -108,6 +127,15 @@ import {
 import { buildWorkspaceSnapshot } from './workspaceSnapshot'
 import { fromDraft, toDraft } from './workspaceDraft'
 import {
+  EXPLORER_DEFAULT_WIDTH,
+  EXPLORER_MAX_WIDTH,
+  EXPLORER_MIN_WIDTH,
+  EXPLORER_STEP,
+  EXPLORER_STEP_LARGE,
+  EXPLORER_WIDTH_KEY,
+  clampExplorerWidth,
+} from './workspaceExplorerLayout'
+import {
   deleteDraft,
   deleteFolderHandle,
   readDraft,
@@ -140,6 +168,13 @@ const explorerOpen = ref(true)
 const directoryInput = ref(null)
 const fileInput = ref(null)
 let noticeTimer = 0
+
+// ── 文件面板的宽度 ─────────────────────────────────────────────
+// 区间和夹取规则在 workspaceExplorerLayout.js（纯函数，单独验；理由也写在那儿）。
+const bodyRef = ref(null)
+const explorerWidth = ref(readStoredExplorerWidth())
+const explorerDragging = ref(false)
+let bodyResizeObserver = null
 
 // 两个概念要分开，混起来会出现「用 Chrome 拖了个文件进来，'打开文件夹' 按钮就改名成
 // '选择文件夹'」这种自降能力的现象：
@@ -429,6 +464,86 @@ async function saveActive() {
 
 function toggleExplorer() { explorerOpen.value = !explorerOpen.value }
 
+function readStoredExplorerWidth() {
+  try {
+    const raw = window.localStorage.getItem(EXPLORER_WIDTH_KEY)
+    return raw === null ? EXPLORER_DEFAULT_WIDTH : clampExplorerWidth(Number(raw))
+  } catch {
+    // 隐私模式等场景下 localStorage 会直接抛异常，退回默认宽度即可
+    return EXPLORER_DEFAULT_WIDTH
+  }
+}
+
+function persistExplorerWidth() {
+  try {
+    window.localStorage.setItem(EXPLORER_WIDTH_KEY, String(Math.round(explorerWidth.value)))
+  } catch {
+    // 存不下只是下次进来回到默认宽度，不影响本次拖动
+  }
+}
+
+function bodyWidth() {
+  return bodyRef.value?.getBoundingClientRect().width || 0
+}
+
+// 指针捕获，不挂 window：指针移出拖拽条（甚至移出窗口）事件仍然回到它，组件卸载时
+// 监听随之消失。整段拖拽按**容器左边缘**换算宽度，所以中途改窗口大小也不会跑偏。
+function startExplorerDrag(event) {
+  const container = bodyRef.value
+  if (!container || event.button !== 0) return
+  const rect = container.getBoundingClientRect()
+  if (!rect.width) return
+  const handle = event.currentTarget
+  explorerDragging.value = true
+  handle.setPointerCapture?.(event.pointerId)
+
+  const onMove = (moveEvent) => {
+    explorerWidth.value = clampExplorerWidth(moveEvent.clientX - rect.left, rect.width)
+  }
+  const onEnd = () => {
+    explorerDragging.value = false
+    handle.releasePointerCapture?.(event.pointerId)
+    handle.removeEventListener('pointermove', onMove)
+    handle.removeEventListener('pointerup', onEnd)
+    handle.removeEventListener('pointercancel', onEnd)
+    persistExplorerWidth()
+  }
+
+  handle.addEventListener('pointermove', onMove)
+  handle.addEventListener('pointerup', onEnd)
+  handle.addEventListener('pointercancel', onEnd)
+}
+
+function onExplorerKey(event) {
+  const step = event.shiftKey ? EXPLORER_STEP_LARGE : EXPLORER_STEP
+  if (event.key === 'ArrowLeft') explorerWidth.value = clampExplorerWidth(explorerWidth.value - step, bodyWidth())
+  else if (event.key === 'ArrowRight') explorerWidth.value = clampExplorerWidth(explorerWidth.value + step, bodyWidth())
+  else if (event.key === 'Home') explorerWidth.value = EXPLORER_DEFAULT_WIDTH
+  else return
+  event.preventDefault()
+  persistExplorerWidth()
+}
+
+function resetExplorerWidth() {
+  explorerWidth.value = EXPLORER_DEFAULT_WIDTH
+  persistExplorerWidth()
+}
+
+// 容器变窄时把面板跟着收回来 —— 拖动右边那条分隔条、或者改窗口大小都会改这块的宽度，
+// 而面板宽度是像素定死的，不收就会一直吃着编辑器的位置。
+function watchBodyWidth() {
+  const container = bodyRef.value
+  if (!container || typeof ResizeObserver === 'undefined') return
+  bodyResizeObserver = new ResizeObserver(() => {
+    const next = clampExplorerWidth(explorerWidth.value, container.getBoundingClientRect().width)
+    // 只在真的变了才写：observer 回调里改布局，条件写松了容易自己把自己再触发一遍。
+    if (next !== explorerWidth.value) explorerWidth.value = next
+  })
+  bodyResizeObserver.observe(container)
+}
+
+const bodyStyle = computed(() => ({ '--explorer-w': `${Math.round(explorerWidth.value)}px` }))
+
 // 给对话教练的工作区快照。**故意做成"发送时拉取"，不是响应式数据**：正文随每次击键
 // 变（见 onEditorInput），做成响应式 prop 会让对话组件每敲一个字符就重渲染一次、
 // 并且每敲一次都白建一遍快照；而快照只在"按下发送那一刻"有意义。
@@ -554,6 +669,9 @@ async function restoreDraft() {
 }
 
 onMounted(async () => {
+  // 存档里的宽度只按绝对上限卡过，这里拿到真实容器宽度再校一次 —— 上次是在一个
+  // 很宽的窗口里拖的，现在窗口小了，那个宽度会直接把编辑器挤没。
+  watchBodyWidth()
   await restoreFolderIfPermitted()
   // 恢复文件夹失败时不要再叠一份草稿：那会把 errorMessage 抹掉（applyRestoredWorkspace
   // 会清它），学生就看不到"上次的文件夹没恢复成"这件事，只会发现文件对不上。
@@ -563,6 +681,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.clearTimeout(noticeTimer)
+  bodyResizeObserver?.disconnect()
+  bodyResizeObserver = null
   // 卸载前把最后一次改动落盘：定时器可能正好还没到点，而那一次改动就是学生
   // 最后写的那几行。clearTimeout 必须在 persistDraftNow 里面，它自己会清。
   persistDraftNow()
@@ -588,10 +708,23 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnOnLeave))
 .workspace__root { max-width: 190px; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .workspace__notice { position: absolute; z-index: 8; right: 12px; bottom: 12px; left: 12px; margin: 0; padding: 7px 11px; border: 1px solid #d7e3c9; border-radius: 8px; background: #f4f8ed; box-shadow: 0 10px 24px rgba(31, 49, 40, .12); color: var(--accent-deep); font-size: 11px; line-height: 1.6; pointer-events: none; }
 .workspace__notice--error { background: #fdf4f0; color: #954e38; }
-.workspace__body { display: grid; min-height: 0; flex: 1 1 auto; grid-template-columns: 210px minmax(0, 1fr); }
+.workspace__body { display: grid; min-height: 0; flex: 1 1 auto; grid-template-columns: var(--explorer-w, 210px) 6px minmax(0, 1fr); }
 .workspace__body.is-explorer-hidden { grid-template-columns: minmax(0, 1fr); }
-.workspace__explorer { min-height: 0; overflow: hidden; border-right: 1px solid var(--line); background: #fbfcfa; }
+/* **`display: flex` 是修滚动的关键，不是装饰。** 这里原来是块级盒子，里面的
+   `.file-explorer` 高度按内容长，长过 aside 就被 `overflow: hidden` 直接切掉 ——
+   文件一多，列表下半截既够不到、**连滚动条都不出现**。aside 的高度是确定的（它是
+   网格项，被行拉伸），换成 flex 之后 `align-items: stretch`（默认值）就把这条确定
+   高度交给了 FileExplorer，它内部那层 `overflow-y: auto` 才真正生效。 */
+.workspace__explorer { display: flex; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--line); background: #fbfcfa; }
 .workspace__main { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
+/* 文件面板的拖拽条。和右边那条（对话区）同一种交互，只是更细 —— 它分的是工作区
+   内部，不该像分主次内容那样显眼。 */
+.workspace__splitter { display: grid; place-items: center; cursor: col-resize; background: transparent; }
+.workspace__splitter-grip { width: 2px; height: 100%; border-radius: 99px; background: var(--line); transition: background .15s ease; }
+.workspace__splitter:hover .workspace__splitter-grip,
+.workspace__splitter:focus-visible .workspace__splitter-grip { background: var(--accent); }
+.workspace__body.is-resizing { cursor: col-resize; user-select: none; }
+.workspace__body.is-resizing .workspace__splitter-grip { background: var(--accent); }
 .workspace__tabs { display: flex; min-width: 0; gap: 2px; overflow-x: auto; border-bottom: 1px solid var(--line); background: #fbfcfa; }
 .workspace__tab { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 7px 9px 7px 12px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; }
 .workspace__tab:hover { background: #f1f6eb; }
@@ -607,7 +740,10 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnOnLeave))
 .workspace__empty-note { color: #9aa79c; font-size: 11px; }
 .workspace__input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 @media (max-width: 1180px) {
+  /* 这一档没有地方放文件面板，整块让给编辑器。拖拽条要跟着一起收 —— 面板都 hidden 了，
+     还剩一条 6px 的空白列杵在那儿，看着像布局坏了。 */
   .workspace__body { grid-template-columns: minmax(0, 1fr); }
-  .workspace__explorer { display: none; }
+  .workspace__explorer,
+  .workspace__splitter { display: none; }
 }
 </style>

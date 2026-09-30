@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import os
 import weakref
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -94,7 +95,17 @@ def _inject_chat_group_id(tool, chat_group_id: int):
     )
 
 
-_MAX_HISTORY_TURNS = 20
+# 冷启动时水合多少轮原文历史。
+#
+# **必须等于 `service/memory/service.WORKING_BUFFER_TURNS`**（同一个环境变量
+# `MEMORY_BUFFER_TURNS`，同一套默认值）。那边把超过窗口的消息折叠进
+# `memory_summary.summary`（滚动摘要），这边把最近若干轮原样水合进上下文。
+# 两个数一旦不等，多出来的那几轮就会**同时以"原文"和"摘要"两种形态**出现在 prompt 里
+# —— 既白烧 token，又可能让模型把同一条信息当成两件事（一条"你之前提过"，一条"你刚才说"）。
+#
+# 不直接 import 那边的常量：`ai_core` 不能反向依赖 `service/`。所以两边各自读同一个
+# 环境变量，再用一条测试把"它们必须相等"钉死（tests/test_memory_window_alignment.py）。
+_MAX_HISTORY_TURNS = int(os.getenv("MEMORY_BUFFER_TURNS", "20"))
 
 # ── 消息分类：按需加载工具行为指南 ──
 

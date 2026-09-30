@@ -13,7 +13,9 @@ async def new_history(
     data: CreateNewHistory = Body(...)
 ):
     try:
-        message, msg = await chat_service.create_new_history(user_id, data.user_req, data.agent_id)
+        message, msg = await chat_service.create_new_history(
+            user_id, data.user_req, data.agent_id, data.page_context
+        )
         if message is None:
             return {"code": 404, "msg": msg}
         return {
@@ -39,7 +41,7 @@ async def new_message(
         if not await chat_service.chat_group_belongs_to_user(user_id, data.chat_group_id):
             return {"code": 404, "msg": "chat group not found or access denied"}
         message, msg = await chat_service.create_message_into_history(
-            user_id, data.chat_group_id, data.user_req, data.agent_id
+            user_id, data.chat_group_id, data.user_req, data.agent_id, data.page_context
         )
         if message is None:
             return {"code": 404, "msg": msg}
@@ -110,7 +112,7 @@ async def stream_new_history(
     data: StreamNewHistory = Body(...)
 ):
     return StreamingResponse(
-        chat_service.stream_create_new_history(user_id, data.user_req, data.agent_id),
+        chat_service.stream_create_new_history(user_id, data.user_req, data.agent_id, data.page_context),
         media_type="text/event-stream",
     )
 
@@ -128,7 +130,7 @@ async def stream_new_message(
         return StreamingResponse(_not_found(), media_type="text/event-stream")
     return StreamingResponse(
         chat_service.stream_create_message_into_history(
-            user_id, data.chat_group_id, data.user_req, data.agent_id
+            user_id, data.chat_group_id, data.user_req, data.agent_id, data.page_context
         ),
         media_type="text/event-stream",
     )

@@ -10,7 +10,11 @@
          它会被整个卸载，学生正在写的文件跟着一起没。刷新不该把工作区拆掉。 -->
     <section v-if="loading && !task" class="surface surface-pad state-panel" aria-live="polite"><LoaderCircle class="spin" :size="20" /><div><strong>正在整理实践任务</strong><p>系统正在读取你的学习目标、路径进度和能力诊断。</p></div></section>
     <section v-else-if="errorMessage && !task" class="surface surface-pad state-panel state-panel--error"><CircleAlert :size="20" /><div><strong>暂时无法读取实践任务</strong><p>{{ errorMessage }}</p></div><button class="button button--quiet" type="button" @click="loadTask({ refresh: true })">重试</button></section>
-    <section v-else-if="!task" class="surface surface-pad empty-panel"><p class="eyebrow">进阶学习</p><h2>{{ learningStatus === 'locked' ? '先完成基础学习，再进入实践' : '还没有可开始的实践任务' }}</h2><p v-if="learningStatus === 'locked' && hasMilestone">已完成 {{ milestone.completed_nodes }} / {{ milestone.unlock_nodes }} 个基础学习节点，还需 {{ milestone.remaining }} 个节点解锁第一组进阶任务。</p><p v-else-if="learningStatus === 'locked'">完成基础学习和学习复盘后，这里会显示还需要多少个节点才能解锁进阶任务。</p><p v-else>完成基础学习和学习复盘后，系统会在下一个学习里程碑生成实践入口。</p><RouterLink class="button button--primary" to="/learning/fundamentals">继续基础学习</RouterLink></section>
+    <!-- 这里的分支只在**连一条路径都没有**时才走到：完成 0 个基础节点也有工作区可用
+         （见 loadTask 末尾那个兜底），所以以前那个"先完成基础学习，再进入实践"的封锁页
+         已经不存在了 —— 它拦的是入口，而学生可能只是想拿自己的项目来问教练。
+         剩下这个状态是路径缺失，文案得说清缺的是**路径**，不是"你还不够格"。 -->
+    <section v-else-if="!task" class="surface surface-pad empty-panel"><p class="eyebrow">进阶学习</p><h2>{{ learningStatus === 'path_required' ? '先建立学习路径，再进入实践' : '还没有可开始的实践任务' }}</h2><p v-if="learningStatus === 'path_required'">进阶学习要挂在一条学习路径上 —— 先完成基础学习，系统会为你生成路径和节点。</p><p v-else>这条路径上还没有能用作依据的节点。稍后再同步一次，或先完成一个基础节点。</p><RouterLink class="button button--primary" to="/learning/fundamentals">继续基础学习</RouterLink></section>
 
     <template v-else>
       <!-- 整页只有这一行页头：任务信息 + 两个动作。任务情境、推荐依据、节点/里程碑这些
@@ -87,13 +91,14 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CircleAlert, LoaderCircle, RefreshCw } from 'lucide-vue-next'
 import { useRoute } from 'vue-router'
 import PracticeDialogue from '@/features/advanced/PracticeDialogue.vue'
 import TaskBar from '@/features/advanced/TaskBar.vue'
 import CodeWorkspace from '@/features/advanced/workspace/CodeWorkspace.vue'
 import { draftKeyFor } from '@/shared/storage/workspaceDraftStore'
+import { clearCurrentPage, setCurrentPage } from '@/entities/learning/currentPageContext'
 import { advancedLearningApi } from '@/shared/api/advancedLearningApi'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { renderMarkdown } from '@/shared/lib/markdown'
@@ -128,11 +133,6 @@ let summaryController = null
 const chapterContent = ref('')
 const resourceId = ref(null)
 const workspaceRef = ref(null)
-const milestone = reactive({ size: 0, unlock_nodes: 0, completed_nodes: 0, current: 0, next: 0, remaining: 0 })
-// 里程碑是后端算出来的。原来给了一组 {size:10, unlock_nodes:10, ...} 的默认值，
-// 后端漏字段时页面会显示"已完成 0 / 10 个基础学习节点，还需 10 个节点"和"第 0 个里程碑"
-// ——看着像真实进度，其实是编的。所以改成：后端给了才显示数字。
-const hasMilestone = ref(false)
 const unwrap = (response) => response?.data?.data ?? response?.data ?? null
 
 function getTaskWorkspace(value) {
@@ -143,15 +143,89 @@ function getTaskWorkspace(value) {
   }
 }
 
-// 上限 3：后端一个里程碑只给三个任务（迁移练习 / 案例诊断 / 项目实训），
-// 去掉当前选中的那个之后最多剩两个备选。
-const optionalTasks = computed(() => tasks.value.filter((item) => !item.is_recommended).slice(0, 3))
 const selectedWorkspace = computed(() => getTaskWorkspace(task.value))
 const hasWorkspace = computed(() => selectedWorkspace.value.pathId !== null && selectedWorkspace.value.nodeId !== null)
+
+// ── 「无任务」：学生不挑任务，带着自己的项目来，聊什么由他说了算 ──────────────
+//
+// 这是**一个显式的模式，不是"任务字段为空"**。教练那边是按任务办事的（会问"要交付什么"
+// "验收标准是什么"），任务块凭空消失它只会换个说法接着问，或者自己编一个任务出来 ——
+// 缺席在提示词里是个不可靠的信号。所以这份任务带 `mode: 'free'`，服务端照着它明说
+// "这次没有任务"（见 practice_service.FREE_TASK_MODE）。
+const FREE_TASK_ID = '__free__'
+
+// 锚点：这次自由对话挂在哪个 (路径, 节点) 上。会话账本按 (user, task_key, path, node)
+// 分区，所以必须有个真实节点 —— 但它只是个分区键，不出现在学生眼前的任何地方，
+// 选当前这个即可。
+//
+// **它必须能"定下来"。** 锚点要是永远从 tasks.value 现算，一次轮询就能把它掀掉：
+// 状态不是 ready 时 tasks 会被整个清空（见 loadTask），于是 `__free__` 查不到、
+// 学生几秒内就被踢回推荐任务，连工作区一起卸载。所以进「无任务」那一刻抓一份快照。
+const freeAnchor = ref(null)
+
+// 服务端 path 载荷里的锚点。**没有任务卡时唯一的锚点来源** —— 那时候 selectedWorkspace
+// 是空的（它读的是 task.value），而一个基础节点都没完成的学生正是这种情况：
+// 后端不发任务，页面靠这个锚点落进「无任务」，IDE 和教练照样能用。
+const serverPathAnchor = ref(null)
+
+function currentWorkspaceAnchor() {
+  const current = selectedWorkspace.value
+  return current.pathId !== null && current.nodeId !== null ? { ...current } : null
+}
+
+// 没抓过快照时依次退回"当前任务的工作区"、"服务端给的当前路径节点" —— 前者是常规路径，
+// 后者是没任务卡时的兜底。都没有才返回 null（那种情况下建不出自由会话，页面显示空状态）。
+const resolvedFreeAnchor = computed(
+  () => freeAnchor.value || currentWorkspaceAnchor() || serverPathAnchor.value,
+)
+
+const freeTask = computed(() => {
+  const anchor = resolvedFreeAnchor.value
+  if (!anchor) return null
+  return {
+    id: FREE_TASK_ID,
+    mode: 'free',
+    kind_label: '无任务',
+    difficulty_label: '自由',
+    title: '拿你自己的项目来聊',
+    // 四段任务说明全空是有意的：`TaskBar` 的 hasDetails 会因此为假，「任务说明」
+    // 开关整个不出现 —— 一个没有任务的任务说明，比没有更让人困惑。
+    brief: '',
+    problem: '',
+    focus: '',
+    criteria: [],
+    deliverables: [],
+    constraints: [],
+    workspace: { path_id: anchor.pathId, node_id: anchor.nodeId },
+  }
+})
+
+// 上限 3：后端一个里程碑只给三个任务（迁移练习 / 案例诊断 / 项目实训），
+// 去掉当前选中的那个之后最多剩两个备选。
+// 「无任务」接在最后当兜底选项；已经在这个模式里时不再出现（点它等于原地不动，
+// 只会让人以为菜单坏了）。
+const optionalTasks = computed(() => {
+  const alternatives = tasks.value.filter((item) => !item.is_recommended).slice(0, 3)
+  const free = freeTask.value
+  return free && task.value?.id !== FREE_TASK_ID ? [...alternatives, free] : alternatives
+})
 // 工作区草稿的归属。按学习路径而不是 task_id / node_id —— 理由见 draftKeyFor：
 // 工作区本来就跨任务卡和节点共享，按更细的粒度分会变成行为变更，而节点粒度的 key
 // 还会因为 prop 在挂载后变化而把旧文件写进新草稿里。
 const workspaceDraftKey = computed(() => draftKeyFor(selectedWorkspace.value.pathId))
+
+// 把"我在哪一页"报给跨界面助手（罗伯特）—— 它挂在 App.vue 上，拿不到这里的 task。
+// **只报标识**：任务名、节点名由服务端按 id 重查（见 schemas/chat.py 的信任规则）。
+// 任务还没加载出来（或节点缺失）时只报页面名，后端认不出定位就不渲染那一块。
+watch(
+  [() => task.value?.id, () => selectedWorkspace.value.nodeId],
+  () => setCurrentPage('advanced', {
+    nodeId: selectedWorkspace.value.nodeId,
+    taskId: task.value?.id || '',
+  }),
+  { immediate: true },
+)
+onBeforeUnmount(() => clearCurrentPage('advanced'))
 
 // 对话要能看见工作区，可数据在 CodeWorkspace 里。这里往下传的是个**身份稳定**的读取
 // 函数，而不是一份快照：
@@ -205,16 +279,30 @@ async function loadTask(options = {}) {
     const result = unwrap(await advancedLearningApi.getCurrentTask(options.refresh === true))
     learningStatus.value = result?.status || ''
     taskSource.value = result?.task_source || ''
-    Object.assign(milestone, result?.milestone || {})
-    hasMilestone.value = Boolean(result?.milestone)
+    // 没有任务卡时唯一的锚点来源（见 serverPathAnchor）。它由服务端算，客户端只读。
+    serverPathAnchor.value = result?.path?.id && result?.path?.current_node_id
+      ? { pathId: result.path.id, nodeId: result.path.current_node_id }
+      : null
     const source = Array.isArray(result?.tasks) && result.tasks.length ? result.tasks : (result?.task ? [result.task] : [])
     tasks.value = result?.status === 'ready' ? source : []
-    // 轮询时保留用户当前选中的任务，否则每 3 秒把他弹回推荐项
-    const selectedId = silent ? task.value?.id : null
-    task.value = tasks.value.find((item) => String(item.id) === String(selectedId))
+    // 轮询时保留用户当前选中的任务，否则每 3 秒把他弹回推荐项。
+    // 「无任务」额外算一种：它不在服务端列表里，重查一遍也**找不回来**（它不是任何一条
+    // 任务），所以连手动「重新同步」都留着它 —— 否则点一下就被悄悄换回推荐任务。
+    //
+    // 这一条也覆盖"自动落进无任务之后任务卡才出现"：学生学完第一个节点，任务卡就位了，
+    // 但**不把他拽过去**。他可能正在跟教练聊自己的项目，而 PracticeDialogue 是按 task.id
+    // 挂 key 的 —— 换任务 = 重挂 = 那段对话当场消失。想换是点一下「换一个」的事，
+    // 自动换却会把正在做的事弄没。
+    const keepSelected = silent || task.value?.id === FREE_TASK_ID
+    const selectedId = keepSelected ? task.value?.id : null
+    task.value = resolveTaskById(selectedId)
       || tasks.value.find((item) => String(item.id) === String(route.query.taskId))
       || tasks.value.find((item) => item.status === 'active')
-      || tasks.value[0] || null
+      || tasks.value[0]
+      // 服务端一张任务卡都没发（一个基础节点都还没完成），落进「无任务」而不是空状态：
+      // 工作区和教练本来就该立刻能用，学生是来问自己的项目的。锚点取服务端的当前节点。
+      || freeTask.value
+      || null
   } catch (error) {
     if (!silent) {
       const detail = error.response?.data?.detail || error.message || '请检查后端服务后重新同步。'
@@ -228,11 +316,23 @@ async function loadTask(options = {}) {
   schedulePoll()
 }
 
+// 按 id 找任务，认得出「无任务」这个不在服务端列表里的伪任务。
+// 轮询和点击都走这里，免得两处的解析规则长歪 —— 少一处判断，就少一次"轮询把学生
+// 踢出无任务"这种只在特定时机才现形的错。
+function resolveTaskById(taskId) {
+  if (!taskId) return null
+  if (String(taskId) === FREE_TASK_ID) return freeTask.value
+  return tasks.value.find((item) => String(item.id) === String(taskId)) || null
+}
+
 // 换任务时把上一次的"已暂存"状态清掉 —— 那个小结属于上一个任务，挂在新任务上会张冠李戴。
 // PracticeDialogue 按 task.id 挂 key，会跟着重挂并对新任务开一个会话。
 function selectTaskById(taskId) {
-  const next = tasks.value.find((item) => String(item.id) === String(taskId))
+  const next = resolveTaskById(taskId)
   if (!next) return
+  // 进「无任务」时把锚点定下来（见 freeAnchor 的注释）。放在赋值 task 之前 ——
+  // 赋值之后再取，拿到的是伪任务自己的工作区，等于把锚点绕回它自己，轮询一来照样崩。
+  if (String(taskId) === FREE_TASK_ID) freeAnchor.value = currentWorkspaceAnchor() || freeAnchor.value
   task.value = next
   sessionEnded.value = false
 }
