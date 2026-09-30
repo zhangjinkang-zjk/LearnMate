@@ -26,7 +26,6 @@ import pytest
 
 from backend.src.service.advanced import practice_service
 from backend.src.service.advanced.practice_service import (
-    PHASE_LABELS,
     _opening_pending,
     _serialize,
     _welcome_message,
@@ -41,14 +40,10 @@ def _session(messages=None, snapshot=None, **overrides):
         "path_id": 1,
         "node_id": 2,
         "status": "active",
-        "current_phase": "understand",
-        "completed_phases": [],
         "messages": messages if messages is not None else [],
         "task_snapshot": snapshot if snapshot is not None else {"title": "构建一个身份-权限模型"},
         "confirmed_facts": [],
         "assumptions": [],
-        "final_submission": "",
-        "evaluation": None,
         "updated_at": None,
     }
     base.update(overrides)
@@ -63,7 +58,20 @@ def test_the_seeded_opening_names_the_task():
     """学生看到的第一句必须点出任务是什么，否则他不知道要回答什么。"""
     text = _welcome_message({"title": "构建一个身份-权限模型"})["text"]
     assert "构建一个身份-权限模型" in text
-    assert PHASE_LABELS["understand"] in text
+
+
+def test_the_seeded_opening_does_not_invent_a_stage_name():
+    """开场白里不许出现「理解问题」「拆解需求」这类阶段名。
+
+    阶段机删掉之前，这句是"我们先从「{阶段}」开始：…" —— 学生看到的**第一个词**是
+    一个他从没听说过、任务里也没写过的流程术语，而任务说明排在它后面。那种开场正是
+    模型在对话里反复追一个不存在议程的源头。
+    """
+    text = _welcome_message({"title": "构建一个身份-权限模型"})["text"]
+    assert "我们先从" not in text
+    assert "阶段" not in text
+    for invented in ("理解问题", "拆解需求", "范围界定", "线索筛选", "阶段交付"):
+        assert invented not in text
 
 
 def test_the_seeded_opening_is_something_the_student_can_actually_answer():
@@ -176,8 +184,22 @@ def test_the_serialized_session_still_carries_its_messages():
     payload = _serialize(_session(messages=[_welcome_message(snapshot)], snapshot=snapshot))
     assert payload["messages"] == [_welcome_message(snapshot)]
     assert payload["session_id"] == "s1"
-    assert payload["current_phase"] == "understand"
-    assert payload["current_phase_label"] == PHASE_LABELS["understand"]
+
+
+def test_the_serialized_session_no_longer_ships_a_phase_ledger():
+    """阶段和判分一起删了，响应里不该还有它们 —— 留着只会有人再照着写一遍前端。"""
+    payload = _serialize(_session())
+    for gone in (
+        "current_phase",
+        "current_phase_label",
+        "completed_phase_ids",
+        "phases",
+        "deliverable_state",
+        "final_submission",
+        "evaluation",
+        "evaluation_status",
+    ):
+        assert gone not in payload
 
 
 # ═══════════════════════════════════════

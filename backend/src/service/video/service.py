@@ -341,7 +341,25 @@ def _embed_url_for(page_url: str) -> str:
 
 
 def _cover_url_for(page_url: str, search_item: dict | None = None) -> str:
-    """优先使用搜索结果缩略图，YouTube 页面再用官方缩略图兜底。"""
+    """封面地址，取搜索结果的 `thumbnail`；YouTube 再用官方缩略图兜底。
+
+    `thumbnail` 由 `web_search_client` 填好（2026-09-30 起）。链条是：
+    博查响应里 `data.webPages.value[]` **没有封面字段**，封面在**兄弟节点
+    `data.images.value[]`** —— 每条带 `hostPageUrl`（属于哪个页面）+ `thumbnailUrl`
+    （真图地址）。`_extract_images()` 按归一化后的 hostPage 建成 `{页面: 图}`
+    映射，`_normalize_page()` 再填进 `thumbnail`。
+
+    在那之前 `_extract_pages()` 只读了 `data.webPages.value`，`images` 节点从来没被
+    读过 —— 所以这里拿到的 `thumbnail` 恒为空，还被误判成"博查不给封面"。
+
+    ⚠️ 覆盖是**部分**的：博查的 `images` 只覆盖一部分返回页（实测课程档 10 条里 5 条有、
+    阅读档 8 条里 1 条有），配不上的就是空串。所以调用方必须容忍空封面，不能当作异常。
+
+    第二段 YouTube 兜底**光凭 URL 就能拼出封面、不需要任何 API**，但 YouTube 不在
+    `education_sources` 白名单里（只有 13 个域名，没有 youtube.com），白名单外的结果
+    会被调用方按 `label_for()` 丢掉 —— 所以这条实际走不到，留着防白名单以后加进来。
+    B 站走官方搜索接口，直接给 `pic`，与这里无关。
+    """
     provided = str((search_item or {}).get("thumbnail") or "").strip()
     if provided.startswith(("http://", "https://")):
         return provided
@@ -390,13 +408,14 @@ async def _search_bocha(query: str, *, count: int, include: str, caller: str) ->
 
         videos.append({
             "title": item.get("title") or "",
-            # 博查不返回作者 / 时长 / 播放量 / 视频封面，统一给空值：
+            # 博查不返回作者 / 时长 / 播放量，统一给空值：
             # 下游 _format_duration("") / _format_view_count(0) 会渲染成空串
             "author": "",
             "duration": "",
             "view_count": 0,
             "description": item.get("summary") or item.get("snippet") or "",
-                "cover_url": _cover_url_for(page_url, item),
+            # 封面可能为空 —— 博查的 images 节点只覆盖一部分网页（见 _cover_url_for）
+            "cover_url": _cover_url_for(page_url, item),
             "page_url": page_url,
             "embed_url": embed_url,
             # source 目前没有消费者，source_label 才是展示用的

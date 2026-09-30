@@ -70,20 +70,28 @@ async def test_the_task_agent_is_not_queued_behind_background_work(fake_llm):
 def test_no_advanced_call_is_low_priority_anymore():
     """进阶这条路上不该再有 low 的模型调用。
 
-    两处（生成任务、实践评分）都是学生正盯着等的结果，标 low 就等于让它们给后台排队，
-    而排队时间算在超时预算里 —— 排久了就降级，页面变成兜底模板。
+    任务生成是学生正盯着等的结果，标 low 就等于让它给后台的资源生成排队，而排队时间
+    算在超时预算里 —— 排久了就降级，页面变成兜底模板。
 
-    这条走源码断言：`run_grading` 自己读库读会话，为它搭一套能调用的替身比重写实现还长，
-    而这里要钉的只是"这两个字有没有被改回去"。
+    这条走源码断言：`generate_agent_task_set` 自己要读好几个库，为它搭一套能调用的
+    替身比重写实现还长，而这里要钉的只是"这个字有没有被改回去"。
     """
-    for path in (SERVICE_SRC, PRACTICE_SRC):
-        source = path.read_text(encoding="utf-8")
-        assert 'priority="low"' not in source, f"{path.name} 里又有低优先级的模型调用了"
+    assert 'priority="low"' not in SERVICE_SRC.read_text(encoding="utf-8"), \
+        "进阶任务生成里又有低优先级的模型调用了"
     assert 'llm.ainvoke(prompt, priority="high", user_id=user_id, pool="advanced")' in \
-        PRACTICE_SRC.read_text(encoding="utf-8"), "实践评分那次调用没找到高优先级写法"
+        SERVICE_SRC.read_text(encoding="utf-8"), "任务生成那次调用没找到高优先级写法"
 
 
-def test_the_grading_path_still_has_its_own_timeout():
+def test_the_task_generation_timeout_is_still_generous():
     """降级的原因是超时，所以这条超时不能被顺手删掉 —— 它是唯一能兜住慢模型的东西。"""
-    assert practice_service.GRADING_TIMEOUT_SECONDS >= 60
     assert advanced_service.ADVANCED_AGENT_TIMEOUT_SECONDS >= 60
+
+
+def test_practice_service_has_no_model_call_at_all():
+    """实践会话这条路上不该再有任何模型调用。
+
+    判分（`run_grading` + `GRADING_TIMEOUT_SECONDS`）连同阶段机一起删掉了，这个模块
+    现在只做会话账本。哪天有人往这里加一次 `llm.ainvoke`，它多半又是在做"替学生评价"。
+    """
+    source = PRACTICE_SRC.read_text(encoding="utf-8")
+    assert "ainvoke" not in source

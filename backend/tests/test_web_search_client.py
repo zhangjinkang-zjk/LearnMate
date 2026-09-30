@@ -247,3 +247,129 @@ class TestQuota:
 
         assert len(results) == 1
         limiter.assert_not_awaited()
+
+
+# ═══════════════════════════════════════
+#  封面：网页结果里没有，在兄弟节点 data.images 里
+# ═══════════════════════════════════════
+
+def _image(host_page_url, thumb="https://img.cdn.example/cover.jpg", **overrides):
+    item = {"hostPageUrl": host_page_url, "thumbnailUrl": thumb, "contentUrl": thumb}
+    item.update(overrides)
+    return item
+
+
+def _payload_with_images(pages, images):
+    """带 images 兄弟节点的完整响应"""
+    return {
+        "code": 200,
+        "log_id": "abc",
+        "data": {
+            "webPages": {"totalEstimatedMatches": len(pages), "value": pages},
+            "images": {"value": images},
+            "videos": None,
+        },
+    }
+
+
+class TestCoverFromImagesNode:
+    """封面在 data.images 里，按 hostPageUrl 配到网页上。
+
+    改动之前只读了 data.webPages.value，`thumbnail` 恒为空，还被误当成"博查不给封面"。
+    封面一直在响应里，是这里没接。
+    """
+
+    @pytest.mark.asyncio
+    async def test_cover_is_matched_from_the_sibling_images_node(self, monkeypatch):
+        page = _page("https://www.icourse163.org/course/XYZ-100")
+        payload = _payload_with_images([page], [_image("https://www.icourse163.org/course/XYZ-100")])
+        _patch_http(monkeypatch, _FakeResponse(payload=payload))
+
+        results = await search_web("机械制图", caller="test")
+
+        assert results[0]["thumbnail"] == "https://img.cdn.example/cover.jpg"
+
+    @pytest.mark.asyncio
+    async def test_match_survives_mobile_and_query_differences(self, monkeypatch):
+        """图片给的是 m./mip. 域、网页给的是带 query 的同一条 —— 必须能配上。
+
+        实测博查就是这样返回的：图片侧是 `m.imooc.com/article/372181`，
+        网页侧可能是 `mip.` 或带 `?from=...`。
+        """
+        cases = [
+            ("https://mip.imooc.com/article/372181", "https://m.imooc.com/article/372181"),
+            ("https://imooc.com/article/372181?from=search", "https://m.imooc.com/article/372181"),
+            ("https://mobile.example.com/a/1", "https://www.example.com/a/1"),
+        ]
+        for page_url, image_host in cases:
+            payload = _payload_with_images([_page(page_url)], [_image(image_host)])
+            _patch_http(monkeypatch, _FakeResponse(payload=payload))
+
+            results = await search_web("机械制图", caller="test")
+
+            assert results[0]["thumbnail"] == "https://img.cdn.example/cover.jpg", page_url
+
+    @pytest.mark.asyncio
+    async def test_first_image_wins_for_a_page_with_several(self, monkeypatch):
+        """一个页面有多张图时取第一张（响应里靠前的通常是头图）"""
+        host = "https://www.icourse163.org/course/XYZ-100"
+        payload = _payload_with_images([_page(host)], [
+            _image(host, "https://img.cdn.example/first.jpg"),
+            _image(host, "https://img.cdn.example/second.jpg"),
+        ])
+        _patch_http(monkeypatch, _FakeResponse(payload=payload))
+
+        results = await search_web("机械制图", caller="test")
+
+        assert results[0]["thumbnail"] == "https://img.cdn.example/first.jpg"
+
+    @pytest.mark.asyncio
+    async def test_a_page_own_thumbnail_still_wins(self, monkeypatch):
+        """网页自己带 thumbnail 时用它 —— 万一博查哪天把这个字段加进 webPages，别被兄弟节点盖掉"""
+        host = "https://www.icourse163.org/course/XYZ-100"
+        payload = _payload_with_images(
+            [_page(host, thumbnail="https://own.example/own.jpg")],
+            [_image(host, "https://img.cdn.example/from-images.jpg")],
+        )
+        _patch_http(monkeypatch, _FakeResponse(payload=payload))
+
+        results = await search_web("机械制图", caller="test")
+
+        assert results[0]["thumbnail"] == "https://own.example/own.jpg"
+
+    @pytest.mark.asyncio
+    async def test_a_page_without_a_matching_image_just_has_no_cover(self, monkeypatch):
+        """配不上就留空 —— 博查的 images 只覆盖一部分网页，这是常态不是异常"""
+        payload = _payload_with_images(
+            [_page("https://www.icourse163.org/course/XYZ-100")],
+            [_image("https://other.example.com/somewhere-else")],
+        )
+        _patch_http(monkeypatch, _FakeResponse(payload=payload))
+
+        results = await search_web("机械制图", caller="test")
+
+        assert results[0]["thumbnail"] == ""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("images", [
+        None,                                   # 节点不存在
+        "不是字典",                              # 类型不对
+        {},                                     # 空节点
+        {"value": None},                        # value 不是列表
+        {"value": ["不是字典", None]},           # 列表里是坏行
+        {"value": [_image("", "https://x/y.jpg")]},                    # hostPageUrl 为空
+        {"value": [_image("https://a/b", "")]},                        # 图地址为空
+        {"value": [_image("https://a/b", "ftp://x/y.jpg")]},           # 不是 http(s)
+    ])
+    async def test_broken_images_node_never_breaks_the_search(self, monkeypatch, images):
+        """images 节点的任何脏数据都不能把整次搜索带崩"""
+        payload = {"code": 200, "data": {
+            "webPages": {"value": [_page("https://a/b")]},
+            "images": images,
+        }}
+        _patch_http(monkeypatch, _FakeResponse(payload=payload))
+
+        results = await search_web("机械制图", caller="test")
+
+        assert len(results) == 1, "网页结果不该受 images 节点影响"
+        assert results[0]["thumbnail"] == ""

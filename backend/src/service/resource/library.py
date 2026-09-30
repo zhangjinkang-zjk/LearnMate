@@ -318,7 +318,7 @@ class ResourceLibraryService:
             user=user,
         )
         if not record.cover_url:
-            cover = build_cover_url(resource_type, file_url, record.id)
+            cover = build_cover_url(resource_type, file_url)
             if cover:
                 record.cover_url = cover
                 await record.save(update_fields=["cover_url", "updated_at"])

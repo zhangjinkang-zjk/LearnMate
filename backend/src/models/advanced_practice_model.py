@@ -4,7 +4,14 @@ from tortoise import Model, fields
 
 
 class AdvancedPracticeSession(Model):
-    """保存一次进阶实践对话，支持暂存、恢复和最终提交。"""
+    """保存一次进阶实践对话，支持暂存和恢复。
+
+    下面五列（`current_phase` / `completed_phases` / `deliverable_state` /
+    `final_submission` / `evaluation`）是阶段机与判分留下的**遗迹**，代码里已经没有
+    任何读写者。**故意不删**：`completed_phases` 在库里是 `NOT NULL` 且没有默认值，
+    从 model 里拿掉就会让 INSERT 直接失败，而删列必须先 `MODIFY ... NULL`、发布、
+    再 `DROP`，一次要卡两个发布窗口 —— 为了清掉几个空列不值得。
+    """
 
     id = fields.IntField(pk=True)
     session_key = fields.CharField(max_length=64, unique=True, description="对外暴露的会话 ID")
@@ -13,19 +20,16 @@ class AdvancedPracticeSession(Model):
     node_id = fields.IntField(description="关联学习节点 ID")
     task_snapshot = fields.JSONField(description="创建会话时的任务快照")
     status = fields.CharField(max_length=16, default="active", description="active/paused/completed")
+    # ── 以下是遗迹，为兼容库表而保留，别再往里写 ──
     current_phase = fields.CharField(max_length=32, default="understand")
     completed_phases = fields.JSONField(default=list)
+    deliverable_state = fields.JSONField(default=dict)
+    final_submission = fields.TextField(null=True)
+    evaluation = fields.JSONField(null=True)
+    # ── 遗迹结束 ──
     messages = fields.JSONField(default=list, description="对话消息快照")
-    confirmed_facts = fields.JSONField(default=list, description="已确认事实")
-    assumptions = fields.JSONField(default=list, description="待验证假设")
-    # 交付物勾选状态：{交付物文案: 是否已产出}。键用文案而不是下标 —— 任务快照重建后
-    # 交付物顺序可能变，而下标会把勾选悄悄挪到另一条上。
-    #
-    # ⚠️ 这一列是后加的，Tortoise 的 generate_schemas 只建表不改表，所以**上线前必须
-    # 先手动 ALTER**（见同名 .sql）；列不存在时 SELECT 会连整张表的查询一起报错。
-    deliverable_state = fields.JSONField(default=dict, description="交付物勾选状态")
-    final_submission = fields.TextField(null=True, description="用户提交的最终方案")
-    evaluation = fields.JSONField(null=True, description="提交后的评价结果")
+    confirmed_facts = fields.JSONField(default=list, description="已确认事实（已无读者）")
+    assumptions = fields.JSONField(default=list, description="待验证假设（已无读者）")
     started_at = fields.DatetimeField(auto_now_add=True)
     ended_at = fields.DatetimeField(null=True)
     updated_at = fields.DatetimeField(auto_now=True)

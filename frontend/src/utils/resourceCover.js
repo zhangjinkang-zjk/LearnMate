@@ -22,7 +22,9 @@ const PALETTES = {
   external_video: ['#733d35', '#f5c6ae'],
 }
 
-function asHttpUrl(value) {
+// 导出给需要「只判断有没有真封面、不要占位图」的地方用（如外部视频播放视图）。
+// 那边缺封面时宁可保留自己的图标视图，也不要一张把标题写进图里的占位图 —— 标题在下面还会再显示一次。
+export function asHttpUrl(value) {
   const text = String(value || '').trim()
   if (!text) return ''
   if (/^https?:\/\//i.test(text)) return text

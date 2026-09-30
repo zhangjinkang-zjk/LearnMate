@@ -20,18 +20,12 @@ class PracticeSessionRequest(BaseModel):
 
 
 class PracticeStateRequest(BaseModel):
-    # 首阶段按任务类型不同（案例诊断是 clues，项目实训是 scope），这里只做长度与
-    # 白名单之外的宽松校验 —— 具体是哪套词汇由会话自己的 kind 决定。
-    current_phase: str = Field(default="understand", max_length=32)
-    completed_phase_ids: list[str] = Field(default_factory=list, max_length=6)
+    # 这里只收消息体和两份已经没人读的旧字段。pydantic 默认忽略多余键，所以旧客户端
+    # 仍然发的 `current_phase` / `completed_phase_ids` / `deliverable_state` 会被丢掉，
+    # 不会报错也不会被存下来 —— 这是有意的：它们是死状态，收下来只会让人以为还在用。
     messages: list[dict[str, Any]] = Field(default_factory=list, max_length=120)
     confirmed_facts: list[str] = Field(default_factory=list, max_length=20)
     assumptions: list[str] = Field(default_factory=list, max_length=20)
-    deliverable_state: dict[str, Any] = Field(default_factory=dict)
-
-
-class PracticeSubmitRequest(PracticeStateRequest):
-    final_submission: str = Field(default="", max_length=6000)
 
 
 @router.get("/current")
@@ -79,17 +73,14 @@ async def save_practice_session(
     data: PracticeStateRequest,
     user_id: int = Depends(get_user_id_from_token),
 ):
-    """保存对话、阶段和学习者当前整理出的事实/假设。"""
+    """保存这次实践会话的对话记录。"""
     try:
         result = await AdvancedPracticeService.save_state(
             user_id,
             session_id,
-            current_phase=data.current_phase,
-            completed_phase_ids=data.completed_phase_ids,
             messages=data.messages,
             confirmed_facts=data.confirmed_facts,
             assumptions=data.assumptions,
-            deliverable_state=data.deliverable_state,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -103,28 +94,4 @@ async def pause_practice_session(session_id: str, user_id: int = Depends(get_use
         result = await AdvancedPracticeService.pause_session(user_id, session_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"code": 200, "msg": "本次巩固已暂存", "data": result}
-
-
-@router.post("/practice/sessions/{session_id}/submit")
-async def submit_practice_session(
-    session_id: str,
-    data: PracticeSubmitRequest,
-    user_id: int = Depends(get_user_id_from_token),
-):
-    """提交实践方案，保存服务端评价并结束本次会话。"""
-    try:
-        result = await AdvancedPracticeService.submit(
-            user_id,
-            session_id,
-            final_submission=data.final_submission,
-            current_phase=data.current_phase,
-            completed_phase_ids=data.completed_phase_ids,
-            messages=data.messages,
-            confirmed_facts=data.confirmed_facts,
-            assumptions=data.assumptions,
-            deliverable_state=data.deliverable_state,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"code": 200, "msg": "方案已提交并完成评价", "data": result}
+    return {"code": 200, "msg": "本次实践已暂存", "data": result}

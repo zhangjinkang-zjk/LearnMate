@@ -366,7 +366,19 @@
               />
 
               <section v-else-if="resourceView === 'external_video'" class="external-video-fallback surface">
-                <PlayCircle :size="30" />
+                <!-- 有真封面就铺封面，没有就保留原来的图标视图。
+                     不用 resourceCoverUrl()：它缺封面时会生成一张把标题画进图里的 SVG，
+                     而标题在下面还会再显示一次，铺上去就成了两遍标题。 -->
+                <img
+                  v-if="externalVideoCover"
+                  class="external-video-fallback__cover"
+                  :src="externalVideoCover"
+                  :alt="`${selectedExternalVideo?.title || '推荐视频'}封面`"
+                  loading="lazy"
+                  referrerpolicy="no-referrer"
+                  @error="externalVideoCoverBroken = true"
+                />
+                <PlayCircle v-else :size="30" />
                 <strong>{{ selectedExternalVideo?.title || '推荐视频' }}</strong>
                 <p>{{ selectedExternalVideo?.description || '该来源不支持站内嵌入播放，可以跳转到原平台观看。' }}</p>
                 <a v-if="selectedExternalVideo?.page_url" class="button button--primary" :href="selectedExternalVideo.page_url" target="_blank" rel="noreferrer">
@@ -479,7 +491,7 @@ import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { readPortrait } from '@/shared/api/portraitApi'
 import { applyWorkflowEvent, applyWorkflowProgress, finishWorkflow, resetWorkflow } from '@/entities/agent/agentWorkflowState'
 import { resourceApi } from '@/shared/api/resourceApi'
-import { generatedResourceCover, resourceCoverUrl } from '@/utils/resourceCover'
+import { asHttpUrl, generatedResourceCover, resourceCoverUrl } from '@/utils/resourceCover'
 
 const route = useRoute()
 const router = useRouter()
@@ -490,6 +502,13 @@ const externalVideoResources = ref([])
 const externalVideoLoadedNodeIds = ref({})
 const externalVideoLoadingNodeIds = ref({})
 const selectedExternalVideo = ref(null)
+// 外部视频的封面：只认服务端给的真封面（`cover_url`，B 站和博查的 images 节点都会填），
+// 加载失败就退回图标视图。换一个视频要重置这个标记，否则上一个的失败会一直压着。
+const externalVideoCoverBroken = ref(false)
+watch(selectedExternalVideo, () => { externalVideoCoverBroken.value = false })
+const externalVideoCover = computed(() =>
+  externalVideoCoverBroken.value ? '' : asHttpUrl(selectedExternalVideo.value?.cover_url),
+)
 const previewNodeId = ref(null)
 const learningPath = ref(null)
 const pathCatalog = ref([])
@@ -1826,6 +1845,7 @@ onBeforeUnmount(() => {
 .resource-group__empty:hover { border-color: #9dbb8d; background: #fbfdf9; color: var(--accent-deep); }
 .resource-group__empty span { flex: 1; }
 .external-video-fallback { display: grid; min-height: 360px; place-items: center; align-content: center; gap: 10px; padding: 40px; color: #a45b45; text-align: center; }
+.external-video-fallback__cover { width: min(100%, 620px); aspect-ratio: 16 / 9; margin-bottom: 4px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); object-fit: cover; box-shadow: 0 10px 24px rgb(32 40 36 / 8%); }
 .external-video-fallback strong { color: var(--ink); font-size: 17px; }
 .external-video-fallback p { max-width: 480px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .external-video-fallback .button { display: inline-flex; align-items: center; gap: 7px; margin-top: 5px; }

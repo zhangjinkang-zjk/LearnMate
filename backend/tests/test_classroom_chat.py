@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend.src.models.advanced_practice_model import AdvancedPracticeSession
+from backend.src.service.advanced.practice_service import _welcome_message
 from backend.src.service.path import classroom_chat as cg_chat
 from backend.src.service.chat import service as chat_service
 
@@ -99,10 +100,27 @@ def test_compose_user_prompt_feynman():
 
 
 def test_compose_user_prompt_practice_keeps_one_step_at_a_time():
-    prompt = cg_chat._compose_user_prompt("practice", "我准备换向量模型", {"phase": "比较方案"})
-    assert "学习巩固" in prompt
-    assert "比较方案" in prompt
+    prompt = cg_chat._compose_user_prompt("practice", "我准备换向量模型", {})
+    assert "实践对话" in prompt
+    assert "我准备换向量模型" in prompt
     assert "只追问一个" in prompt
+
+
+def test_compose_user_prompt_practice_has_no_phase_agenda():
+    """这一轮的提示词里不该再出现「当前阶段是…」，也不该再要模型写阶段标记。
+
+    以前它写着"当前阶段是「比较方案」"，模型于是把上一轮的安排当成自己这一轮的任务：
+    学生问"看看我的代码"，它回"我们先完成任务定义这一步"。阶段机删了，这段话的每一句
+    都在生产一个不存在的议程。
+    """
+    prompt = cg_chat._compose_user_prompt("practice", "教练看看我的代码", {"phase": "比较方案"})
+
+    assert "比较方案" not in prompt
+    assert "当前阶段" not in prompt
+    assert "PHASE" not in prompt
+    # 学生的原话要原样在场，且提示词明确要求先回应他说的这件事
+    assert "教练看看我的代码" in prompt
+    assert "针对他说的这件事本身回应" in prompt
 
 
 def test_compose_user_prompt_free():
@@ -115,19 +133,22 @@ def test_compose_user_prompt_free():
 # 调用。于是学生在进阶学习里看到的第一问永远一样、也不提这个任务是什么。
 
 def test_compose_user_prompt_practice_opening_asks_the_first_question():
-    prompt = cg_chat._compose_user_prompt("practice_opening", "", {"phase": "理解问题"})
+    prompt = cg_chat._compose_user_prompt("practice_opening", "", {})
     assert "学生还没有任何发言" in prompt
-    assert "理解问题" in prompt
     assert "只问一个问题" in prompt
-    # 第一轮不该记进度：学生还没答，任何标记都是错的
-    assert "不输出任何阶段标记" in prompt
+
+
+def test_compose_user_prompt_practice_opening_does_not_name_a_stage():
+    prompt = cg_chat._compose_user_prompt("practice_opening", "", {"phase": "理解问题"})
+
+    assert "理解问题" not in prompt
+    assert "阶段" not in prompt
 
 
 def test_practice_opening_fallback_carries_the_task_title():
     """兜底必须点出任务名 —— 这正是原来那句写死开场缺的东西。"""
-    text = cg_chat._opening_fallback({"phase": "理解问题", "title": "构建一个身份-权限模型"})
+    text = cg_chat._opening_fallback({"title": "构建一个身份-权限模型"})
     assert "构建一个身份-权限模型" in text
-    assert "理解问题" in text
     assert "「」" not in text
 
 
@@ -139,40 +160,40 @@ def test_practice_opening_fallback_without_a_title_is_still_a_whole_sentence():
         assert "「」" not in text
 
 
-def test_practice_opening_fallback_falls_back_to_the_first_phase_label():
-    text = cg_chat._opening_fallback({"title": "写一份检索方案"})
-    assert "理解问题" in text
-    assert "写一份检索方案" in text
+def test_practice_opening_fallback_differs_from_the_seeded_opening():
+    """兜底那句必须和 `practice_service._welcome_message` 种下的那句**字面不同**。
+
+    `_opening_pending` 是靠"助手说过的话 != 种下的那句"来判断开场已经生成过的。
+    两句一样的话，就会每轮都重新请教练开场一次。
+    """
+    segment = {"title": "写一份检索方案"}
+    assert cg_chat._opening_fallback(segment) != _welcome_message({"title": "写一份检索方案"})["text"]
 
 
 @pytest.mark.asyncio
-async def test_the_opening_turn_never_records_phase_progress(monkeypatch):
-    """开场是助手在提问。模型不听话写了 [[PHASE:done]]，也不能记进账本。"""
+async def test_the_opening_turn_emits_no_phase_event(monkeypatch):
+    """流式回复里不该再有 `type:phase` 事件 —— 阶段账本已经删了。
+
+    以前这里跑一个 `PhaseStreamStripper` 剥掉模型吐的 `[[PHASE:done]]`，再把它交给
+    `AdvancedPracticeService.record_phase_markers`。两个东西都不在了，模型万一还是
+    吐了标记，它会原样出现在回复里 —— 这是可接受的：提示词里已经没有任何地方要求它写。
+    """
     monkeypatch.setattr(cg_chat, "get_or_create_classroom_agent", _async_value(123))
     monkeypatch.setattr(cg_chat, "_get_classroom_brain", lambda *a, **k: StubBrain([
         {"role": "assistant", "type": "chunk", "content": "这个任务要你产出的是「检索方案」。"},
-        {"role": "assistant", "type": "chunk", "content": "[[PHASE:done]]"},
     ]))
     monkeypatch.setattr(cg_chat, "_build_classroom_path_context", _async_value("ctx"))
     monkeypatch.setattr(cg_chat, "_build_global_portrait_context", _async_value("portrait"))
 
     session = SimpleNamespace(status="active")
     monkeypatch.setattr(AdvancedPracticeSession, "filter", lambda *a, **k: FakeQuerySet(session))
-    recorded = []
-
-    async def fake_record(session_arg, markers):
-        recorded.append(list(markers))
-        return {}
-
-    monkeypatch.setattr(cg_chat.AdvancedPracticeService, "record_phase_markers", fake_record)
 
     events = await _collect(cg_chat.stream_classroom_chat(
-        1, 1, 1, {"phase": "理解问题"}, "practice_opening", "", practice_session_id="abc",
+        1, 1, 1, {}, "practice_opening", "", practice_session_id="abc",
     ))
     joined = "\n".join(events)
+
     assert "这个任务要你产出的是" in joined
-    assert "[[PHASE:done]]" not in joined, "标记照样要剥掉，不能漏给学生看"
-    assert recorded == [[]], "开场那一轮不该把标记交给账本"
     assert '"type":"phase"' not in joined
 
 

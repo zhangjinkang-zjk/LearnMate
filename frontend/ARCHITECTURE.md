@@ -6,18 +6,23 @@
 
 ```text
 src/
-├─ app/                  # 应用装配：App、main、router
+├─ app/                  # 应用装配：App、main、router；罗伯特也挂在这里
 ├─ layouts/              # 页面布局壳：侧边主导航、顶部状态栏
 ├─ pages/                # 路由页面，只负责页面编排
 │  ├─ home/              # 沉浸式首页
-│  ├─ onboarding/        # 学习定向、能力诊断、诊断结果
-│  ├─ learning/          # 学习概览、任务分析、基础讲解、进阶、工作区
-│  ├─ resources/         # 资料库
+│  ├─ auth/              # 登录
+│  ├─ onboarding/        # 学习定向、能力诊断、画像确认
+│  ├─ learning/          # 学习概览、基础讲解、基础测试、进阶学习
+│  ├─ resources/         # 资料库、知识库导入
+│  ├─ profile/ planner/  # 学习画像、计划本
+│  ├─ notifications/     # 通知
 │  └─ settings/          # 用户设置
 ├─ widgets/              # 跨页面业务区块，如学习阶段卡、系统推荐
-├─ features/             # 单一业务动作及其状态，如学习定向、诊断
-├─ entities/             # 稳定领域数据和状态，如 learningState
-└─ shared/               # 跨业务复用：UI、配置、资源、样式、接口客户端
+├─ features/             # 单一业务动作及其状态：advanced、assistant、agent、
+│                        #   fundamentals、learnmateFlow、onboarding、resources
+├─ entities/             # 稳定领域数据和状态：learning、agent
+├─ shared/               # 跨业务复用：api、ui、styles、auth、config、lib
+└─ utils/                # 与框架无关的纯函数（如 resourceCover）
 ```
 
 ## 依赖方向
@@ -26,9 +31,18 @@ src/
 
 ## 学习主流程
 
-`学习定向 → 能力诊断 → 诊断结果确认 → 学习概览 → 任务分析 → 基础讲解 → 进阶学习 → 学习工作区`
+```text
+学习定向 → 画像访谈 → 能力诊断 → 画像确认 → 学习概览
+                                              ↓
+                          基础讲解 → 基础测试 → 进阶学习（IDE + 实践教练）
+```
 
-资料库和设置属于工具入口，不放入学习主线。首页和学习定向使用沉浸式布局，其余页面统一使用 `layouts/AppShell.vue`。
+资料库和设置属于工具入口，不放入学习主线。首页、登录、学习定向、能力诊断和画像确认使用沉浸式布局，其余页面统一使用 `layouts/AppShell.vue`。
+
+> **2026-09-30 更正。** 这一行原来写的是「… → 学习概览 → 任务分析 → 基础讲解 → 进阶学习 → 学习工作区」，两处已经不对：
+> 「任务分析」和「学习工作区」都**不是页面**了，路由表里它们都重定向（前者 → 概览，后者 → 进阶学习），「学习导航」同样重定向到概览。
+> 另外流程里少了**基础测试**（`/learning/foundation-test`）和**画像访谈**（`/learnmate-chat`）—— 后者是方向与学习目标实际被问出来的地方，定向页只选身份。
+> 各页面的分工见 `docs/系统设计.md`。
 
 ## 新增代码规则
 
