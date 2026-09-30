@@ -45,7 +45,7 @@
         <header class="foundation-library__header">
           <div>
             <p class="eyebrow lesson-eyebrow">FOUNDATION LEARNING</p>
-            <h1 id="foundation-library-title">基础学习</h1>
+            <h1 id="foundation-library-title">{{ previewNode?.title || learningPath.goal || '基础学习' }}</h1>
             <p>先从配套资源开始，再进入对应章节的讲解与练习。</p>
           </div>
           <div class="path-progress" aria-label="当前科目学习进度">
@@ -59,6 +59,22 @@
           <BookOpenText :size="16" aria-hidden="true" />
           <span><strong>建议先从主讲文档开始</strong><small>先读懂核心内容，再用 PPT、知识结构和视频辅助理解。</small></span>
         </div>
+        <form class="foundation-library__video-search" @submit.prevent="searchExternalVideos">
+          <label class="foundation-library__video-search-input">
+            <Search :size="16" aria-hidden="true" />
+            <span class="sr-only">搜索拓展资源</span>
+            <input v-model.trim="externalVideoSearchTerm" type="search" placeholder="搜索视频，例如：MCP 服务开发教程" />
+          </label>
+          <button class="button button--primary" type="submit" :disabled="isExternalVideoSearchLoading || externalVideoSearchTerm.length < 2">
+            <LoaderCircle v-if="isExternalVideoSearchLoading" class="spin" :size="15" />
+            <Search v-else :size="15" />
+            {{ isExternalVideoSearchLoading ? '搜索中' : '搜索视频' }}
+          </button>
+          <button v-if="hasExternalVideoSearchResults" class="foundation-library__video-search-clear" type="button" title="清除搜索结果" aria-label="清除搜索结果" @click="clearExternalVideoSearch">
+            <X :size="16" />
+          </button>
+        </form>
+        <p v-if="externalVideoSearchError" class="foundation-library__video-search-error">{{ externalVideoSearchError }}</p>
         <div v-if="resourceOverviewLoading" class="foundation-library__state surface" aria-live="polite">
           <LoaderCircle class="spin" :size="22" />
           <strong>正在整理你的学习资源</strong>
@@ -222,6 +238,18 @@
                 <Video :size="16" />
                 <span>{{ isVideoLoading ? '准备中' : videoError ? '重试视频' : '视频讲解' }}</span>
               </button>
+              <button
+                type="button"
+                role="tab"
+                :aria-selected="resourceView === 'external_video'"
+                :class="{ 'is-active': resourceView === 'external_video' }"
+                :disabled="isActiveNodeExternalVideoLoading"
+                :title="activeNodeExternalVideoError || '查看当前章节的拓展资源'"
+                @click="showLearningVideos"
+              >
+                <PlayCircle :size="16" />
+                <span>{{ isActiveNodeExternalVideoLoading ? '查找中' : activeNodeExternalVideoError ? '重试视频' : '拓展资源' }}</span>
+              </button>
             </div>
           </nav>
 
@@ -229,7 +257,7 @@
             <div class="resource-toolbar" aria-label="章节材料视图">
               <span class="resource-status"><span class="status-dot"></span>{{ resourceStatusLabel }}</span>
               <button
-                v-if="activeResource"
+                v-if="activeResource && resourceView !== 'external_video'"
                 class="resource-download button button--quiet"
                 type="button"
                 :disabled="isResourceDownloading"
@@ -359,33 +387,15 @@
                 :title="videoResource.topic || learningPath.goal"
               />
 
-              <VideoLessonFrame
-                v-else-if="resourceView === 'external_video' && selectedExternalVideo?.embed_url"
-                :src="selectedExternalVideo.embed_url"
-                :title="selectedExternalVideo.title"
+              <LearningVideoPanel
+                v-else-if="resourceView === 'external_video'"
+                :videos="activeNodeLearningVideos"
+                :selected-video="selectedExternalVideo"
+                :is-loading="isActiveNodeExternalVideoLoading"
+                :error="activeNodeExternalVideoError"
+                @select="selectLearningVideo"
+                @retry="retryLearningVideos"
               />
-
-              <section v-else-if="resourceView === 'external_video'" class="external-video-fallback surface">
-                <!-- 有真封面就铺封面，没有就保留原来的图标视图。
-                     不用 resourceCoverUrl()：它缺封面时会生成一张把标题画进图里的 SVG，
-                     而标题在下面还会再显示一次，铺上去就成了两遍标题。 -->
-                <img
-                  v-if="externalVideoCover"
-                  class="external-video-fallback__cover"
-                  :src="externalVideoCover"
-                  :alt="`${selectedExternalVideo?.title || '推荐视频'}封面`"
-                  loading="lazy"
-                  referrerpolicy="no-referrer"
-                  @error="externalVideoCoverBroken = true"
-                />
-                <PlayCircle v-else :size="30" />
-                <strong>{{ selectedExternalVideo?.title || '推荐视频' }}</strong>
-                <p>{{ selectedExternalVideo?.description || '该来源不支持站内嵌入播放，可以跳转到原平台观看。' }}</p>
-                <a v-if="selectedExternalVideo?.page_url" class="button button--primary" :href="selectedExternalVideo.page_url" target="_blank" rel="noreferrer">
-                  打开原平台
-                  <ArrowRight :size="15" />
-                </a>
-              </section>
 
               <footer v-if="resourceView !== 'document' && resourceView !== 'external_video'" class="chapter-footer surface">
                 <button class="button button--quiet" type="button" :disabled="!previousNode" @click="previousNode && selectNode(previousNode.id)">
@@ -478,10 +488,11 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, BookOpenText, CircleAlert, Download, Eye, ListTree, LoaderCircle, LockKeyhole, Network, PlayCircle, Presentation, Route, Video, X } from 'lucide-vue-next'
+import { ArrowLeft, ArrowRight, BookOpenText, CircleAlert, Download, Eye, ListTree, LoaderCircle, LockKeyhole, Network, PlayCircle, Presentation, Route, Search, Video, X } from 'lucide-vue-next'
 import ChapterCheck from '@/features/fundamentals/ChapterCheck.vue'
 import ChapterRail from '@/features/fundamentals/ChapterRail.vue'
 import LearningAssistant from '@/features/fundamentals/LearningAssistant.vue'
+import LearningVideoPanel from '@/features/fundamentals/LearningVideoPanel.vue'
 import MarkdownDocument from '@/features/fundamentals/MarkdownDocument.vue'
 import MindmapPreview from '@/features/fundamentals/MindmapPreview.vue'
 import PathPicker from '@/features/fundamentals/PathPicker.vue'
@@ -491,7 +502,7 @@ import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { readPortrait } from '@/shared/api/portraitApi'
 import { applyWorkflowEvent, applyWorkflowProgress, finishWorkflow, resetWorkflow } from '@/entities/agent/agentWorkflowState'
 import { resourceApi } from '@/shared/api/resourceApi'
-import { asHttpUrl, generatedResourceCover, resourceCoverUrl } from '@/utils/resourceCover'
+import { generatedResourceCover, resourceCoverUrl } from '@/utils/resourceCover'
 
 const route = useRoute()
 const router = useRouter()
@@ -501,14 +512,12 @@ const resourceOverviewLoading = ref(false)
 const externalVideoResources = ref([])
 const externalVideoLoadedNodeIds = ref({})
 const externalVideoLoadingNodeIds = ref({})
+const externalVideoErrors = ref({})
+const externalVideoSearchTerm = ref('')
+const isExternalVideoSearchLoading = ref(false)
+const externalVideoSearchError = ref('')
+const externalVideoSearchNodeId = ref(null)
 const selectedExternalVideo = ref(null)
-// 外部视频的封面：只认服务端给的真封面（`cover_url`，B 站和博查的 images 节点都会填），
-// 加载失败就退回图标视图。换一个视频要重置这个标记，否则上一个的失败会一直压着。
-const externalVideoCoverBroken = ref(false)
-watch(selectedExternalVideo, () => { externalVideoCoverBroken.value = false })
-const externalVideoCover = computed(() =>
-  externalVideoCoverBroken.value ? '' : asHttpUrl(selectedExternalVideo.value?.cover_url),
-)
 const previewNodeId = ref(null)
 const learningPath = ref(null)
 const pathCatalog = ref([])
@@ -546,6 +555,7 @@ let nodeLoadVersion = 0
 let openedAt = 0
 let readReportPromise = null
 let readingIntervalId = null
+const externalVideoRequests = new Map()
 // 视频是「路径级」产物，生成要跑好几分钟。所以它是后台作业 + 轮询，而不用 nodeLoadVersion
 // 守卫：切章节不该中断它（换章不影响同一条路径的视频）。只有切路径和离开页面才作废。
 let videoPollToken = 0
@@ -570,6 +580,12 @@ const previewNode = computed(() => {
   return selected || chooseInitialNode(learningPath.value)
 })
 const hasActiveLesson = computed(() => Boolean(activeNodeId.value))
+const activeNodeLearningVideos = computed(() => externalVideoResources.value
+  .filter((video) => Number(video.node_id) === Number(activeNode.value?.id)))
+const isActiveNodeExternalVideoLoading = computed(() => Boolean(externalVideoLoadingNodeIds.value[activeNode.value?.id]))
+const activeNodeExternalVideoError = computed(() => externalVideoErrors.value[activeNode.value?.id] || '')
+const hasExternalVideoSearchResults = computed(() => Number(externalVideoSearchNodeId.value) === Number(previewNode.value?.id)
+  && externalVideoResources.value.some((video) => video.is_manual_search && Number(video.node_id) === Number(previewNode.value?.id)))
 const resourceGroups = computed(() => {
   const nodes = learningPath.value?.nodes || []
   const videosByNodeId = new Map(nodes.map((node) => [Number(node.id), []]))
@@ -601,7 +617,7 @@ const activeResource = computed(() => ({
   video: videoResource.value,
   external_video: selectedExternalVideo.value,
 }[resourceView.value] || null))
-const activeResourceLabel = computed(() => ({ document: '主讲文档', ppt: 'PPT', mindmap: '知识结构', video: '视频讲解', external_video: '推荐视频' }[resourceView.value] || '学习材料'))
+const activeResourceLabel = computed(() => ({ document: '主讲文档', ppt: 'PPT', mindmap: '知识结构', video: '视频讲解', external_video: '拓展资源' }[resourceView.value] || '学习材料'))
 const completedNodeCount = computed(() => learningPath.value?.nodes.filter((node) => node.status === 'completed').length || 0)
 const previousNode = computed(() => {
   if (!learningPath.value || activeNodeIndex.value <= 0) return null
@@ -616,6 +632,12 @@ const estimatedReadMinutes = computed(() => Math.max(3, Math.ceil(documentConten
 const knowledgeContent = computed(() => extractDocumentSection(documentContent.value, ['知识点', '概念', '原理']) || '')
 const exampleContent = computed(() => extractDocumentSection(documentContent.value, ['示例', '例子', '实践', 'example']) || '')
 const resourceStatusLabel = computed(() => {
+  if (resourceView.value === 'external_video') {
+    if (isActiveNodeExternalVideoLoading.value) return '正在查找拓展资源'
+    if (activeNodeExternalVideoError.value) return '拓展资源暂时不可用'
+    if (activeNodeLearningVideos.value.length) return '拓展资源已准备'
+    return '暂未找到拓展资源'
+  }
   if (isResourceLoading.value) return '正在准备本章'
   if (documentError.value) return '主讲文档异常'
   if (resourceGenerationError.value) return '部分辅助材料异常'
@@ -667,7 +689,7 @@ function resourceTypeLabel(type) {
     ppt: '平台视觉辅助',
     mindmap: '平台知识结构',
     video: '平台视频课件',
-    external_video: '外部教学视频',
+    external_video: '拓展资源',
   }[type] || '学习资源'
 }
 
@@ -714,8 +736,8 @@ function parseExternalVideo(resource) {
     ...resource,
     ...payload,
     resource_id: resource?.resource_id || resource?.id,
-    title: payload.title || resource?.topic || '推荐视频',
-    source_label: payload.source_label || payload.source || '外部教学视频',
+    title: payload.title || resource?.topic || '拓展资源',
+    source_label: payload.source_label || payload.source || '拓展资源',
     page_url: payload.page_url || resource?.file_url || resource?.url || '',
     embed_url: payload.embed_url || payload.preview_url || '',
   }
@@ -732,36 +754,168 @@ async function loadNodeExternalVideos(node, force = false) {
   if (!force && externalVideoLoadedNodeIds.value[nodeId]) {
     return externalVideoResources.value.filter((video) => Number(video.node_id) === nodeId)
   }
-  if (externalVideoLoadingNodeIds.value[nodeId]) return []
+  const pendingRequest = externalVideoRequests.get(nodeId)
+  if (pendingRequest) return pendingRequest
 
-  externalVideoLoadingNodeIds.value = { ...externalVideoLoadingNodeIds.value, [nodeId]: true }
-  try {
-    const videos = await fundamentalsApi.searchNodeExternalVideos(pathId, nodeId, 3)
-    const normalized = (Array.isArray(videos) ? videos : []).map((video, index) => {
-      const parsed = parseExternalVideo(video)
-      return {
-        ...parsed,
-        node_id: nodeId,
-        video_index: index,
-        id: `node-${nodeId}-external-video-${index}`,
-        video_meta: videoMeta(parsed),
+  const request = (async () => {
+    externalVideoLoadingNodeIds.value = { ...externalVideoLoadingNodeIds.value, [nodeId]: true }
+    const errors = { ...externalVideoErrors.value }
+    delete errors[nodeId]
+    externalVideoErrors.value = errors
+    try {
+      const videos = await fundamentalsApi.searchNodeExternalVideos(pathId, nodeId, 3)
+      const normalized = (Array.isArray(videos) ? videos : []).map((video, index) => {
+        const parsed = parseExternalVideo(video)
+        return {
+          ...parsed,
+          node_id: nodeId,
+          video_index: index,
+          id: `node-${nodeId}-external-video-${index}`,
+          video_meta: videoMeta(parsed),
+        }
+      })
+      if (Number(learningPath.value?.path_id) !== pathId) return []
+      externalVideoResources.value = [
+        ...externalVideoResources.value.filter((video) => Number(video.node_id) !== nodeId),
+        ...normalized,
+      ]
+      externalVideoLoadedNodeIds.value = { ...externalVideoLoadedNodeIds.value, [nodeId]: true }
+      return normalized
+    } catch (error) {
+      if (Number(learningPath.value?.path_id) === pathId) {
+        externalVideoErrors.value = {
+          ...externalVideoErrors.value,
+          [nodeId]: externalVideoErrorMessage(error),
+        }
       }
-    })
-    externalVideoResources.value = [
-      ...externalVideoResources.value.filter((video) => Number(video.node_id) !== nodeId),
-      ...normalized,
-    ]
-    externalVideoLoadedNodeIds.value = { ...externalVideoLoadedNodeIds.value, [nodeId]: true }
-    return normalized
-  } catch {
-    // Recommendation failure must not prevent the chapter document from loading.
-    externalVideoLoadedNodeIds.value = { ...externalVideoLoadedNodeIds.value, [nodeId]: true }
-    return []
+      return []
+    } finally {
+      if (Number(learningPath.value?.path_id) === pathId) {
+        const loading = { ...externalVideoLoadingNodeIds.value }
+        delete loading[nodeId]
+        externalVideoLoadingNodeIds.value = loading
+      }
+    }
+  })()
+  externalVideoRequests.set(nodeId, request)
+  try {
+    return await request
   } finally {
-    const loading = { ...externalVideoLoadingNodeIds.value }
-    delete loading[nodeId]
-    externalVideoLoadingNodeIds.value = loading
+    if (externalVideoRequests.get(nodeId) === request) externalVideoRequests.delete(nodeId)
   }
+}
+
+function externalVideoErrorMessage(error) {
+  const status = Number(error?.response?.status)
+  if (status === 404) return '这一章节的拓展资源暂时不可用。'
+  if (status === 429) return '查找过于频繁，请稍后再试。'
+  return errorDetail(error, '拓展资源暂时无法加载，请稍后重试。')
+}
+
+async function showLearningVideos() {
+  if (!activeNode.value) return
+  const nodeId = Number(activeNode.value.id)
+  await reportReadDuration(true)
+  resourceView.value = 'external_video'
+  resourceDownloadError.value = ''
+  openedAt = 0
+  const videos = await loadNodeExternalVideos(activeNode.value)
+  if (resourceView.value !== 'external_video' || Number(activeNode.value?.id) !== nodeId) return
+  const selected = videos.find((video) => video.page_url === selectedExternalVideo.value?.page_url) || videos[0] || null
+  selectedExternalVideo.value = selected
+}
+
+function selectLearningVideo(video) {
+  if (!video) return
+  selectedExternalVideo.value = video
+  resourceView.value = 'external_video'
+}
+
+async function retryLearningVideos() {
+  if (!activeNode.value) return
+  const videos = await loadNodeExternalVideos(activeNode.value, true)
+  const selected = videos.find((video) => video.page_url === selectedExternalVideo.value?.page_url) || videos[0] || null
+  selectedExternalVideo.value = selected
+}
+
+function externalVideoSourceLabel(value, fallback = '外部拓展资源') {
+  try {
+    return new URL(value).hostname.replace(/^www\./, '') || fallback
+  } catch {
+    return fallback
+  }
+}
+
+function externalVideoEmbedUrl(value) {
+  const pageUrl = String(value || '')
+  const youtubeMatch = pageUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([\w-]{6,})/i)
+  if (youtubeMatch?.[1]) return `https://www.youtube-nocookie.com/embed/${youtubeMatch[1]}`
+  const bilibiliMatch = pageUrl.match(/\/(BV[\w]+)/i)
+  return bilibiliMatch?.[1] ? `https://player.bilibili.com/player.html?bvid=${bilibiliMatch[1]}&autoplay=0` : ''
+}
+
+function normalizeExternalVideoSearchResult(item, nodeId, index, videoIndex) {
+  const pageUrl = String(item?.url || item?.page_url || '').trim()
+  const title = String(item?.title || item?.name || '').trim()
+  if (!/^https?:\/\//i.test(pageUrl) || !title) return null
+  return {
+    ...item,
+    id: `manual-video-${nodeId}-${Date.now()}-${index}`,
+    node_id: nodeId,
+    resource_type: 'external_video',
+    video_index: videoIndex,
+    title,
+    topic: title,
+    page_url: pageUrl,
+    file_url: pageUrl,
+    url: pageUrl,
+    embed_url: externalVideoEmbedUrl(pageUrl),
+    cover_url: item.cover_url || item.thumbnail_url || item.thumbnail || '',
+    source_label: item.site_name || item.source_label || externalVideoSourceLabel(pageUrl),
+    description: String(item.snippet || item.summary || item.description || '').trim(),
+    is_manual_search: true,
+  }
+}
+
+async function searchExternalVideos() {
+  const query = externalVideoSearchTerm.value.trim()
+  const node = previewNode.value
+  if (query.length < 2 || !node || isExternalVideoSearchLoading.value) return
+  isExternalVideoSearchLoading.value = true
+  externalVideoSearchError.value = ''
+  try {
+    await loadNodeExternalVideos(node)
+    const results = await resourceApi.searchExternal(`${query} 视频教程`, 6)
+    const existingNodeVideos = externalVideoResources.value
+      .filter((video) => Number(video.node_id) === Number(node.id) && !video.is_manual_search)
+    const knownUrls = new Set(existingNodeVideos.map((video) => video.page_url || video.url).filter(Boolean))
+    const manualVideos = (Array.isArray(results) ? results : [])
+      .map((item, index) => normalizeExternalVideoSearchResult(item, node.id, index, existingNodeVideos.length + index))
+      .filter((video) => {
+        if (!video || knownUrls.has(video.page_url)) return false
+        knownUrls.add(video.page_url)
+        return true
+      })
+      .map((video, index) => ({ ...video, video_index: existingNodeVideos.length + index }))
+    externalVideoResources.value = [
+      ...externalVideoResources.value.filter((video) => !(video.is_manual_search && Number(video.node_id) === Number(node.id))),
+      ...manualVideos,
+    ]
+    externalVideoSearchNodeId.value = node.id
+    if (!manualVideos.length) externalVideoSearchError.value = '暂未找到匹配的视频，试试更具体的关键词。'
+  } catch (error) {
+    externalVideoSearchError.value = errorDetail(error, '视频搜索暂时不可用，请稍后重试。')
+  } finally {
+    isExternalVideoSearchLoading.value = false
+  }
+}
+
+function clearExternalVideoSearch() {
+  const nodeId = Number(externalVideoSearchNodeId.value)
+  externalVideoResources.value = externalVideoResources.value
+    .filter((video) => !video.is_manual_search || Number(video.node_id) !== nodeId)
+  externalVideoSearchNodeId.value = null
+  externalVideoSearchError.value = ''
 }
 
 function handleCoverError(event, resource) {
@@ -1214,6 +1368,10 @@ async function loadPage() {
     externalVideoResources.value = []
     externalVideoLoadedNodeIds.value = {}
     externalVideoLoadingNodeIds.value = {}
+    externalVideoErrors.value = {}
+    externalVideoSearchNodeId.value = null
+    externalVideoSearchError.value = ''
+    externalVideoRequests.clear()
     const relatedSubjects = Array.isArray(portrait?.traits?.learning_direction_subjects)
       ? portrait.traits.learning_direction_subjects
       : []
@@ -1286,6 +1444,10 @@ async function selectPath(pathId) {
     externalVideoResources.value = []
     externalVideoLoadedNodeIds.value = {}
     externalVideoLoadingNodeIds.value = {}
+    externalVideoErrors.value = {}
+    externalVideoSearchNodeId.value = null
+    externalVideoSearchError.value = ''
+    externalVideoRequests.clear()
     syncPathCatalog(selected)
     await router.replace({ query: { ...route.query, pathId: nextPathId, node: undefined, resource: undefined, resourceId: undefined, videoIndex: undefined } })
   } catch (error) {
@@ -1407,10 +1569,10 @@ async function loadActiveNode() {
         try {
           selectedExternalVideo.value = parseExternalVideo(await resourceApi.get(resourceId))
         } catch (error) {
-          videoError.value = errorDetail(error, '推荐视频暂时无法打开。')
+          videoError.value = errorDetail(error, '拓展资源暂时无法打开。')
         }
       }
-      if (!selectedExternalVideo.value && !videoError.value) videoError.value = '未找到这条推荐视频。'
+      if (!selectedExternalVideo.value && !videoError.value) videoError.value = '未找到这条拓展资源。'
       isResourceLoading.value = false
       isResourceGenerating.value = false
       return
@@ -1789,6 +1951,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   resourceController?.abort()
   invalidateVideoPoll()
+  externalVideoRequests.clear()
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   document.removeEventListener('keydown', handleGlobalKeydown)
   if (readingIntervalId) window.clearInterval(readingIntervalId)
@@ -1809,12 +1972,22 @@ onBeforeUnmount(() => {
 .foundation-library__start-hint > span { display: grid; min-width: 0; gap: 2px; }
 .foundation-library__start-hint strong { font-size: 12px; }
 .foundation-library__start-hint small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.foundation-library__video-search { display: flex; width: min(100%, 560px); align-items: center; gap: 8px; margin: 0 0 16px; }
+.foundation-library__video-search-input { display: flex; min-width: 0; flex: 1; align-items: center; gap: 8px; min-height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--muted); }
+.foundation-library__video-search-input:focus-within { border-color: var(--accent-deep); box-shadow: 0 0 0 3px rgba(182, 216, 55, .16); }
+.foundation-library__video-search-input input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 11px; }
+.foundation-library__video-search .button { min-height: 36px; gap: 6px; padding: 0 10px; font-size: 11px; white-space: nowrap; }
+.foundation-library__video-search .button:disabled { cursor: not-allowed; opacity: .55; }
+.foundation-library__video-search-clear { display: grid; width: 36px; height: 36px; flex: 0 0 auto; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--muted); }
+.foundation-library__video-search-clear:hover { border-color: #abc28f; background: #edf5e5; color: var(--accent-deep); }
+.foundation-library__video-search-clear:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
+.foundation-library__video-search-error { margin: -9px 0 14px; color: #a66442; font-size: 11px; }
 .foundation-library__header .path-progress { flex: 0 0 220px; }
 .foundation-library__state { display: grid; min-height: 270px; place-items: center; align-content: center; gap: 9px; padding: 32px; color: var(--accent-deep); text-align: center; }
 .foundation-library__state strong { color: var(--ink); font-size: 16px; }
 .foundation-library__state p { max-width: 420px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .foundation-library__state .button { display: inline-flex; align-items: center; gap: 7px; margin-top: 7px; }
-.foundation-library__body { display: grid; gap: 22px; }
+.foundation-library__body { display: grid; gap: 18px; }
 .resource-group { min-width: 0; }
 .resource-group__header { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 10px; }
 .resource-group__header > div { display: flex; align-items: center; gap: 12px; min-width: 0; }
@@ -1823,32 +1996,27 @@ onBeforeUnmount(() => {
 .resource-group__header .eyebrow { margin-bottom: 3px; }
 .resource-group__header h2 { margin: 0; overflow: hidden; color: var(--ink); font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
 .resource-group__status { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
-.resource-card-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
-.resource-card { position: relative; display: grid; min-width: 0; min-height: 276px; grid-template-rows: 132px minmax(0, 1fr); overflow: hidden; padding: 0; border: 1px solid #dfe6da; text-align: left; transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease; }
-.resource-card--primary { border-color: #b9ce99; box-shadow: 0 8px 20px rgba(63, 91, 49, .08); }
-.resource-card:hover { border-color: #abc28f; box-shadow: 0 10px 22px rgba(45, 70, 40, .1); transform: translateY(-2px); }
+.resource-card-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 16px; }
+.resource-card { position: relative; display: grid; width: 100%; min-width: 0; aspect-ratio: 4 / 5; grid-template-rows: 54% minmax(0, 1fr); overflow: hidden; padding: 0; border: 1px solid #dfe6da; text-align: left; transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease; }
+.resource-card--primary { border-color: #b9ce99; box-shadow: 0 5px 14px rgba(63, 91, 49, .07); }
+.resource-card:hover { border-color: #abc28f; box-shadow: 0 8px 18px rgba(45, 70, 40, .1); transform: translateY(-2px); }
 .resource-card:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
 .resource-card__cover { position: relative; display: block; min-width: 0; overflow: hidden; background: #183d34; }
 .resource-card__cover img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .35s ease; }
 .resource-card:hover .resource-card__cover img { transform: scale(1.04); }
-.resource-card__cover-overlay { position: absolute; inset: 0; display: flex; align-items: flex-end; justify-content: space-between; padding: 13px 14px; background: rgba(15, 31, 25, .55); color: #fff; }
-.resource-card__type { overflow: hidden; max-width: 78%; font-size: 10px; font-weight: 800; letter-spacing: .1em; text-overflow: ellipsis; white-space: nowrap; }
-.resource-card__content { display: grid; min-width: 0; align-content: start; gap: 7px; padding: 15px 42px 15px 16px; }
+.resource-card__cover-overlay { position: absolute; inset: 0; display: flex; align-items: flex-end; justify-content: space-between; padding: 8px 10px; background: linear-gradient(180deg, transparent 42%, rgba(15, 31, 25, .48)); color: #fff; }
+.resource-card__type { overflow: hidden; max-width: 78%; font-size: 9px; font-weight: 800; letter-spacing: .08em; text-overflow: ellipsis; white-space: nowrap; }
+.resource-card__content { display: grid; min-width: 0; align-content: start; gap: 4px; padding: 10px 32px 10px 11px; }
 .resource-card__guide { display: inline-flex; align-items: center; gap: 5px; color: var(--accent-deep); font-size: 10px; font-weight: 800; }
 .resource-card__guide svg { flex: 0 0 auto; }
-.resource-card__content strong { overflow: hidden; color: var(--ink); font-size: 13px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.resource-card__content strong { overflow: hidden; color: var(--ink); font-size: 12px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 .resource-card__content small { color: var(--muted); font-size: 10px; }
-.resource-card__description { display: -webkit-box; overflow: hidden; color: var(--muted); font-size: 11px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.resource-card__arrow { position: absolute; right: 14px; bottom: 16px; color: #9baa96; transition: color .18s ease, transform .18s ease; }
+.resource-card__description { display: -webkit-box; overflow: hidden; color: var(--muted); font-size: 10px; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 1; }
+.resource-card__arrow { position: absolute; right: 10px; bottom: 11px; color: #9baa96; transition: color .18s ease, transform .18s ease; }
 .resource-card:hover .resource-card__arrow { color: var(--accent-deep); transform: translateX(2px); }
 .resource-group__empty { display: flex; width: 100%; min-height: 54px; align-items: center; gap: 8px; padding: 0 14px; border: 1px dashed #cbd8c5; color: var(--muted); font-size: 12px; text-align: left; }
 .resource-group__empty:hover { border-color: #9dbb8d; background: #fbfdf9; color: var(--accent-deep); }
 .resource-group__empty span { flex: 1; }
-.external-video-fallback { display: grid; min-height: 360px; place-items: center; align-content: center; gap: 10px; padding: 40px; color: #a45b45; text-align: center; }
-.external-video-fallback__cover { width: min(100%, 620px); aspect-ratio: 16 / 9; margin-bottom: 4px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); object-fit: cover; box-shadow: 0 10px 24px rgb(32 40 36 / 8%); }
-.external-video-fallback strong { color: var(--ink); font-size: 17px; }
-.external-video-fallback p { max-width: 480px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
-.external-video-fallback .button { display: inline-flex; align-items: center; gap: 7px; margin-top: 5px; }
 .lesson-context { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 22px; margin-bottom: 12px; padding: 0 0 16px; border-bottom: 1px solid var(--line); }
 .lesson-context__copy { min-width: 0; }
 .lesson-context__actions { display: flex; min-width: 0; flex: 0 0 auto; align-items: flex-end; gap: 14px; }
@@ -1875,7 +2043,7 @@ onBeforeUnmount(() => {
 .workspace-rail button > small { position: absolute; top: 4px; right: 4px; display: grid; min-width: 14px; height: 14px; place-items: center; padding: 0 3px; border-radius: 7px; background: var(--soft); color: var(--accent-deep); font-size: 8px; font-weight: 800; }
 .workspace-rail__divider { width: 28px; height: 1px; margin: 3px auto; background: var(--line); }
 .lesson-main { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto; gap: 12px; overflow: hidden; }
-.lesson-main > .lesson-document, .lesson-main > .document-loading, .lesson-main > .ppt-editor-frame, .lesson-main > .mindmap-preview, .lesson-main > .video-lesson-frame, .lesson-main > .chapter-check { min-height: 0; height: 100%; overflow: auto; }
+.lesson-main > .lesson-document, .lesson-main > .document-loading, .lesson-main > .ppt-editor-frame, .lesson-main > .mindmap-preview, .lesson-main > .video-lesson-frame, .lesson-main > .learning-video-panel, .lesson-main > .chapter-check { min-height: 0; height: 100%; overflow: auto; }
 .learning-layout :deep(.learning-assistant) { position: static; min-height: 0; height: 100%; max-height: none; }
 .resource-toolbar { display: flex; min-height: 34px; align-items: center; gap: 10px; }
 .resource-tabs { display: flex; align-items: center; gap: 4px; }
@@ -1924,10 +2092,13 @@ onBeforeUnmount(() => {
 .page-state--error, .document-loading--error { color: #a66442; }
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (max-width: 1120px) {
-  .resource-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 1320px) {
+  .resource-card-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .learning-layout { grid-template-columns: 52px minmax(0, 1fr); }
   .learning-layout > :last-child { display: none; }
+}
+@media (max-width: 960px) {
+  .resource-card-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 860px) {
   .navigation-drawer-backdrop { left: 0; }
@@ -1938,9 +2109,10 @@ onBeforeUnmount(() => {
   .foundation-library__layout { display: grid; grid-template-columns: 1fr; gap: 18px; }
   .foundation-library__header { align-items: stretch; flex-direction: column; gap: 15px; margin-bottom: 17px; padding-bottom: 14px; }
   .foundation-library__header .path-progress { width: 100%; min-width: 0; }
-  .resource-card-grid { grid-template-columns: 1fr; }
+  .foundation-library__video-search { width: 100%; }
+  .resource-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .resource-group__header h2 { max-width: 230px; }
-  .resource-card { min-height: 252px; grid-template-rows: 120px minmax(0, 1fr); }
+  .resource-card { grid-template-rows: 54% minmax(0, 1fr); }
   .lesson-context { grid-template-columns: 1fr; gap: 16px; }
   .lesson-context__actions { width: 100%; align-items: stretch; gap: 9px; }
   .return-resource-button { align-self: flex-start; }

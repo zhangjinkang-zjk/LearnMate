@@ -17,7 +17,7 @@ export const fundamentalsApi = {
       const params = Number.isInteger(Number(pathId)) && Number(pathId) > 0
         ? { path_id: Number(pathId) }
         : undefined
-      return unwrap(await httpClient.get('/learning_path/current', { params }))
+      return unwrap(await httpClient.get('/learning_path/current', { params, timeout: 30000 }))
     } catch (error) {
       if (error.response?.status === 404) return null
       throw error

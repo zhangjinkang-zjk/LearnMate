@@ -6,7 +6,7 @@ import { clearAuthSession } from '@/shared/auth/session'
 const apiBaseUrl = String(import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '')
 
 const httpClient = axios.create({
-  baseURL: "http://localhost:2221",
+
   timeout: 15000,
   headers: { 'Content-Type': 'application/json' },
 })
