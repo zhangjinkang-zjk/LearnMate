@@ -68,7 +68,15 @@ class ClassroomChatRequest(BaseModel):
         gt=0,
         description="当前章节绑定的文档资源 ID；不传时兼容旧课堂上下文",
     )
-    segment: dict = Field(default_factory=dict, description="前端当前幕快照（title/script/board_items/points/example/question）")
+    segment: dict = Field(
+        default_factory=dict,
+        description=(
+            "前端当前幕快照（title/script/board_items/points/example/question）。"
+            "学习巩固另带 workspace：学生本机工作区的只读快照"
+            "（available/tree/files/active_path/omitted_count…），由前端在每次发送时生成；"
+            "服务端只做长度受限的渲染，不做校验 —— 它是自由 dict。"
+        ),
+    )
     scenario: str = Field(default="free", description="open | feynman | practice | practice_opening | practice_summary | free")
     text: str = Field(default="", description="学生的话：选择结果 / 费曼反讲文本 / 自由提问")
     practice_session_id: str | None = Field(

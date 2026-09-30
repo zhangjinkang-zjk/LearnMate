@@ -57,9 +57,126 @@ export function isReadablePath(path) {
   return TEXT_EXTENSIONS.has(extension)
 }
 
-function makeEntry(path, { handle = null, file = null, text = '' } = {}) {
+// 条目有两种：文件，和目录。
+// 目录原本不占条目 —— 它只是路径里的层级，靠 `buildTree` 从 `/` 推出来。这套表示法
+// 表达不了**空目录**：新建一个空的、或者打开的本机项目里本来就有空目录，都会直接消失。
+// 所以显式新建的目录会带 kind，其余从路径推出来的目录仍然不带（它们一定有子文件）。
+export const ENTRY_KIND = { FILE: 'file', DIRECTORY: 'directory' }
+
+function makeEntry(path, { kind = ENTRY_KIND.FILE, handle = null, file = null, text = '' } = {}) {
   const name = String(path).split('/').pop() || path
-  return { path, name, handle, file, text, dirty: false }
+  return { path, name, kind, handle, file, text, dirty: false }
+}
+
+export function isDirectoryEntry(entry) {
+  return entry?.kind === ENTRY_KIND.DIRECTORY
+}
+
+// 把 "tools/search.py" 拆成 [`tools`] 和 `search.py`。空段（连续斜杠、首尾斜杠）丢掉。
+export function splitEntryPath(path) {
+  const segments = String(path || '').split('/').map((segment) => segment.trim()).filter(Boolean)
+  const name = segments.pop() || ''
+  return { directories: segments, name }
+}
+
+// 从底下的路径集合里挑一个没被占用的名字（新建目录时用）。
+export function uniqueEntryPath(takenPaths, base) {
+  const taken = new Set(takenPaths)
+  if (!taken.has(base)) return base
+  let index = 2
+  while (taken.has(`${base}-${index}`)) index += 1
+  return `${base}-${index}`
+}
+
+// ── 在磁盘上新建 ─────────────────────────────────────────────────
+// 中间目录会按需建出来（`mkdir -p` 的语义），因为输入 `tools/search.py` 时 `tools`
+// 往往还不存在。没有 rootHandle（没打开文件夹、或降级模式）时返回 null —— 调用方
+// 据此决定这条只活在本次会话里。
+
+async function resolveDirectory(rootHandle, directories) {
+  let cursor = rootHandle
+  for (const segment of directories) cursor = await cursor.getDirectoryHandle(segment, { create: true })
+  return cursor
+}
+
+export async function createDirectoryOnDisk(rootHandle, directories) {
+  if (!rootHandle) return null
+  return resolveDirectory(rootHandle, directories)
+}
+
+export async function createFileOnDisk(rootHandle, directories, name, text = '') {
+  if (!rootHandle) return null
+  const directory = await resolveDirectory(rootHandle, directories)
+  const handle = await directory.getFileHandle(name, { create: true })
+  const writable = await handle.createWritable()
+  await writable.write(text)
+  await writable.close()
+  return handle
+}
+
+// 找**已经存在**的目录，不做创建。路径不存在时返回 null —— 调用方据此判断
+// "这个名字在磁盘上没有"，而不是稀里糊涂建一串空目录出来。
+async function findDirectory(rootHandle, directories) {
+  let cursor = rootHandle
+  for (const segment of directories) {
+    try {
+      cursor = await cursor.getDirectoryHandle(segment)
+    } catch {
+      return null
+    }
+  }
+  return cursor
+}
+
+async function copyDirectory(source, target) {
+  for await (const [name, handle] of source.entries()) {
+    if (handle.kind === 'directory') {
+      await copyDirectory(handle, await target.getDirectoryHandle(name, { create: true }))
+      continue
+    }
+    const file = await handle.getFile()
+    const writable = await (await target.getFileHandle(name, { create: true })).createWritable()
+    await writable.write(file)
+    await writable.close()
+  }
+}
+
+// 改名 / 移动一个条目。`from`/`to` 都是相对根的工作区路径。
+//
+// 文件走 `FileSystemFileHandle.move()`：实机确认它存在，而且是原地原子改名。
+// **目录没有这个方法**（`FileSystemDirectoryHandle.move` 实测是 undefined），
+// 只能整棵拷到新位置、全部成功之后再删旧的 —— 中途失败时旧目录原封不动，
+// 代价是留一份拷了一半的新目录，报错里会说清楚。
+export async function moveEntryOnDisk(rootHandle, fromPath, toPath) {
+  if (!rootHandle) return false
+  const from = splitEntryPath(fromPath)
+  const to = splitEntryPath(toPath)
+  const fromDir = await findDirectory(rootHandle, from.directories)
+  if (!fromDir) return false
+  const toDir = await resolveDirectory(rootHandle, to.directories)
+
+  const sourceFile = await fromDir.getFileHandle(from.name).catch(() => null)
+  if (sourceFile) {
+    await sourceFile.move(toDir, to.name)
+    return true
+  }
+  const sourceDir = await fromDir.getDirectoryHandle(from.name).catch(() => null)
+  if (!sourceDir) return false
+  const target = await toDir.getDirectoryHandle(to.name, { create: true })
+  await copyDirectory(sourceDir, target)
+  await fromDir.removeEntry(from.name, { recursive: true })
+  return true
+}
+
+export async function deleteEntryOnDisk(rootHandle, path) {
+  if (!rootHandle) return false
+  const { directories, name } = splitEntryPath(path)
+  const parent = await findDirectory(rootHandle, directories)
+  if (!parent) return false
+  // recursive 对文件也安全：没有子项时它就是个普通删除。省得先判断类型再分支 ——
+  // 多一个分支就多一条"判断错了会怎样"的路。
+  await parent.removeEntry(name, { recursive: true })
+  return true
 }
 
 // ── FSA 分支：能写回磁盘 ─────────────────────────────────────────
@@ -71,7 +188,8 @@ export async function openDirectoryFromDisk() {
   // 路径按文件夹**内部**的相对路径存（不带根目录名），这样 FSA 和降级分支的
   // 文件树形状一致，切换来源时树不会整体多/少一层。
   await collectDirectory(root, '', entries, budget)
-  return { mode: WORKSPACE_MODE.FSA, rootName: root.name, entries, truncated: budget.truncated }
+  // 把根句柄一并带出去：新建目录/文件时要靠它落盘（见 createDirectoryOnDisk）。
+  return { mode: WORKSPACE_MODE.FSA, rootName: root.name, rootHandle: root, entries, truncated: budget.truncated }
 }
 
 export async function openFilesFromDisk() {
@@ -155,6 +273,10 @@ export function downloadEntry(entry, text) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
-export function createBlankEntry(path = 'untitled.py') {
-  return makeEntry(path, { text: '' })
+export function createBlankEntry(path = 'untitled.py', extra = {}) {
+  return makeEntry(path, { text: '', ...extra })
+}
+
+export function createBlankDirectory(path, extra = {}) {
+  return makeEntry(path, { kind: ENTRY_KIND.DIRECTORY, ...extra })
 }

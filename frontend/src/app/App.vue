@@ -11,6 +11,6 @@
 <script setup>
 import AppShell from '@/layouts/AppShell.vue'
 import AgentWorkflowDrawer from '@/features/agent/AgentWorkflowDrawer.vue'
-import RobertAssistant from '@/features/xiaozhi/RobertAssistant.vue'
+import RobertAssistant from '@/features/assistant/RobertAssistant.vue'
 import { workflowState } from '@/entities/agent/agentWorkflowState'
 </script>

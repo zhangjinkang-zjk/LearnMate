@@ -8,16 +8,13 @@
         <button class="button button--quiet" type="button" :disabled="busy" @click="openFiles">
           <FilePlus2 :size="14" />打开文件
         </button>
-        <button class="button button--quiet" type="button" :disabled="busy" @click="newFile">
-          <FileCode2 :size="14" />新建
-        </button>
       </div>
       <div class="workspace__group">
         <span v-if="rootName" class="workspace__root" :title="rootName">{{ rootName }}</span>
         <button class="button button--quiet" type="button" :disabled="!activeEntry || busy" @click="saveActive">
           <Download v-if="!canWriteBack" :size="14" /><Save v-else :size="14" />{{ saveLabel }}
         </button>
-        <button v-if="entries.length" class="button button--quiet" type="button" :disabled="busy" @click="toggleExplorer">
+        <button class="button button--quiet" type="button" :disabled="busy" @click="toggleExplorer">
           <PanelLeft :size="14" />{{ explorerOpen ? '收起文件' : '展开文件' }}
         </button>
       </div>
@@ -28,7 +25,15 @@
 
     <div class="workspace__body" :class="{ 'is-explorer-hidden': !showExplorer }">
       <aside v-if="showExplorer" class="workspace__explorer">
-        <FileExplorer :entries="entries" :active-path="activePath" @select="selectPath" />
+        <FileExplorer
+          :entries="entries"
+          :active-path="activePath"
+          @select="selectPath"
+          @create="createEntry"
+          @rename="renameEntry"
+          @delete="deleteEntry"
+          @move="moveEntry"
+        />
       </aside>
 
       <div class="workspace__main">
@@ -76,18 +81,29 @@ import CodeEditor from './CodeEditor.vue'
 import FileExplorer from './FileExplorer.vue'
 import {
   WORKSPACE_MODE,
+  createBlankDirectory,
   createBlankEntry,
+  createDirectoryOnDisk,
+  createFileOnDisk,
+  deleteEntryOnDisk,
   detectWorkspaceMode,
   downloadEntry,
   importFromFileList,
+  isDirectoryEntry,
   isReadablePath,
+  moveEntryOnDisk,
   openDirectoryFromDisk,
   openFilesFromDisk,
+  splitEntryPath,
   writeEntryToDisk,
 } from './localWorkspace'
+import { buildWorkspaceSnapshot } from './workspaceSnapshot'
 
 const mode = ref('')
 const rootName = ref('')
+// 打开过的本机文件夹句柄。新建目录/文件要靠它落盘 —— 没有它（没打开文件夹、
+// 或降级模式）新建的东西只活在本次会话里。
+const rootHandle = ref(null)
 const entries = ref([])
 const openPaths = ref([])
 const activePath = ref('')
@@ -105,12 +121,17 @@ let noticeTimer = 0
 //   - isFsa   ：**当前这个工作区**是怎么来的 → 决定保存是写回磁盘还是下载
 const canUseFsa = computed(() => detectWorkspaceMode() === WORKSPACE_MODE.FSA)
 const isFsa = computed(() => mode.value === WORKSPACE_MODE.FSA)
-const activeEntry = computed(() => entries.value.find((entry) => entry.path === activePath.value) || null)
+// 目录不是能打开的东西 —— 少了这个过滤，点目录会把它塞进标签页并当成空文件渲染。
+const activeEntry = computed(() => (
+  entries.value.find((entry) => entry.path === activePath.value && !isDirectoryEntry(entry)) || null
+))
 // 只有"从本机文件夹里打开、且拿得到句柄"的文件才谈得上写回磁盘；
 // 拖进来的、新建的、降级模式打开的，一律走下载。
 const canWriteBack = computed(() => isFsa.value && Boolean(activeEntry.value?.handle))
 const folderLabel = computed(() => (canUseFsa.value ? '打开文件夹' : '选择文件夹'))
-const showExplorer = computed(() => explorerOpen.value && entries.value.length > 0)
+// 常驻（可收起）。以前是 entries 为空就整块藏起来，那样空工作区连新建入口都没有 ——
+// 而新建入口现在住在资源管理器自己的标题栏里。
+const showExplorer = computed(() => explorerOpen.value)
 const saveLabel = computed(() => (canWriteBack.value ? '保存到本机' : '下载副本'))
 const tabs = computed(() => openPaths.value
   .map((path) => entries.value.find((entry) => entry.path === path))
@@ -129,8 +150,11 @@ function setNotice(text) {
 function applyWorkspace(result) {
   mode.value = result.mode
   rootName.value = result.rootName || ''
+  // 只有真正打开本机文件夹才拿得到句柄；打开单个文件、拖拽导入都没有根，
+  // 此时新建的东西只活在会话里（旧的根句柄必须清掉，否则会往上一次的目录里写）
+  rootHandle.value = result.rootHandle || null
   entries.value = result.entries
-  const first = result.entries[0]?.path || ''
+  const first = result.entries.find((entry) => !isDirectoryEntry(entry))?.path || ''
   openPaths.value = first ? [first] : []
   activePath.value = first
   errorMessage.value = ''
@@ -201,8 +225,83 @@ async function importFiles(fileList) {
 }
 
 function selectPath(path) {
+  if (entries.value.some((entry) => entry.path === path && isDirectoryEntry(entry))) return
   if (!openPaths.value.includes(path)) openPaths.value = [...openPaths.value, path]
   activePath.value = path
+}
+
+// ── 重命名 / 删除 / 移动 ─────────────────────────────────────────
+// 只有两件事要做：改磁盘，和改内存里的路径。磁盘那步靠 rootHandle 判断 ——
+// 没有它（没打开文件夹、或降级模式）就说明这些条目只活在这一屏里，动内存就够了。
+
+function parentPathOf(path) {
+  const cut = String(path).lastIndexOf('/')
+  return cut === -1 ? '' : path.slice(0, cut)
+}
+
+function isUnder(path, prefix) {
+  return path === prefix || path.startsWith(`${prefix}/`)
+}
+
+function relocatePath(path, from, to) {
+  if (path === from) return to
+  return path.startsWith(`${from}/`) ? to + path.slice(from.length) : path
+}
+
+// 一棵子树搬家：条目、已打开的标签页、当前选中项，三处都得跟着改，漏一个就会出现
+// "标签页还在，但编辑器找不到这个文件了"。
+function rewritePaths(from, to) {
+  entries.value = entries.value.map((entry) => {
+    const next = relocatePath(entry.path, from, to)
+    return next === entry.path ? entry : { ...entry, path: next, name: next.split('/').pop() || next }
+  })
+  openPaths.value = openPaths.value.map((path) => relocatePath(path, from, to))
+  activePath.value = relocatePath(activePath.value, from, to)
+}
+
+async function relocate(from, to, verb) {
+  if (from === to) return
+  if (isUnder(to, from)) { setNotice(`不能把「${from}」放进它自己里面`); return }
+  if (entries.value.some((entry) => entry.path === to)) { setNotice(`已经有 ${to} 了`); return }
+  busy.value = true
+  try {
+    // 磁盘上找不到就照常改内存 —— 可能是只在会话里存在的条目
+    if (rootHandle.value) await moveEntryOnDisk(rootHandle.value, from, to)
+    rewritePaths(from, to)
+    setNotice(rootHandle.value ? `已${verb}为 ${to}` : `已${verb}为 ${to}。当前没有打开本机文件夹，磁盘上的东西没动。`)
+  } catch (error) {
+    setNotice(`${verb}失败：${error?.message || error}`)
+  } finally {
+    busy.value = false
+  }
+}
+
+function renameEntry({ path, name }) {
+  const parent = parentPathOf(path)
+  return relocate(path, parent ? `${parent}/${name}` : name, '改名')
+}
+
+function moveEntry({ from, to }) {
+  const name = String(from).split('/').pop()
+  return relocate(from, to ? `${to}/${name}` : name, '移动')
+}
+
+async function deleteEntry({ path, isDirectory }) {
+  const label = isDirectory ? '文件夹' : '文件'
+  busy.value = true
+  try {
+    if (rootHandle.value) await deleteEntryOnDisk(rootHandle.value, path)
+    entries.value = entries.value.filter((entry) => !isUnder(entry.path, path))
+    openPaths.value = openPaths.value.filter((item) => !isUnder(item, path))
+    if (isUnder(activePath.value, path)) activePath.value = openPaths.value[openPaths.value.length - 1] || ''
+    setNotice(rootHandle.value
+      ? `已从本机删除${label} ${path}`
+      : `已移除${label} ${path}（它只在本次会话里，磁盘上没有东西可删）`)
+  } catch (error) {
+    setNotice(`删除失败：${error?.message || error}`)
+  } finally {
+    busy.value = false
+  }
 }
 
 function closeTab(path) {
@@ -211,14 +310,59 @@ function closeTab(path) {
   if (activePath.value === path) activePath.value = next[next.length - 1] || ''
 }
 
-function newFile() {
-  const taken = new Set(entries.value.map((entry) => entry.path))
-  let name = 'untitled.py'
-  let index = 2
-  while (taken.has(name)) { name = `untitled-${index}.py`; index += 1 }
-  entries.value = [...entries.value, createBlankEntry(name)]
-  selectPath(name)
+// 输入里的中间目录也补成条目，否则资源管理器里看不到它们 —— 空目录没有别的依据
+// 证明自己存在（见 FileExplorer.buildTree）。
+function addMissingDirectories(directories) {
+  const missing = []
+  directories.forEach((_, index) => {
+    const path = directories.slice(0, index + 1).join('/')
+    if (entries.value.some((entry) => entry.path === path)) return
+    if (missing.some((entry) => entry.path === path)) return
+    missing.push(createBlankDirectory(path))
+  })
+  if (missing.length) entries.value = [...entries.value, ...missing]
+}
+
+// `parent` 是资源管理器算好的落点（选中的目录，或选中文件所在的目录）。
+// 名字里仍允许带 `/`：`tools/search.py` 会在 parent 底下再补出 tools。
+async function createEntry({ kind, name, parent }) {
+  const { directories, name: leaf } = splitEntryPath(name)
+  if (!leaf) return
+  if ([...directories, leaf].some((segment) => segment === '.' || segment === '..')) {
+    setNotice('名字里不能出现 . 或 ..')
+    return
+  }
+  const segments = parent ? [parent, ...directories] : directories
+  const path = [...segments, leaf].join('/')
+  if (entries.value.some((entry) => entry.path === path)) {
+    setNotice(`已经有 ${path} 了`)
+    return
+  }
+  // 没打开任何来源时也要能新建，否则"先建个目录再放文件"这条路走不通
   if (!mode.value) mode.value = detectWorkspaceMode()
+  busy.value = true
+  try {
+    addMissingDirectories(segments)
+    if (kind === 'directory') {
+      const handle = await createDirectoryOnDisk(rootHandle.value, [...segments, leaf])
+      entries.value = [...entries.value, createBlankDirectory(path, handle ? { handle } : {})]
+      // 落没落盘要说清楚：这两者的后果差很远，不能装作一样（见 localWorkspace 开头）
+      setNotice(handle
+        ? `已在本机新建文件夹 ${path}`
+        : `已新建文件夹 ${path}。当前没有打开本机文件夹，它只存在于这次会话里。`)
+    } else {
+      const handle = await createFileOnDisk(rootHandle.value, segments, leaf)
+      entries.value = [...entries.value, createBlankEntry(path, handle ? { handle } : {})]
+      selectPath(path)
+      setNotice(handle
+        ? `已在本机新建 ${path}`
+        : `已新建 ${path}。当前没有打开本机文件夹，保存时会下载一份副本。`)
+    }
+  } catch (error) {
+    setNotice(`新建失败：${error?.message || error}`)
+  } finally {
+    busy.value = false
+  }
 }
 
 function onEditorInput(value) {
@@ -251,6 +395,22 @@ async function saveActive() {
 
 function toggleExplorer() { explorerOpen.value = !explorerOpen.value }
 
+// 给对话教练的工作区快照。**故意做成"发送时拉取"，不是响应式数据**：正文随每次击键
+// 变（见 onEditorInput），做成响应式 prop 会让对话组件每敲一个字符就重渲染一次、
+// 并且每敲一次都白建一遍快照；而快照只在"按下发送那一刻"有意义。
+// 所以这里只暴露一个纯读函数，由页面持有、对话在拼请求时才调它。
+//   别"顺手"把它改成响应式数据 —— 那会把这条热路径的开销原样带回来。
+function readSnapshot() {
+  return buildWorkspaceSnapshot({
+    entries: entries.value,
+    openPaths: openPaths.value,
+    activePath: activePath.value,
+    rootName: rootName.value,
+  })
+}
+
+defineExpose({ readSnapshot })
+
 onBeforeUnmount(() => window.clearTimeout(noticeTimer))
 
 // 离开页面前提醒未保存的修改 —— 本机文件被改了一半就切走，用户不会知道白改了
@@ -266,12 +426,12 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnOnLeave))
 /* 竖排用 flex 不用 grid-template-rows: auto auto minmax(0,1fr)：那三行是**按位置**给的，
    而提示条（.workspace__notice）是可选的 —— 它不在时，主体就落到第二行 auto 上，
    第三行留空，编辑器被压成一行高（实测 16px）。flex 只认"谁是剩下的那个"，不受影响。 */
-.workspace { display: flex; min-width: 0; min-height: 0; height: 100%; flex-direction: column; overflow: hidden; border: 1px solid rgba(63, 91, 49, .28); border-radius: 14px; background: var(--paper); box-shadow: 0 8px 24px rgba(45, 40, 92, .07); }
+.workspace { position: relative; display: flex; min-width: 0; min-height: 0; height: 100%; flex-direction: column; overflow: hidden; border: 1px solid rgba(63, 91, 49, .28); border-radius: 14px; background: var(--paper); box-shadow: 0 8px 24px rgba(45, 40, 92, .07); }
 .workspace__bar { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--line); background: #fbfcfa; }
 .workspace__group { display: flex; align-items: center; gap: 7px; }
 .workspace__bar .button { gap: 6px; padding: 6px 11px; font-size: 12px; }
 .workspace__root { max-width: 190px; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.workspace__notice { flex: 0 0 auto; margin: 0; padding: 7px 14px; border-bottom: 1px solid var(--line); background: #f4f8ed; color: var(--accent-deep); font-size: 11px; line-height: 1.6; }
+.workspace__notice { position: absolute; z-index: 8; right: 12px; bottom: 12px; left: 12px; margin: 0; padding: 7px 11px; border: 1px solid #d7e3c9; border-radius: 8px; background: #f4f8ed; box-shadow: 0 10px 24px rgba(31, 49, 40, .12); color: var(--accent-deep); font-size: 11px; line-height: 1.6; pointer-events: none; }
 .workspace__notice--error { background: #fdf4f0; color: #954e38; }
 .workspace__body { display: grid; min-height: 0; flex: 1 1 auto; grid-template-columns: 210px minmax(0, 1fr); }
 .workspace__body.is-explorer-hidden { grid-template-columns: minmax(0, 1fr); }

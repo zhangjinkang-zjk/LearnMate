@@ -760,7 +760,15 @@ class AdvancedPracticeService:
                 if not session:
                     raise
 
-        if session.status == "paused":
+        # 打开任务即恢复会话：`paused` 和 `completed` 都算。
+        #
+        # `completed` 以前是"已提交、判过分"，不复活是为了别让改过的对话和定稿的分数对不上。
+        # 现在前端已经没有提交入口了（阶段机和判分整个删掉，只留会话账本），
+        # 于是 `completed` 变成一个**进去不、也出不来**的死状态：页面照样把旧对话读出来显示，
+        # 可之后每一次发言都被 `_practice_session_blocked` 顶回来"会话不存在、无权访问或已经完成"，
+        # 而界面上再没有任何按钮能解除它。老会话（提交功能还在时留下的那批）全是这样。
+        # 判分没了，这个保护就没有要保护的东西了，恢复它。
+        if session.status != "active":
             session.status = "active"
             session.ended_at = None
             await session.save(update_fields=["status", "ended_at", "updated_at"])
