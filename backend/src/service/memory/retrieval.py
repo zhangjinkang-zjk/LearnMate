@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 import os
@@ -26,10 +25,19 @@ from backend.src.models.memory_kv_model import MemoryKV
 from backend.src.models.memory_message_model import MemoryMessage
 from backend.src.models.memory_summary_model import MemorySummary
 from backend.src.service.memory.embedding import encode
+from backend.src.utils.embeddings import codec
 
 logger = logging.getLogger(__name__)
 
 MEMORY_CONTEXT_MAX_CHARS = int(os.getenv("MEMORY_CONTEXT_MAX_CHARS", "900"))
+# 记忆相似度下限。**0.30 是针对上一代嵌入模型（bge-small-zh-v1.5）定的，
+# 换成 BAAI/bge-m3 之后它已经低于"不相关"的取值下限，实际上等于没过滤。**
+# 实测（知识库语料，与记忆不是同一分布，只能看量级）：
+#     bge-m3 的相关文本   0.470 ~ 0.736（中位 0.595）
+#     bge-m3 的不相关文本 0.427 ~ 0.608（中位 0.518）
+# 两个分布重叠严重，本来也不存在能干净分开的绝对值。当前库里只有 1 行记忆，
+# **没有数据可以离线重标**，所以数值保持原样，只把失效这件事写在这里。
+# 真要收紧，应当积累一段真实使用数据后按分布重定，而不是随手改个数。
 MEMORY_SIM_THRESHOLD = float(os.getenv("MEMORY_SIM_THRESHOLD", "0.30"))
 SAME_GROUP_BOOST = float(os.getenv("MEMORY_SAME_GROUP_BOOST", "1.35"))
 CONTEXT_TTL_SECONDS = int(os.getenv("MEMORY_CONTEXT_TTL_SECONDS", "5"))
@@ -76,14 +84,40 @@ def _score(sim: float, same_group: bool, updated_at, importance: float) -> float
     return score
 
 
+_last_mismatch_signature = None
+
+
+def _report_mismatch(shape) -> None:
+    """向量与当前嵌入模型不匹配时报错一次。
+
+    原来这里是 `return 0.0` 静默丢弃 —— 表现成"记忆检索突然什么都命中不了"，
+    完全看不出是换了模型没重算向量。同一批不匹配只报一次，避免每次对话都刷日志。
+    """
+    global _last_mismatch_signature
+    from backend.src.utils.embeddings import configured_model_id
+
+    model_id = configured_model_id()
+    signature = (model_id, str(shape))
+    if signature == _last_mismatch_signature:
+        return
+    _last_mismatch_signature = signature
+    logger.error(
+        "记忆向量维度 %s 与当前嵌入模型 %s 不符，该条已被跳过（相似度记 0）。"
+        "通常是换过模型却没重算向量 —— 请运行 "
+        "`python backend/scripts/reembed_all.py --apply`。",
+        shape, model_id,
+    )
+
+
 def _cosine(qvec, emb_str: str) -> float:
-    try:
-        vec = np.array(json.loads(emb_str), dtype=np.float32)
-        if vec.shape != qvec.shape:
-            return 0.0
-        return float(np.dot(qvec, vec))
-    except Exception:
+    vec = codec.unpack(emb_str)
+    if vec is None:
+        # 空向量（还没算过）或坏数据 —— 跳过，不算模型不匹配
         return 0.0
+    if vec.shape != qvec.shape:
+        _report_mismatch(vec.shape)
+        return 0.0
+    return float(np.dot(qvec, vec))
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +128,7 @@ async def retrieve_episodes(user_id: int, chat_group_id: int, query: str, top_k:
     """跨组情景记忆检索：向量相似度 + 同组加权 + 时间衰减 + importance。"""
     if not query or not query.strip():
         return []
-    # 该用户没有任何情景记忆时，直接短路，避免无谓加载 BGE 模型（首次加载很慢）
+    # 该用户没有任何情景记忆时，直接短路，避免无谓加载嵌入模型（首次加载很慢）
     if await MemoryEpisode.filter(user_id=user_id, embedding__not_isnull=True).exists() is False:
         return []
     qvec = await encode(query.strip())
@@ -121,7 +155,7 @@ async def retrieve_messages(user_id: int, chat_group_id: int, query: str, top_k:
     """原文语义检索：命中'你上次说过…'。"""
     if not query or not query.strip():
         return []
-    # 没有原文向量时直接短路，避免首次加载 BGE
+    # 没有原文向量时直接短路，避免首次加载嵌入模型
     if await MemoryMessage.filter(user_id=user_id, embedding__not_isnull=True).exists() is False:
         return []
     qvec = await encode(query.strip())
@@ -173,7 +207,7 @@ async def build_memory_context(user_id: int, chat_group_id: int, user_query: str
     if cached and now - cached[0] < CONTEXT_TTL_SECONDS:
         return cached[1]
 
-    # 总短路：该用户一条记忆都没有（新用户），直接返回空，不碰 BGE / 不查各表
+    # 总短路：该用户一条记忆都没有（新用户），直接返回空，不碰嵌入模型 / 不查各表
     has_any = any([
         await MemorySummary.filter(user_id=user_id).exists(),
         await MemoryKV.filter(user_id=user_id).exists(),

@@ -6,7 +6,7 @@
     :style="positionStyle"
   >
     <Transition name="xiaozhi-panel">
-      <section v-if="isOpen" class="xiaozhi-panel" role="dialog" :aria-label="`${assistantName}答疑`">
+      <section v-if="isOpen" ref="panelEl" class="xiaozhi-panel" role="dialog" :style="panelStyle" :aria-label="`${assistantName}答疑`">
         <header class="xiaozhi-panel__header">
           <div class="xiaozhi-panel__title">
             <span class="xiaozhi-panel__status"></span>
@@ -24,7 +24,7 @@
 
         <div ref="messagesEl" class="xiaozhi-panel__messages" aria-live="polite">
           <div v-for="message in messages" :key="message.id" class="xiaozhi-message" :class="`is-${message.role}`">
-            <div v-if="message.role === 'assistant'" class="xiaozhi-message__avatar">知</div>
+            <div v-if="message.role === 'assistant'" class="xiaozhi-message__avatar">{{ assistantBadge }}</div>
             <div class="xiaozhi-message__bubble">
               <p>{{ message.text }}</p>
               <a v-if="message.downloadUrl" :href="message.downloadUrl" target="_blank" rel="noopener" class="resource-link">
@@ -33,7 +33,7 @@
             </div>
           </div>
           <div v-if="isLoading" class="xiaozhi-message is-assistant">
-            <div class="xiaozhi-message__avatar">知</div>
+            <div class="xiaozhi-message__avatar">{{ assistantBadge }}</div>
             <div class="xiaozhi-message__bubble typing"><i></i><i></i><i></i></div>
           </div>
         </div>
@@ -76,21 +76,26 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CheckCircle, FileDown, LoaderCircle, Send, X } from 'lucide-vue-next'
 import { chatApi } from '@/shared/api/chatApi'
 import robotImage from '@/shared/assets/xiaozhi-robot.png'
 import { applyWorkflowEvent, applyWorkflowProgress, finishWorkflow, resetWorkflow } from '@/entities/agent/agentWorkflowState'
 
 const props = defineProps({
-  assistantName: { type: String, default: '小知' },
+  assistantName: { type: String, default: '罗伯特' },
   robotImage: { type: String, default: '' },
   variant: { type: String, default: 'xiaozhi' },
   sessionKey: { type: String, default: 'learnmate_xiaozhi_group' },
 })
 
+// 面板与视口边缘的最小留白、面板与机器人之间的间距
+const PANEL_MARGIN = 8
+const PANEL_GAP = 16
+
 const root = ref(null)
-const assistantName = computed(() => props.assistantName.trim() || '小知')
+const assistantName = computed(() => props.assistantName.trim() || '罗伯特')
+const assistantBadge = computed(() => assistantName.value.slice(0, 1))
 const variant = computed(() => props.variant)
 const displayedRobotImage = computed(() => props.robotImage || robotImage)
 const messagesEl = ref(null)
@@ -108,16 +113,123 @@ const dragOffset = ref({ x: 0, y: 0 })
 const pointerStart = ref({ x: 0, y: 0 })
 const messages = ref([{ id: 'welcome', role: 'assistant', text: `你好，我是${assistantName.value}。可以帮你答疑解惑，也可以整理并生成学习资源。` }])
 
+const panelEl = ref(null)
+// 面板相对机器人的补偿位移。只有默认落点会跑出视口时才用得上，见 placePanel。
+const panelOffset = ref(null)
+const positionStorageKey = computed(() => `learnmate_assistant_pos_${props.sessionKey}`)
+
 const positionStyle = computed(() => {
   if (position.value.x === null) return {}
   return { left: `${position.value.x}px`, top: `${position.value.y}px`, right: 'auto', bottom: 'auto' }
 })
 
-function clampPosition(x, y) {
-  const size = root.value?.getBoundingClientRect().width || 82
+const panelStyle = computed(() => {
+  if (!panelOffset.value) return {}
   return {
-    x: Math.max(8, Math.min(window.innerWidth - size - 8, x)),
-    y: Math.max(8, Math.min(window.innerHeight - size - 8, y)),
+    left: `${panelOffset.value.left}px`,
+    top: `${panelOffset.value.top}px`,
+    right: 'auto',
+    bottom: 'auto',
+  }
+})
+
+function clampPosition(x, y) {
+  // 宽高要分别取：罗伯特是 136×154，拿宽度去夹 y 会有 18px 悬在视口外
+  const rect = root.value?.getBoundingClientRect()
+  const width = rect?.width || 82
+  const height = rect?.height || 82
+  return {
+    x: Math.max(PANEL_MARGIN, Math.min(window.innerWidth - width - PANEL_MARGIN, x)),
+    y: Math.max(PANEL_MARGIN, Math.min(window.innerHeight - height - PANEL_MARGIN, y)),
+  }
+}
+
+/**
+ * 面板落点跟随机器人。
+ *
+ * 面板是 root 的绝对定位子元素，CSS 里写死的是"右对齐、浮在上方"——那是给右下角
+ * 默认位置定的。机器人一旦被拖到左上角，这个落点会把整块面板送到视口外
+ * （实测 left=-216、top=-408，面板 360×392 全部不可见），表现成"拖完之后点不开了"。
+ * 视口很矮时（实测 566px 高）右下角默认落点也会顶出上边界。
+ *
+ * 所以这里在面板打开时量一次：落点能装下就什么都不做（panelOffset 保持 null，
+ * 外观与改动前完全一致），装不下才补偿 —— 右对齐放不下改左对齐，上方放不下改到下方，
+ * 最后整体夹进视口。
+ */
+async function placePanel() {
+  if (!isOpen.value) {
+    panelOffset.value = null
+    return
+  }
+  await nextTick()
+  const panel = panelEl.value
+  const host = root.value
+  if (!panel || !host) return
+
+  // 先清掉上次的补偿，量回 CSS 默认落点
+  panelOffset.value = null
+  await nextTick()
+
+  const hostRect = host.getBoundingClientRect()
+  // 尺寸取 offsetWidth/offsetHeight、位置取 offsetLeft/offsetTop，而不是
+  // getBoundingClientRect()：面板进场过渡带 scale(.97)，量 rect 会小一圈
+  // （实测高 392 量成 380），照那个数补偿仍然会溢出 12px。
+  // offset* 是布局尺寸，不带 transform。
+  const width = panel.offsetWidth
+  const height = panel.offsetHeight
+  const naturalLeft = hostRect.left + panel.offsetLeft
+  const naturalTop = hostRect.top + panel.offsetTop
+  const fits =
+    naturalLeft >= PANEL_MARGIN &&
+    naturalTop >= PANEL_MARGIN &&
+    naturalLeft + width <= window.innerWidth - PANEL_MARGIN &&
+    naturalTop + height <= window.innerHeight - PANEL_MARGIN
+  if (fits) return
+
+  const maxLeft = Math.max(PANEL_MARGIN, window.innerWidth - width - PANEL_MARGIN)
+  const maxTop = Math.max(PANEL_MARGIN, window.innerHeight - height - PANEL_MARGIN)
+
+  // 垂直优先浮在机器人上方；上方装不下才考虑翻到下方 —— 而且只有下方**真的**
+  // 放得下才翻。否则翻过去照样要被夹回来，结果面板正好压在机器人身上
+  // （矮视口实测重叠 154px，比不翻还糟）。
+  let top = hostRect.top - PANEL_GAP - height
+  if (top < PANEL_MARGIN && hostRect.bottom + height <= window.innerHeight - PANEL_MARGIN) {
+    top = hostRect.bottom + PANEL_GAP
+  }
+  top = Math.min(Math.max(PANEL_MARGIN, top), maxTop)
+
+  // 水平优先和机器人右对齐，放不下改左对齐
+  let left = hostRect.right - width
+  if (left < PANEL_MARGIN) left = hostRect.left
+  // 视口太矮时上下都避不开机器人，面板会整个压在它身上 —— 那种情况改放左侧
+  const verticalOverlap = Math.min(top + height, hostRect.bottom) - Math.max(top, hostRect.top)
+  if (verticalOverlap > 0) {
+    const beside = hostRect.left - PANEL_GAP - width
+    if (beside >= PANEL_MARGIN) left = beside
+  }
+  left = Math.min(Math.max(PANEL_MARGIN, left), maxLeft)
+
+  panelOffset.value = { left: left - hostRect.left, top: top - hostRect.top }
+}
+
+/** 记住拖到哪儿了，刷新后还在原地（纯本地偏好，不影响任何服务端状态）。 */
+function savePosition() {
+  if (position.value.x === null) return
+  try {
+    localStorage.setItem(positionStorageKey.value, JSON.stringify(position.value))
+  } catch {
+    // 隐私模式等写不进去的情况，忽略即可
+  }
+}
+
+function restorePosition() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(positionStorageKey.value) || 'null')
+    if (!Number.isFinite(saved?.x) || !Number.isFinite(saved?.y)) return
+    // 窗口尺寸可能和上次不同，恢复时要重新夹一遍
+    position.value = clampPosition(saved.x, saved.y)
+  } catch {
+    // 存坏了就当没存过，回到默认角落
   }
 }
 
@@ -139,7 +251,11 @@ function moveDrag(event) {
 }
 
 function stopDrag() {
+  if (!isDragging.value) return
   isDragging.value = false
+  savePosition()
+  // 拖动过程中面板是跟着走的，松手时把它重新摆回视口内
+  placePanel()
 }
 
 function toggleOpen() {
@@ -226,9 +342,15 @@ async function sendMessage() {
 
 function handleResize() {
   if (position.value.x !== null) position.value = clampPosition(position.value.x, position.value.y)
+  placePanel()
 }
 
+watch(isOpen, (open) => {
+  if (open) placePanel()
+})
+
 onMounted(() => {
+  restorePosition()
   window.addEventListener('resize', handleResize)
 })
 
@@ -265,6 +387,9 @@ onBeforeUnmount(() => {
 @keyframes robert-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
 @keyframes robert-sway { 0%,100% { transform: rotate(-1.5deg) translateX(0); } 50% { transform: rotate(1.5deg) translateX(2px); } }
 @keyframes robert-greet { 0% { transform: rotate(0); } 35% { transform: rotate(-5deg) translateY(-3px); } 70% { transform: rotate(4deg) translateY(-1px); } 100% { transform: rotate(0); } }
+/* 拖动时停掉浮动/摇摆：这两个 transform 会让机器人从指针底下溜走，手感是"拖不住" */
+.xiaozhi.is-dragging { cursor: grabbing; }
+.xiaozhi.is-dragging .xiaozhi-fab, .xiaozhi.is-dragging .xiaozhi-fab img { animation: none; }
 @media (max-width: 620px) { .xiaozhi { right: 15px; bottom: 15px; }.xiaozhi-panel { position: fixed; right: 15px; bottom: 111px; width: calc(100vw - 30px); max-height: calc(100vh - 130px); } .xiaozhi.is-robert { right: 10px; bottom: 8px; width: 112px; } .xiaozhi.is-robert .xiaozhi-fab, .xiaozhi.is-robert .xiaozhi-fab img { width: 112px; height: 128px; } .xiaozhi.is-robert .xiaozhi-panel { bottom: 146px; } }
 @media (prefers-reduced-motion: reduce) { .xiaozhi-fab__halo, .xiaozhi.is-robert .xiaozhi-fab, .xiaozhi.is-robert .xiaozhi-fab img { animation: none; } }
 .xiaozhi-toast { position: absolute; top: 58px; right: 12px; left: 12px; z-index: 2; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid #d7e3c9; border-radius: 6px; background: #f3f8ea; box-shadow: 0 7px 16px rgba(45, 70, 40, .12); color: var(--accent-deep); font-size: 11px; }

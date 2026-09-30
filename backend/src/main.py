@@ -40,7 +40,7 @@ class _QuietPollingAccessFilter(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(_QuietPollingAccessFilter())
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,6 +50,19 @@ logger = logging.getLogger("api")
 
 # Redis SSE 转发器任务句柄（在 startup 中赋值，shutdown 中清理）
 _redis_forward_task = None
+
+
+def _preload_env() -> str:
+    """启动时预加载嵌入模型的开关值。
+
+    名字里不带模型名 —— 换模型不该让配置项跟着作废。旧的 `PRELOAD_BGE_ON_STARTUP`
+    仍然认，避免已经写在 .env / compose 里的设置被静默忽略。
+    """
+    for name in ("PRELOAD_EMBEDDING_ON_STARTUP", "PRELOAD_BGE_ON_STARTUP"):
+        value = os.getenv(name)
+        if value not in (None, ""):
+            return value
+    return "true"
 from backend.src.router.chat_router import router as chat_router
 from backend.src.router.portrait_router import router as portrait_router
 from backend.src.router.resource_router import router as resource_router
@@ -62,8 +75,6 @@ from backend.src.router.path_router import router as path_router
 from backend.src.router.learning_path_router import router as learning_path_router
 from backend.src.router.video_router import router as video_router
 from backend.src.router.study_router import router as study_router
-from backend.src.router.study_room_router import router as study_room_router
-from backend.src.router.mock_classroom_router import router as mock_classroom_router
 from backend.src.router.notification_router import router as notification_router
 from backend.src.router.annotation_router import router as annotation_router
 from backend.src.router.agent_router import router as agent_router
@@ -115,22 +126,12 @@ static_dir.mkdir(parents=True, exist_ok=True)
 (static_dir / "presentations").mkdir(parents=True, exist_ok=True)
 (static_dir / "videos").mkdir(parents=True, exist_ok=True)
 (static_dir / "covers").mkdir(parents=True, exist_ok=True)
-(static_dir / "study-room").mkdir(parents=True, exist_ok=True)
-(static_dir / "mock-classroom").mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
 @app.get("/")
 async def hello():
     return {"hello": "user"}
-@app.get("/debug/token/{user_id}")
-async def debug_token(user_id: int):
-    """调试用：输入用户 ID 直接返回 token（仅 DEBUG=true 时可用）"""
-    import os
-    if os.getenv("DEBUG", "").lower() not in ("true", "1", "yes"):
-        raise HTTPException(status_code=404, detail="Not Found")
-    from backend.src.utils.jwt import create_access_token
-    return {"user_id": user_id, "token": create_access_token(user_id)}
 
 
 @app.on_event("startup")
@@ -139,12 +140,18 @@ async def startup():
     # 清理未完成的生成任务
     from backend.src.service.resource.service import ResourceService
     await ResourceService.init_tasks()
-    # 预加载 BGE 模型，避免首次知识库操作时等待下载/加载
-    if os.getenv("PRELOAD_BGE_ON_STARTUP", "true").strip().lower() not in {"0", "false", "no", "off"}:
-        from backend.src.utils.knowledge_base import _get_embed_model_async
-        await _get_embed_model_async()
+    # 预加载嵌入模型，避免首次知识库操作时才等待加载。
+    # 失败只降级（检索不可用），不能让整个后端起不来 —— 权重有 GB 量级，
+    # 下载失败、镜像不通、磁盘不足都可能发生，那时其它功能仍应照常服务。
+    preload = _preload_env()
+    if preload.strip().lower() not in {"0", "false", "no", "off"}:
+        from backend.src.utils.embeddings import get_model
+        try:
+            await get_model()
+        except Exception:
+            logger.exception("嵌入模型预加载失败，知识库检索将不可用；其余功能不受影响")
     else:
-        logger.info("PRELOAD_BGE_ON_STARTUP=false，已跳过 BGE 预加载")
+        logger.info("预加载开关=%s，已跳过嵌入模型预加载", preload)
     # 启动定时任务（周报 + AI 建议）
     from backend.src.utils.scheduler import start
     start()
@@ -183,8 +190,6 @@ app.include_router(path_router)
 app.include_router(learning_path_router)
 app.include_router(video_router)
 app.include_router(study_router)
-app.include_router(study_room_router)
-app.include_router(mock_classroom_router)
 app.include_router(notification_router)
 app.include_router(annotation_router)
 app.include_router(agent_router)

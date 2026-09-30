@@ -6,6 +6,7 @@
 
 from backend.src.service.advanced.service import (
     ADVANCED_FALLBACK_RETRY_SECONDS,
+    TASK_DIFFICULTY_LABELS,
     _compact_tag_list,
     _describe_failure,
     _find_focus,
@@ -352,3 +353,50 @@ def test_failure_detail_is_truncated_so_one_bad_response_cannot_flood_the_log():
 def test_redact_leaves_ordinary_text_alone():
     assert _redact("文档包含省略或待补充占位语") == "文档包含省略或待补充占位语"
     assert _redact(None) == ""
+
+
+# ── 难度标签只能说难度 ────────────────────────────────────────────────────
+#
+# 这三个值原先分别写死成 "引导练习" / "当前推荐" / "开放挑战"：第一个是类别、
+# 第二个是推荐状态、第三个才是难度，同一个字段装了三种语义。推荐项又被另外两个
+# 循环各自覆盖成"建议先做"。结果是推荐的不是案例诊断时，那张卡留着"当前推荐"
+# 而 is_recommended=False —— 页面上同时出现「当前选择任务」和「当前推荐」。
+#
+# 这两条钉的是语义，不是文案：换词可以，但难度字段里不能再出现推荐状态。
+
+def test_difficulty_labels_are_comparable_across_the_three_kinds():
+    profile = {"identity": "工程师", "direction": "数据结构与算法", "goal": "完成一个项目"}
+    tasks = build_advanced_tasks(profile, _path())
+
+    labels = [task["difficulty_label"] for task in tasks]
+    assert len(set(labels)) == 3, f"三种任务要用同一套可比难度，实际 {labels}"
+    assert not any("推荐" in label for label in labels), f"难度字段里混进了推荐状态：{labels}"
+
+
+def test_a_task_that_is_not_recommended_never_claims_to_be_recommended():
+    """_path() 的锚点节点是 completed，于是 _recommended_kind 返回 project ——
+    正好是线上出问题的那一组（推荐的不是案例诊断）。"""
+    profile = {"identity": "工程师", "direction": "数据结构与算法", "goal": "完成一个项目"}
+    tasks = build_advanced_tasks(profile, _path())
+
+    recommended = [task["kind"] for task in tasks if task["is_recommended"]]
+    assert recommended == ["project"], f"这组数据应当推荐 project，实际 {recommended}"
+
+    case = next(task for task in tasks if task["kind"] == "case")
+    assert case["is_recommended"] is False
+    assert "推荐" not in case["difficulty_label"], (
+        "未被推荐的卡不能自称推荐 —— 这正是页面上「当前选择任务」+「当前推荐」并存的来源"
+    )
+
+
+def test_recommendation_is_expressed_by_the_flag_not_by_the_label():
+    """难度与推荐是两个维度，改一个不能牵动另一个。"""
+    profile = {"identity": "工程师", "direction": "数据结构与算法", "goal": "完成一个项目"}
+    tasks = build_advanced_tasks(profile, _path())
+
+    by_kind = {task["kind"]: task for task in tasks}
+    assert by_kind["transfer"]["difficulty_label"] == TASK_DIFFICULTY_LABELS["transfer"]
+    assert by_kind["case"]["difficulty_label"] == TASK_DIFFICULTY_LABELS["case"]
+    assert by_kind["project"]["difficulty_label"] == TASK_DIFFICULTY_LABELS["project"]
+    # project 是推荐项，它的难度标签仍然是难度本身
+    assert by_kind["project"]["is_recommended"] is True

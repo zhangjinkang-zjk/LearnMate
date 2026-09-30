@@ -161,7 +161,33 @@ const latestResult = ref(null)
 const testInsights = ref({ totalAnswered: 0, totalCorrect: 0, masteryScore: null, weakPoints: [], recommendation: null })
 
 const testableNodes = computed(() => (learningPath.value?.nodes || []).filter((node) => node.status !== 'locked'))
-const activeNode = computed(() => testableNodes.value.find((node) => String(node.id) === String(activeNodeId.value)) || testableNodes.value[0] || null)
+
+// 复盘要复的是「用户最近所在的那一章」，不是「第一个没锁的章节」。
+//
+// 以前两处兜底取的都是"第一个 unlocked/in_progress 的节点"（服务端 current_node_id 也是这个口径，
+// 见 path/service.py:2115）。实测这个口径会猜错：真实数据里 90 个 用户×路径 组合有 24 个
+// 同时存在 ≥2 个 unlocked，主模式是「1..10 completed，11..14 unlocked」——
+// 这时"第一个未锁"给出的是 11，而用户真正学完的最后一章是 10。复盘一章没碰过的内容没有意义。
+// 后端 advanced/service.py:178 被同一个坑坑过，那边改成了"最近完成的节点"。
+//
+// 规则：**从后往前，取第一个"用户真正碰过的"节点**。
+// 碰过 = completed（学完）或 in_progress（正在学）。路径是顺序解锁的
+// （PathNode.order_index + prerequisites 门禁），所以最靠后的那个就是最近所在的章节。
+//
+// 不做 in_progress 优先：实测存在「15 正在学、16 已学完」这种回头补课的情况，
+// 这时该取 16 而不是 15。
+const ENGAGED_NODE_STATUSES = ['completed', 'in_progress']
+
+function resolveFallbackNode(nodes) {
+  const list = Array.isArray(nodes) ? nodes : []
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (ENGAGED_NODE_STATUSES.includes(list[i].status)) return list[i]
+  }
+  // 一章都还没碰过（刚加入路径）：最靠前的未锁节点才是"当前"。
+  return list.find((node) => node.status === 'unlocked') || null
+}
+
+const activeNode = computed(() => testableNodes.value.find((node) => String(node.id) === String(activeNodeId.value)) || resolveFallbackNode(testableNodes.value) || null)
 const canStartTest = computed(() => Boolean(activeNode.value?.resources_viewed))
 const latestScore = computed(() => latestResult.value?.score ?? testInsights.value.masteryScore)
 const latestScoreLabel = computed(() => latestScore.value === null || latestScore.value === undefined ? '--' : `${Math.round(Number(latestScore.value))}%`)
@@ -207,7 +233,7 @@ function chooseNode(path) {
   const requested = route.query.node ?? route.query.nodeId
   activeNodeId.value = requested && path.nodes.some((node) => String(node.id) === String(requested))
     ? Number(requested)
-    : path.current_node_id || path.nodes.find((node) => node.status === 'in_progress')?.id || path.nodes.find((node) => node.status !== 'locked')?.id || null
+    : resolveFallbackNode(path.nodes)?.id ?? null
 }
 
 async function loadNode() {

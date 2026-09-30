@@ -37,6 +37,27 @@ async def _ensure_generated_resource_visibility_column():
         except Exception:
             _log.debug("ALTER TABLE 跳过（列可能已存在）: %s", sql[:60])
 
+async def _ensure_embedding_model_column():
+    """给三张存向量的表补 embedding_model 列。
+
+    向量与生成它的嵌入模型强绑定。记录 model_id 后，"库里存的向量是哪个模型生成的"
+    就能精确判断 —— 否则换模型只能靠向量长度去猜，两个模型维度相同时根本区分不出来。
+    存量行留 NULL，由 reembed 脚本回填。
+    """
+    import logging
+
+    _log = logging.getLogger(__name__)
+    conn = Tortoise.get_connection("default")
+    for table in ("knowledge_vectors", "memory_episode", "memory_message_vector"):
+        try:
+            await conn.execute_query(
+                f"ALTER TABLE {table} ADD COLUMN embedding_model VARCHAR(64) NULL "
+                f"COMMENT '生成该向量的嵌入模型 id'"
+            )
+        except Exception:
+            _log.debug("ALTER TABLE 跳过（列可能已存在）: %s.embedding_model", table)
+
+
 async def _ensure_classroom_lesson_schema():
     """Keep the current classroom snapshot table aligned with the lesson protocol."""
     import logging
@@ -180,10 +201,11 @@ async def init_db():
             return
         await Tortoise.init(
             db_url=database,
-            modules={"models": ["backend.src.models.usermodel", "backend.src.models.chat_history_model", "backend.src.models.portraitmodel", "backend.src.models.portrait_radar_model", "backend.src.models.knowledgemodel", "backend.src.models.resource_model", "backend.src.models.agent_skill_model", "backend.src.models.image_model", "backend.src.models.exam_model", "backend.src.models.path_model", "backend.src.models.advanced_task_model", "backend.src.models.advanced_practice_model", "backend.src.models.narration_model", "backend.src.models.study_model", "backend.src.models.study_room_model", "backend.src.models.mock_classroom_model", "backend.src.models.video_model", "backend.src.models.task_model", "backend.src.models.email_code_model", "backend.src.models.notification_model", "backend.src.models.curriculum_model", "backend.src.models.annotation_model", "backend.src.models.user_agent_model", "backend.src.models.memory_kv_model", "backend.src.models.memory_episode_model", "backend.src.models.memory_message_model", "backend.src.models.memory_summary_model", "backend.src.models.classroom_model"]}
+            modules={"models": ["backend.src.models.usermodel", "backend.src.models.chat_history_model", "backend.src.models.portraitmodel", "backend.src.models.portrait_radar_model", "backend.src.models.knowledgemodel", "backend.src.models.resource_model", "backend.src.models.agent_skill_model", "backend.src.models.image_model", "backend.src.models.exam_model", "backend.src.models.path_model", "backend.src.models.advanced_task_model", "backend.src.models.advanced_practice_model", "backend.src.models.narration_model", "backend.src.models.study_model", "backend.src.models.video_model", "backend.src.models.task_model", "backend.src.models.email_code_model", "backend.src.models.notification_model", "backend.src.models.curriculum_model", "backend.src.models.annotation_model", "backend.src.models.user_agent_model", "backend.src.models.memory_kv_model", "backend.src.models.memory_episode_model", "backend.src.models.memory_message_model", "backend.src.models.memory_summary_model", "backend.src.models.classroom_model"]}
         )
         await Tortoise.generate_schemas()
         await _ensure_generated_resource_visibility_column()
+        await _ensure_embedding_model_column()
         await _ensure_classroom_lesson_schema()
         await _ensure_path_node_teaching_spec_column()
         await _ensure_path_node_difficulty_score_column()

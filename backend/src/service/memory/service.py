@@ -23,6 +23,8 @@ import time as _time
 from datetime import datetime
 
 from backend.src.ai_core.llm_config import llm
+from backend.src.utils.embeddings import codec
+from backend.src.utils.embeddings import configured_model_id as current_embedding_model_id
 from backend.src.models.chat_history_model import ChatHistory
 from backend.src.models.memory_episode_model import MemoryEpisode
 from backend.src.models.memory_kv_model import MemoryKV
@@ -277,7 +279,8 @@ async def _merge_episode(user_id: int, chat_group_id: int, agent_id: int | None,
     if ep.summary:
         try:
             vec = await encode(ep.summary[:500])
-            ep.embedding = json.dumps(vec.tolist(), ensure_ascii=False)
+            ep.embedding = codec.pack(vec)
+            ep.embedding_model = current_embedding_model_id()
         except Exception:
             logger.exception("片段 embedding 生成失败 user=%s", user_id)
     await ep.save()
@@ -310,7 +313,8 @@ async def _index_messages(user_id: int, chat_group_id: int, agent_id: int | None
         await MemoryMessage.create(
             user_id=user_id, chat_group_id=chat_group_id,
             source_history_id=r.id, role="user", content=content,
-            embedding=json.dumps(vec.tolist(), ensure_ascii=False),
+            embedding=codec.pack(vec),
+            embedding_model=current_embedding_model_id(),
             subjects=(pick.get("subjects") if pick else None) or data.get("subjects"),
             importance=float(pick.get("importance", 0.5)) if pick else 0.5,
         )

@@ -16,8 +16,31 @@ const proxyTarget = {
   },
 }
 
+// Monaco 是按需加载的（见 src/features/advanced/workspace/monacoSetup.js），
+// 而它走的是深层子路径而不是包名，依赖扫描容易漏。dev server 是在装 monaco 之前
+// 起的话，会在运行时抛 `Failed to fetch dynamically imported module` —— 构建却是好的，
+// 所以列在这里固定下来，别靠扫描。
+const MONACO_MODULES = [
+  'monaco-editor/editor/editor.api.js',
+  'monaco-editor/languages/definitions/python/register.js',
+  'monaco-editor/languages/definitions/javascript/register.js',
+  'monaco-editor/languages/definitions/typescript/register.js',
+  'monaco-editor/languages/definitions/markdown/register.js',
+  'monaco-editor/languages/definitions/yaml/register.js',
+  'monaco-editor/languages/definitions/shell/register.js',
+  'monaco-editor/languages/definitions/sql/register.js',
+  'monaco-editor/languages/definitions/html/register.js',
+  'monaco-editor/languages/definitions/css/register.js',
+  'monaco-editor/languages/definitions/dockerfile/register.js',
+  'monaco-editor/languages/definitions/ini/register.js',
+  'monaco-editor/languages/definitions/xml/register.js',
+]
+
 export default defineConfig({
   plugins: [vue(), tailwindcss()],
+  optimizeDeps: {
+    include: MONACO_MODULES,
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -44,8 +67,6 @@ export default defineConfig({
       '/exam': proxyTarget,
       '/video': proxyTarget,
       '/study': proxyTarget,
-      '/study-room': proxyTarget,
-      '/mock-classroom': proxyTarget,
       '/presentation': proxyTarget,
       '/notification': proxyTarget,
       '/annotation': proxyTarget,

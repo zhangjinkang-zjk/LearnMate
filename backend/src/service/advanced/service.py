@@ -40,6 +40,23 @@ ADVANCED_FALLBACK_RETRY_SECONDS = 120
 # 也建立在已完成节点上 —— 否则用户只会看到一段模板文案，以为页面是写死的。
 _PENDING_SUMMARY = "正在按你已完成的节点生成实践任务，先给出临时入口，稍后会自动更新。"
 
+# 三种任务共用同一套难度词汇，否则横向没法比较。
+#
+# 这三个值以前是分别写死的："引导练习" / "当前推荐" / "开放挑战" —— 第一个是类别、
+# 第二个是推荐状态、第三个才是难度，同一个字段装了三种语义。更要命的是推荐项由
+# 另外两个循环各自覆盖成"建议先做"，于是当推荐的不是案例诊断时，那张卡会留着
+# "当前推荐"而 is_recommended=False：页面上出现一张没被推荐却自称推荐的卡，
+# 真正被推荐的那张写的却是"建议先做"。
+#
+# 现在 difficulty_label 只说难度 —— 是否推荐由 is_recommended / status 表达，
+# 不再往这个字段里塞。三档对齐已有的 support_level（high/medium/low），
+# 那本来就是一条支撑递减的梯子。
+TASK_DIFFICULTY_LABELS = {
+    "transfer": "入门",   # support_level=high，扶着走
+    "case": "标准",       # support_level=medium
+    "project": "挑战",    # support_level=low，独立交付
+}
+
 GOAL_MODES = (
     (("就业", "岗位", "求职", "实习", "职业"), "job"),
     (("比赛", "竞赛", "答辩"), "competition"),
@@ -469,8 +486,9 @@ def _normalise_agent_tasks(payload: Any, fallback_tasks: list[dict]) -> tuple[li
     for item in normalised:
         item["status"] = "active" if item["kind"] == recommended else "available"
         item["is_recommended"] = item["kind"] == recommended
-        if item["is_recommended"]:
-            item["difficulty_label"] = "建议先做"
+        # 这里以前会把推荐项的 difficulty_label 覆盖成"建议先做"，于是这个字段
+        # 一会儿是难度、一会儿是推荐状态 —— 见 TASK_DIFFICULTY_LABELS 的注释。
+        # 推荐与否由上面的 is_recommended / status 表达，别动难度。
     return normalised, _clean_text(payload.get("summary"), "本次实践任务已根据当前学习里程碑更新。", 100)
 
 
@@ -675,7 +693,7 @@ def build_advanced_tasks(profile: dict, path: dict, mastery_records: Iterable[An
         "id": f"{base['id']}-transfer",
         "kind": "transfer",
         "kind_label": "迁移练习",
-        "difficulty_label": "引导练习",
+        "difficulty_label": TASK_DIFFICULTY_LABELS["transfer"],
         "status": "pending",
         "support_level": "high",
         # 三种类型的阶段骨架各不相同 —— 这正是"交互形态跟着任务类型走"的落点，
@@ -689,7 +707,7 @@ def build_advanced_tasks(profile: dict, path: dict, mastery_records: Iterable[An
         **base,
         "kind": "case",
         "kind_label": "案例诊断",
-        "difficulty_label": "当前推荐",
+        "difficulty_label": TASK_DIFFICULTY_LABELS["case"],
         "status": "active",
         "support_level": "medium",
         "stages": practice_stages("case"),
@@ -720,7 +738,7 @@ def build_advanced_tasks(profile: dict, path: dict, mastery_records: Iterable[An
         "id": f"{base['id']}-project",
         "kind": "project",
         "kind_label": "项目实训",
-        "difficulty_label": "开放挑战",
+        "difficulty_label": TASK_DIFFICULTY_LABELS["project"],
         "status": "pending",
         "support_level": "low",
         "stages": practice_stages("project"),
@@ -734,8 +752,7 @@ def build_advanced_tasks(profile: dict, path: dict, mastery_records: Iterable[An
     for item in tasks:
         item["status"] = "active" if item["kind"] == recommended_kind else "available"
         item["is_recommended"] = item["kind"] == recommended_kind
-        if item["kind"] == recommended_kind:
-            item["difficulty_label"] = "建议先做"
+        # 同 normalise_agent_tasks：难度不被推荐状态覆盖（见 TASK_DIFFICULTY_LABELS）
     return tasks
 
 

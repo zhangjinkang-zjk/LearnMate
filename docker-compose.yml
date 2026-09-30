@@ -53,6 +53,9 @@ services:
       SMTP_PASS: ${SMTP_PASS}
       REDIS_URL: redis://redis:6379/0
       PATH_AUTO_PREGENERATE_FIRST_NODE: ${PATH_AUTO_PREGENERATE_FIRST_NODE:-true}
+      # 嵌入模型：id 变了要同步改 Dockerfile 的构建参数，并跑一次 reembed 脚本
+      EMBEDDING_MODEL_ID: ${EMBEDDING_MODEL_ID:-BAAI/bge-m3}
+      EMBEDDING_MODEL_DIR: /app/backend/embedding_models
     depends_on:
       mysql:
         condition: service_healthy
@@ -60,6 +63,8 @@ services:
         condition: service_healthy
     volumes:
       - backend_static:/app/static
+      # 权重有 GB 量级，单独挂卷：重建镜像不会重复下载，也方便离线预置
+      - backend_embedding_models:/app/backend/embedding_models
 
   frontend:
     build: ./frontend
@@ -74,3 +79,4 @@ volumes:
   mysql_data:
   redis_data:
   backend_static:
+  backend_embedding_models:

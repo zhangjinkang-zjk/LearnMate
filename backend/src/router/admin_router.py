@@ -35,14 +35,6 @@ async def list_resources(
         raise HTTPException(500, "服务器错误")
 
 
-@router.get("/resource/list")
-async def list_resources_alias(
-    visibility: str | None = None,
-    admin_id: int = Depends(_require_admin),
-):
-    return await list_resources(visibility, admin_id)
-
-
 @router.get("/resources/pending")
 async def list_pending_resources(admin_id: int = Depends(_require_admin)):
     try:
@@ -52,11 +44,6 @@ async def list_pending_resources(admin_id: int = Depends(_require_admin)):
         raise
     except Exception:
         raise HTTPException(500, "服务器错误")
-
-
-@router.get("/resource/pending")
-async def list_pending_resources_alias(admin_id: int = Depends(_require_admin)):
-    return await list_pending_resources(admin_id)
 
 
 @router.post("/resources/applications/{resource_id}/approve")
@@ -70,21 +57,6 @@ async def approve_resource_application(resource_id: int, admin_id: int = Depends
         raise
     except Exception:
         raise HTTPException(500, "服务器错误")
-
-
-@router.post("/resource-applications/{resource_id}/approve")
-async def approve_resource_application_alias(resource_id: int, admin_id: int = Depends(_require_admin)):
-    return await approve_resource_application(resource_id, admin_id)
-
-
-@router.post("/resources/{resource_id}/approve")
-async def approve_resource_alias(resource_id: int, admin_id: int = Depends(_require_admin)):
-    return await approve_resource_application(resource_id, admin_id)
-
-
-@router.post("/resource/{resource_id}/approve")
-async def approve_resource_short_alias(resource_id: int, admin_id: int = Depends(_require_admin)):
-    return await approve_resource_application(resource_id, admin_id)
 
 
 @router.post("/resources/applications/{resource_id}/reject")
@@ -101,21 +73,6 @@ async def reject_resource_application(resource_id: int, data: dict = Body(defaul
         raise HTTPException(500, "服务器错误")
 
 
-@router.post("/resource-applications/{resource_id}/reject")
-async def reject_resource_application_alias(resource_id: int, data: dict = Body(default_factory=dict), admin_id: int = Depends(_require_admin)):
-    return await reject_resource_application(resource_id, data, admin_id)
-
-
-@router.post("/resources/{resource_id}/reject")
-async def reject_resource_alias(resource_id: int, data: dict = Body(default_factory=dict), admin_id: int = Depends(_require_admin)):
-    return await reject_resource_application(resource_id, data, admin_id)
-
-
-@router.post("/resource/{resource_id}/reject")
-async def reject_resource_short_alias(resource_id: int, data: dict = Body(default_factory=dict), admin_id: int = Depends(_require_admin)):
-    return await reject_resource_application(resource_id, data, admin_id)
-
-
 @router.put("/resources/{resource_id}")
 async def update_resource(resource_id: int, data: dict = Body(default_factory=dict), admin_id: int = Depends(_require_admin)):
     try:
@@ -129,21 +86,6 @@ async def update_resource(resource_id: int, data: dict = Body(default_factory=di
         raise HTTPException(500, "服务器错误")
 
 
-@router.patch("/resources/{resource_id}")
-async def patch_resource(resource_id: int, data: dict = Body(default_factory=dict), admin_id: int = Depends(_require_admin)):
-    return await update_resource(resource_id, data, admin_id)
-
-
-@router.put("/resource/{resource_id}")
-async def update_resource_alias(resource_id: int, data: dict = Body(default_factory=dict), admin_id: int = Depends(_require_admin)):
-    return await update_resource(resource_id, data, admin_id)
-
-
-@router.patch("/resource/{resource_id}")
-async def patch_resource_alias(resource_id: int, data: dict = Body(default_factory=dict), admin_id: int = Depends(_require_admin)):
-    return await update_resource(resource_id, data, admin_id)
-
-
 @router.delete("/resources/{resource_id}")
 async def delete_resource(resource_id: int, admin_id: int = Depends(_require_admin)):
     try:
@@ -155,11 +97,6 @@ async def delete_resource(resource_id: int, admin_id: int = Depends(_require_adm
         raise
     except Exception:
         raise HTTPException(500, "服务器错误")
-
-
-@router.delete("/resource/{resource_id}")
-async def delete_resource_alias(resource_id: int, admin_id: int = Depends(_require_admin)):
-    return await delete_resource(resource_id, admin_id)
 
 
 async def _read_import_payload(request: Request) -> dict:
@@ -193,11 +130,6 @@ async def import_base_resource(request: Request, admin_id: int = Depends(_requir
         raise
     except Exception:
         raise HTTPException(500, "服务器错误")
-
-
-@router.post("/resource/import")
-async def import_base_resource_alias(request: Request, admin_id: int = Depends(_require_admin)):
-    return await import_base_resource(request, admin_id)
 
 
 @router.get("/users")
