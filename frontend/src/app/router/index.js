@@ -40,7 +40,10 @@ const router = createRouter({
     },
     { path: '/learning/foundation-test', name: 'foundationTest', component: FoundationTestPage, meta: { requiresAuth: true } },
     { path: '/learning/foundation-test/quiz', name: 'foundationQuiz', component: FoundationQuizPage, meta: { requiresAuth: true, contentLayout: 'workspace' } },
-    { path: '/learning/advanced', name: 'advancedLearning', component: AdvancedLearningPage, meta: { requiresAuth: true } },
+    // contentLayout: 'workspace' —— .page-container 默认是 width: min(1180px, 100%) 的
+    // 阅读版心，IDE 要铺满整宽。这是仓库里给工作区页面用的既有机制（基础学习、复盘同款），
+    // 比在页面里再写一条 width 覆盖干净。
+    { path: '/learning/advanced', name: 'advancedLearning', component: AdvancedLearningPage, meta: { requiresAuth: true, contentLayout: 'workspace' } },
     { path: '/learning/consolidation', redirect: (to) => ({ path: '/learning/advanced', query: to.query }) },
     { path: '/learning/navigation', name: 'learningNavigation', redirect: '/learning/overview' },
     { path: '/learning/workspace', name: 'learningWorkspace', redirect: (to) => ({ path: '/learning/advanced', query: to.query }) },

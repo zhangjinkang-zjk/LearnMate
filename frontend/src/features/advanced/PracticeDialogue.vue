@@ -1,13 +1,33 @@
 <template>
-  <section class="practice-dialogue surface" aria-label="学习巩固对话">
+  <section class="practice-dialogue surface" :class="{ 'is-compact': compact }" aria-label="学习巩固对话">
     <header class="practice-dialogue__header">
-      <div>
-        <p class="eyebrow">学习巩固 · {{ task.kind_label || '实践任务' }}</p>
-      </div>
-      <div v-if="currentPhase" class="phase-progress" aria-label="巩固阶段进度">
-        <span class="phase-progress__count">{{ currentPhaseIndex + 1 }} / {{ phases.length }}</span>
-        <strong>{{ currentPhase.label }}</strong>
-        <div class="phase-progress__track"><span :style="{ width: `${phaseProgress}%` }"></span></div>
+      <p class="eyebrow practice-dialogue__eyebrow">学习巩固 · {{ task.kind_label || '实践任务' }}</p>
+      <div class="practice-dialogue__tools">
+        <div v-if="currentPhase" class="phase-progress" aria-label="巩固阶段进度">
+          <span class="phase-progress__count">{{ currentPhaseIndex + 1 }} / {{ phases.length }}</span>
+          <strong>{{ currentPhase.label }}</strong>
+          <div class="phase-progress__track"><span :style="{ width: `${phaseProgress}%` }"></span></div>
+        </div>
+        <!-- 提交是判分入口，四个动作里只有它配得上一块带字的按钮，所以放头部常驻可见。
+             以前它混在发送旁边，而且评价一出来整条输入区连同它一起消失。 -->
+        <button
+          v-if="!evaluation"
+          class="button button--secondary practice-dialogue__submit"
+          type="button"
+          :disabled="!canSubmit || isBusy"
+          @click="submitSolution"
+        >
+          <LoaderCircle v-if="isSubmitting" class="spin" :size="13" /><CheckCircle2 v-else :size="13" />提交方案
+        </button>
+        <!-- 会话级动作收进溢出菜单。VS Code 那边「新建对话 / 历史」也不在输入框里。 -->
+        <div v-if="!evaluation" class="practice-menu">
+          <button class="practice-menu__trigger" type="button" :aria-expanded="menuOpen" aria-haspopup="menu" aria-label="更多会话操作" title="更多" @click="menuOpen = !menuOpen"><Ellipsis :size="16" /></button>
+          <!-- 点外面就收起来。这里不用 focusout：菜单项一被点会先失焦，收得比点击快 -->
+          <div v-if="menuOpen" class="practice-menu__backdrop" @click="menuOpen = false"></div>
+          <ul v-if="menuOpen" class="practice-menu__list" role="menu">
+            <li><button type="button" role="menuitem" :disabled="isBusy || !sessionId" @click="endSessionFromMenu">结束本次巩固</button></li>
+          </ul>
+        </div>
       </div>
     </header>
 
@@ -25,23 +45,6 @@
           <div class="practice-bubble typing" aria-label="正在回复"><span></span><span></span><span></span></div>
         </div>
       </div>
-
-      <aside class="practice-guide">
-        <div class="guide-block"><p class="eyebrow">当前任务</p><strong>{{ task.title }}</strong><p>{{ task.problem }}</p></div>
-        <div class="guide-block"><p class="eyebrow">阶段</p>
-          <button v-for="(phase, index) in phases" :key="phase.id" type="button" :disabled="!isPhaseAvailable(index)" :class="{ 'is-active': phase.id === currentPhase?.id, 'is-complete': isPhaseComplete(index) }" @click="selectPhase(phase)"><span class="phase-button__title"><span>{{ String(index + 1).padStart(2, '0') }}</span>{{ phase.label }}</span><small>{{ isPhaseComplete(index) ? '已完成' : phase.hint }}</small></button>
-        </div>
-        <div class="guide-block"><p class="eyebrow">需要留下</p>
-          <ul class="deliverable-list">
-            <li v-for="item in task.deliverables || []" :key="item.id">
-              <label class="deliverable-item" :class="{ 'is-selected': isDeliverableDone(item.label) }">
-                <input type="checkbox" :checked="isDeliverableDone(item.label)" :disabled="Boolean(evaluation)" @change="toggleDeliverable(item.label)" />
-                <span>{{ item.label }}</span>
-              </label>
-            </li>
-          </ul>
-        </div>
-      </aside>
     </div>
 
     <section v-if="evaluation" class="practice-evaluation" aria-live="polite">
@@ -65,17 +68,21 @@
     </section>
     <p v-if="errorMessage" class="practice-error" role="status">{{ errorMessage }}</p>
     <form v-if="!evaluation && currentPhase" class="practice-composer" @submit.prevent="sendMessage()">
-      <label class="sr-only" for="practice-answer">你的方案思考</label>
-      <textarea id="practice-answer" v-model="draft" rows="3" maxlength="1800" :disabled="isStreaming || isLoadingSession || isSubmitting" :placeholder="`围绕“${currentPhase.label}”写下你的判断…`" @keydown.ctrl.enter.prevent="sendMessage()" @keydown.meta.enter.prevent="sendMessage()"></textarea>
-      <div class="practice-actions">
-        <span>{{ draft.length }} / 1800</span>
-        <div>
-          <!-- support_level=high（迁移练习）把提示摆在明面上：这类任务本来就该有人扶着走 -->
-          <button :class="hintIsProminent ? 'button button--secondary' : 'button button--quiet'" type="button" :disabled="isStreaming || isLoadingSession || isSubmitting" @click="requestHint">{{ hintIsProminent ? '先要一个提示' : '请求一个提示' }}</button>
-          <button class="button button--quiet" type="button" :disabled="isStreaming || isLoadingSession || isSubmitting || !sessionId" @click="endSession">结束本次巩固</button>
-          <button class="button button--secondary" type="button" :disabled="!canSubmit || isStreaming || isLoadingSession || isSubmitting" @click="submitSolution"><LoaderCircle v-if="isSubmitting" class="spin" :size="16" /><CheckCircle2 v-else :size="16" />提交方案并完成</button>
-          <button class="button button--primary" type="submit" :disabled="!draft.trim() || isStreaming || isLoadingSession || isSubmitting"><LoaderCircle v-if="isStreaming" class="spin" :size="16" /><Send v-else :size="16" />发送</button>
-        </div>
+      <!-- 提示本质是预设提问（它发的就是一句固定话术，见 requestHint），所以做成一角建议，
+           不跟发送并排。VS Code 那边同类东西走 `/` 命令，这里退一步用建议角更直白。
+           顺带修掉 hintIsProminent 的老毛病：同一个位置按 support_level 在 quiet/secondary
+           之间变形，本身就是"这按钮放错地方了"的信号 —— 建议角天然可选，只换配色就够了。 -->
+      <button class="practice-suggest" :class="{ 'is-prominent': hintIsProminent }" type="button" :disabled="isBusy" @click="requestHint">
+        <Lightbulb :size="13" />{{ hintIsProminent ? '先要一个提示' : '要一个提示' }}
+      </button>
+
+      <div class="practice-composer__box">
+        <label class="sr-only" for="practice-answer">你的方案思考</label>
+        <textarea id="practice-answer" v-model="draft" rows="3" maxlength="1800" :disabled="isLoadingSession || isSubmitting" :placeholder="`围绕“${currentPhase.label}”写下你的判断…`" @keydown.ctrl.enter.prevent="sendMessage()" @keydown.meta.enter.prevent="sendMessage()"></textarea>
+        <!-- 发送和停止是同一个位置的两个状态。以前流式期间只是把发送置灰，
+             等于用户根本没有中断手段。 -->
+        <button v-if="!isStreaming" class="practice-send" type="submit" :disabled="!draft.trim() || isLoadingSession || isSubmitting" aria-label="发送" title="发送（Ctrl + Enter）"><Send :size="16" /></button>
+        <button v-else class="practice-send practice-send--stop" type="button" aria-label="停止生成" title="停止生成" @click="stopStreaming"><Square :size="13" /></button>
       </div>
     </form>
   </section>
@@ -83,7 +90,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { CheckCircle2, Circle, LoaderCircle, Send } from 'lucide-vue-next'
+import { CheckCircle2, Circle, Ellipsis, Lightbulb, LoaderCircle, Send, Square } from 'lucide-vue-next'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { advancedLearningApi } from '@/shared/api/advancedLearningApi'
 import { renderMarkdown } from '@/shared/lib/markdown'
@@ -94,6 +101,9 @@ const props = defineProps({
   task: { type: Object, required: true },
   chapterContent: { type: String, default: '' },
   resourceId: { type: [Number, String], default: null },
+  // 放进 IDE 右栏时打开。默认布局按视口宽度决定几栏，而右栏宽度和视口无关 ——
+  // 视口 1440px 时这个组件的容器只有 420px，媒体查询根本不会触发，两栏会挤成一栏宽。
+  compact: { type: Boolean, default: false },
 })
 const emit = defineEmits(['end', 'completed'])
 
@@ -104,7 +114,6 @@ const phases = ref([])
 // 会话还没加载完（或加载失败）时没有当前阶段，读它的地方都要有守卫。
 const currentPhase = ref(null)
 const completedPhaseIds = ref([])
-const deliverableState = ref({})
 const messages = ref([])
 const draft = ref('')
 const errorMessage = ref('')
@@ -138,6 +147,9 @@ const canSubmit = computed(() => messages.value.some((message) => message.role =
 // 支持强度决定提示的分量：引导练习（high）把提示摆在明面上，开放挑战（low）保持低调 ——
 // 这两种任务本来就该由不同分量的脚手架陪着做。
 const hintIsProminent = computed(() => props.task?.support_level === 'high')
+// 三个按钮原来各自写一遍「流式中 / 会话加载中 / 提交中」的禁用条件，口径迟早会分叉。
+const isBusy = computed(() => isStreaming.value || isLoadingSession.value || isSubmitting.value)
+const menuOpen = ref(false)
 
 function resetConversation() {
   requestController?.abort()
@@ -147,7 +159,6 @@ function resetConversation() {
   phases.value = []
   currentPhase.value = null
   completedPhaseIds.value = []
-  deliverableState.value = {}
   // 开场那句不在这里造。以前这里抄了一份和后来服务端一样的话，两处各自漂移 ——
   // 学生看到的第一句和库里存的对不上。现在只有服务端种（见 practice_service
   // ._welcome_message），前端负责让教练把它换成真的读过任务的那一句。
@@ -208,11 +219,6 @@ function hydrateSession(session) {
   completedPhaseIds.value = Array.isArray(session?.completed_phase_ids)
     ? session.completed_phase_ids.filter((id) => phases.value.some((item) => item.id === id))
     : []
-  deliverableState.value = (
-    session?.deliverable_state && typeof session.deliverable_state === 'object'
-      ? { ...session.deliverable_state }
-      : {}
-  )
   const restoredMessages = Array.isArray(session?.messages)
     ? session.messages.filter((message) => message && ['user', 'assistant'].includes(message.role) && String(message.text || '').trim())
     : []
@@ -257,7 +263,6 @@ function sessionPayload() {
     messages: messages.value.map((message) => ({ role: message.role, text: message.text })),
     confirmed_facts: confirmedFacts.value,
     assumptions: assumptions.value,
-    deliverable_state: deliverableState.value,
   }
 }
 
@@ -279,45 +284,25 @@ async function saveSessionState() {
   if (saved?.session_id) applyPhaseState(saved)
 }
 
-function selectPhase(phase) {
-  const index = phases.value.findIndex((item) => item.id === phase.id)
-  if (!isPhaseAvailable(index)) return
-  currentPhase.value = phase
-}
+// 阶段由服务端推进（智能体回复里的 [[PHASE:done]]），前端不再提供手动跳转 ——
+// 原来那个可点的阶段列表已经删掉，头部只读显示当前进度。
 
-function isPhaseComplete(index) {
-  return completedPhaseIds.value.includes(phases.value[index]?.id)
-}
-
-function isPhaseAvailable(index) {
-  return index >= 0 && (index <= completedPhaseIds.value.length || isPhaseComplete(index))
-}
-
-function isDeliverableDone(label) {
-  return Boolean(deliverableState.value[label])
-}
-
-// 交付物勾选是学生自己的清单状态，不参与判分：它只回答"我产出了什么"，
-// 而"产出得够不够"由服务端的判分器决定。
-function toggleDeliverable(label) {
-  if (!label || evaluation.value) return
-  deliverableState.value = { ...deliverableState.value, [label]: !deliverableState.value[label] }
-  // 勾完立刻落库：只在发送消息时才存的话，学生勾一下再刷新就没了。
-  void persistDeliverables()
-}
-
-async function persistDeliverables() {
-  try {
-    await saveSessionState()
-  } catch {
-    // 静默：本地这一勾仍然在，下一次发送/提交也会把它一起带上。为一个勾选框弹
-    // 一条错误提示，比丢了它更烦人。
-  }
-}
 
 function requestHint() {
   if (!currentPhase.value) return
   sendMessage(`请围绕“${currentPhase.value.label}”给我一个不直接泄露答案的提示。`, { advancesPhase: false })
+}
+
+// 中断当前这一轮。开场白也算一轮 —— 它虽然不占 requestController，但同样是用户在等的一段回复。
+// 已经吐出来的文字留着（见 sendMessage 的 AbortError 分支），只是不再往下接。
+function stopStreaming() {
+  requestController?.abort()
+  abortOpening()
+}
+
+function endSessionFromMenu() {
+  menuOpen.value = false
+  endSession()
 }
 
 async function scrollToLatest() {
@@ -498,50 +483,149 @@ onBeforeUnmount(() => {
 })
 </script>
 
-<style scoped>
-.practice-dialogue { display: grid; min-height: 700px; grid-template-rows: auto minmax(360px, 1fr) auto auto; overflow: hidden; }.practice-dialogue__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 24px; border-bottom: 1px solid var(--line); background: #fbfcfa; }.practice-dialogue__header .eyebrow { margin-bottom: 6px; }.practice-dialogue__header h2 { margin: 0; font-size: 20px; }.practice-dialogue__header p:last-child { max-width: 640px; margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }.phase-progress { display: grid; flex: 0 0 150px; gap: 4px; padding: 7px 9px; border: 1px solid #d7e3c9; border-radius: 6px; background: #f3f8ea; color: var(--accent-deep); }.phase-progress__count { color: var(--muted); font-size: 10px; }.phase-progress strong { font-size: 11px; }.phase-progress__track { height: 4px; overflow: hidden; border-radius: 99px; background: #dfe9d4; }.phase-progress__track span { display: block; height: 100%; border-radius: inherit; background: var(--accent-deep); transition: width .25s ease; }.practice-dialogue__body { display: grid; grid-template-columns: minmax(0, 1fr) 260px; min-height: 0; }.practice-messages { display: grid; align-content: start; gap: 15px; overflow-y: auto; padding: 24px; border-right: 1px solid var(--line); }.practice-message { display: flex; align-items: flex-start; gap: 9px; max-width: min(720px, 90%); }.practice-message.is-user { justify-self: end; flex-direction: row-reverse; }.practice-avatar { display: grid; flex: 0 0 28px; width: 28px; height: 28px; place-items: center; border-radius: 50%; background: var(--accent); color: var(--accent-deep); font-size: 10px; font-weight: 900; }.practice-bubble { padding: 11px 14px; border-radius: 5px 12px 12px 12px; background: #edf3ed; color: var(--ink); font-size: 13px; line-height: 1.7; }.practice-message.is-user .practice-bubble { border-radius: 12px 5px 12px 12px; background: var(--ink); color: #fff; }.practice-bubble :deep(p) { margin: 0 0 8px; }.practice-bubble :deep(p:last-child) { margin-bottom: 0; }.practice-bubble :deep(ul), .practice-bubble :deep(ol) { margin: 7px 0 0; padding-left: 20px; }.typing { display: flex; gap: 4px; padding: 14px; }.typing span { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); animation: pulse 1s infinite ease-in-out; }.typing span:nth-child(2) { animation-delay: .15s; }.typing span:nth-child(3) { animation-delay: .3s; }.practice-guide { padding: 20px 18px; background: #fbfcfa; }.guide-block { padding: 0 0 18px; margin-bottom: 18px; border-bottom: 1px solid var(--line); }.guide-block:last-child { margin-bottom: 0; border-bottom: 0; }.guide-block .eyebrow { margin-bottom: 7px; }.guide-block > strong { display: block; font-size: 13px; line-height: 1.5; }.guide-block > p:last-child { margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.65; }.guide-block button { display: grid; width: 100%; gap: 3px; padding: 8px 9px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); text-align: left; font-size: 11px; }.guide-block button:hover, .guide-block button.is-active { background: #e8efdf; color: var(--accent-deep); }.guide-block button:disabled { cursor: not-allowed; opacity: .48; }.phase-button__title { display: flex; align-items: center; gap: 7px; }.phase-button__title > span { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }.guide-block button.is-complete .phase-button__title > span { color: var(--accent-deep); }.guide-block button small { font-size: 10px; }.guide-block ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 11px; line-height: 1.5; }.guide-block li::before { margin-right: 6px; color: var(--accent-deep); content: '•'; }.practice-error { margin: 0; padding: 0 24px 10px; color: #a66442; font-size: 11px; }.practice-composer { padding: 14px 24px 20px; border-top: 1px solid var(--line); }.practice-composer textarea { width: 100%; min-height: 105px; resize: vertical; padding: 12px 13px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); outline: none; font-size: 13px; line-height: 1.7; }.practice-composer textarea:focus { border-color: var(--accent-deep); }.practice-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; color: var(--muted); font-size: 10px; }.practice-actions > div { display: flex; flex-wrap: wrap; gap: 8px; }.practice-actions .button { gap: 7px; }@keyframes pulse { 0%, 60%, 100% { opacity: .3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }@keyframes spin { to { transform: rotate(360deg); } }.spin { animation: spin .8s linear infinite; }
-@media (max-width: 780px) { .practice-dialogue__header { flex-direction: column; padding: 18px; }.practice-dialogue__body { grid-template-columns: 1fr; }.practice-messages { min-height: 360px; border-right: 0; border-bottom: 1px solid var(--line); }.practice-guide { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 16px 18px; }.guide-block { margin: 0; padding: 0; border: 0; }.guide-block:last-child { grid-column: 1 / -1; }.practice-composer { padding: 12px 18px 18px; }.practice-actions { align-items: flex-start; flex-direction: column; }.practice-actions > div { width: 100%; }.practice-actions .button { flex: 1; } }
-/* Keep the conversation workspace within the viewport; long replies and phase lists scroll inside it. */
-.practice-dialogue { height: clamp(430px, calc(100vh - 330px), 700px); min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto auto; }
-.practice-dialogue__header { min-width: 0; padding: 18px 20px; }
-.practice-dialogue__header > div { min-width: 0; }
-.practice-dialogue__header h2 { font-size: 18px; line-height: 1.35; }
-.phase-progress { flex-basis: 150px; max-width: 180px; padding: 6px 9px; font-size: 10px; line-height: 1.35; }
-.practice-dialogue__body { min-height: 0; overflow: hidden; }
-.practice-messages { min-width: 0; min-height: 0; gap: 14px; overflow-y: auto; padding: 20px; }
-.practice-message { min-width: 0; max-width: min(720px, 92%); }
-.practice-bubble { min-width: 0; overflow-wrap: anywhere; line-height: 1.65; }
-.practice-guide { min-width: 0; overflow-y: auto; padding: 16px 15px; }
-.guide-block { padding-bottom: 15px; margin-bottom: 15px; }
-.guide-block > strong, .guide-block li { overflow-wrap: anywhere; }
-.practice-error { padding: 0 20px 8px; }
-.practice-composer { padding: 11px 20px 15px; }
-.practice-composer textarea { height: 68px; min-height: 68px; max-height: 120px; padding: 11px 12px; line-height: 1.65; }
-.practice-actions { margin-top: 8px; }
-.practice-actions > div { gap: 7px; }
-.practice-actions .button { min-height: 36px; }
-@media (max-width: 780px) {
-  .practice-dialogue { height: clamp(420px, calc(100vh - 300px), 620px); }
-  .practice-dialogue__header { padding: 17px 18px; }
-  .phase-progress { width: 100%; max-width: none; }
-  .practice-dialogue__body { overflow: hidden; }
-  .practice-guide { max-height: 150px; gap: 12px; padding: 13px 18px; }
-  .practice-composer { padding: 10px 18px 15px; }
-}
-</style>
 
 <style scoped>
-.practice-agent-note { display: block; margin-top: 7px; color: var(--muted); font-size: 10px; line-height: 1.5; }
-/* 交付物勾选：沿用本仓既定的勾选语言（ChapterCheck 的 option-item / is-selected /
-   accent-color），不另造一套。li::before 那条圆点是给只读清单用的，这里要去掉。 */
-.deliverable-list li::before { content: none; }
-.deliverable-item { display: flex; align-items: flex-start; gap: 7px; padding: 5px 7px; border: 1px solid transparent; border-radius: 5px; cursor: pointer; transition: border-color .2s ease, background .2s ease; }
-.deliverable-item:hover { background: #f1f6eb; }
-.deliverable-item.is-selected { border-color: #c8d9b7; background: #eef5e6; color: var(--accent-deep); }
-.deliverable-item input { flex: 0 0 auto; margin: 1px 0 0; accent-color: var(--accent-deep); }
+/* 一层样式。这里原来有两个 <style> 块，第一层是一整行 7000 多字符的压缩 CSS，
+   第二层又对**同样的选择器**再写一遍（头部 4 次、输入区 4 次……），读到某条规则
+   根本没法判断它最终生不生效。合并时按后写的覆盖先写的取值，行为与合并前一致。 */
+
+.practice-dialogue {
+  display: grid;
+  height: clamp(430px, calc(100vh - 330px), 700px);
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  overflow: hidden;
+}
+
+/* ── 头部 ───────────────────────────────────────────── */
+.practice-dialogue__header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 15px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfcfa;
+}
+.practice-dialogue__eyebrow { margin: 0; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.practice-dialogue__tools { display: flex; min-width: 0; flex: 0 0 auto; align-items: center; gap: 8px; }
+.phase-progress {
+  display: grid;
+  flex: 0 1 150px;
+  gap: 4px;
+  min-width: 0;
+  max-width: 170px;
+  padding: 5px 9px;
+  border: 1px solid #d7e3c9;
+  border-radius: 6px;
+  background: #f3f8ea;
+  color: var(--accent-deep);
+  font-size: 10px;
+  line-height: 1.35;
+}
+.phase-progress strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 提交按钮比全局 .button 矮一档 —— 它是页头里的一枚控件，不是页面级主按钮，
+   40px 的全局高度会把这一行撑得比面板标题还重。 */
+.practice-dialogue__submit { flex: 0 0 auto; min-height: 30px; padding: 0 11px; gap: 6px; font-size: 11px; }
+.practice-menu { position: relative; flex: 0 0 auto; }
+.practice-menu__trigger { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); }
+.practice-menu__trigger:hover, .practice-menu__trigger[aria-expanded="true"] { border-color: var(--line); background: #fff; color: var(--ink); }
+.practice-menu__backdrop { position: fixed; inset: 0; z-index: 20; }
+.practice-menu__list { position: absolute; z-index: 21; top: calc(100% + 6px); right: 0; display: grid; width: max-content; min-width: 150px; gap: 4px; margin: 0; padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); box-shadow: 0 14px 34px rgba(31, 49, 40, .16); list-style: none; }
+.practice-menu__list button { width: 100%; padding: 8px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font-size: 12px; text-align: left; }
+.practice-menu__list button:hover:not(:disabled) { background: #f1f6eb; color: var(--accent-deep); }
+.practice-menu__list button:disabled { color: var(--muted); cursor: not-allowed; }
+.phase-progress__count { color: var(--muted); font-size: 10px; }
+.phase-progress strong { font-size: 11px; }
+.phase-progress__track { height: 4px; overflow: hidden; border-radius: 99px; background: #dfe9d4; }
+.phase-progress__track span { display: block; height: 100%; border-radius: inherit; background: var(--accent-deep); transition: width .25s ease; }
+
+/* ── 消息区 ─────────────────────────────────────────── */
+.practice-dialogue__body { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr); overflow: hidden; }
+.practice-messages {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  align-content: start;
+  gap: 14px;
+  overflow-y: auto;
+  padding: 20px;
+}
+.practice-message { display: flex; min-width: 0; align-items: flex-start; gap: 9px; max-width: min(720px, 92%); }
+.practice-message.is-user { justify-self: end; flex-direction: row-reverse; }
+.practice-avatar {
+  display: grid;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-deep);
+  font-size: 10px;
+  font-weight: 900;
+}
+.practice-bubble {
+  min-width: 0;
+  padding: 11px 14px;
+  border-radius: 5px 12px 12px 12px;
+  background: #edf3ed;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.practice-message.is-user .practice-bubble { border-radius: 12px 5px 12px 12px; background: var(--ink); color: #fff; }
+.practice-bubble :deep(p) { margin: 0 0 8px; }
+.practice-bubble :deep(p:last-child) { margin-bottom: 0; }
+.practice-bubble :deep(ul), .practice-bubble :deep(ol) { margin: 7px 0 0; padding-left: 20px; }
+.typing { display: flex; gap: 4px; padding: 14px; }
+.typing span { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); animation: pulse 1s infinite ease-in-out; }
+.typing span:nth-child(2) { animation-delay: .15s; }
+.typing span:nth-child(3) { animation-delay: .3s; }
+.practice-session-loading { display: grid; min-height: 280px; place-items: center; color: var(--muted); font-size: 12px; }
+
+/* ── 输入区 ─────────────────────────────────────────── */
+.practice-error { margin: 0; padding: 0 20px 8px; color: #a66442; font-size: 11px; }
+.practice-composer { padding: 10px 15px 13px; border-top: 1px solid var(--line); }
+/* 建议角：一条可选的预设提问，不占按钮位，也不抢发送的视觉重量。 */
+.practice-suggest { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 8px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 99px; background: #fff; color: var(--muted); font-size: 11px; }
+.practice-suggest:hover:not(:disabled) { border-color: #b9c9b2; background: #f1f6eb; color: var(--accent-deep); }
+.practice-suggest:disabled { cursor: not-allowed; opacity: .55; }
+.practice-suggest svg { color: var(--accent-deep); }
+/* support_level=high（迁移练习）本该有人扶着走，所以这一角提示给它上色 —— 只是配色不同，
+   位置和尺寸都不变，不像以前那样整块控件换一种样式。 */
+.practice-suggest.is-prominent { border-color: #c8d9b7; background: #eef5e6; color: var(--accent-deep); font-weight: 700; }
+
+/* 输入框和发送是同一块：发送贴在框内右下角。发出去之后同一个位置变成停止。 */
+.practice-composer__box { position: relative; }
+.practice-composer textarea {
+  display: block;
+  width: 100%;
+  height: 62px;
+  min-height: 62px;
+  max-height: 120px;
+  resize: none;
+  padding: 10px 48px 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--ink);
+  outline: none;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.practice-composer__box:focus-within textarea { border-color: var(--accent-deep); }
+.practice-send { position: absolute; right: 8px; bottom: 8px; display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid #c4df3d; border-radius: 50%; background: var(--accent); color: #1e3c34; }
+.practice-send:hover:not(:disabled) { border-color: #a9ca27; background: #a9ca27; }
+.practice-send:disabled { border-color: var(--line); background: var(--soft); color: #a8b2aa; cursor: not-allowed; }
+/* 停止用中性色，不要跟发送一样亮 —— 它是个打断动作，不是主行动 */
+.practice-send--stop { border-color: var(--line); background: #fff; color: var(--accent-deep); }
+.practice-send--stop:hover { border-color: #b9c9b2; background: #f1f6eb; }
 .practice-dialogue .button--secondary { border-color: #d5e2c8; background: #eef5e6; color: var(--accent-deep); }
 .practice-dialogue .button--secondary:hover { border-color: #b9c9b2; background: #e3eed9; }
-.practice-session-loading { display: grid; min-height: 280px; place-items: center; color: var(--muted); font-size: 12px; }
+
+/* ── 提交结果 ───────────────────────────────────────── */
 .practice-evaluation { display: grid; max-height: 164px; min-height: 0; gap: 8px; overflow-y: auto; padding: 12px 20px; border-top: 1px solid var(--line); background: #f3f8ea; }
 .practice-evaluation__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .practice-evaluation .eyebrow { margin-bottom: 5px; }
@@ -556,5 +640,40 @@ onBeforeUnmount(() => {
 .practice-criteria li.is-passed { border-color: #c8d9b7; background: #eef5e6; color: var(--accent-deep); }
 .practice-evaluation__notes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 20px; }
 .practice-evaluation__notes ul { display: grid; gap: 5px; margin: 0; padding-left: 17px; color: var(--muted); font-size: 11px; line-height: 1.5; }
-@media (max-width: 780px) { .practice-evaluation { padding: 15px 18px; }.practice-evaluation__notes { grid-template-columns: 1fr; } }
+
+/* ── 紧凑模式：放进 IDE 右半屏 ──────────────────────────
+   高度撑满容器（由外层栅格决定），而不是按视口算出来的那个 clamp。 */
+.practice-dialogue.is-compact { height: 100%; min-height: 0; border-radius: 14px; }
+.practice-dialogue.is-compact .phase-progress { flex: 0 1 170px; }
+.practice-dialogue.is-compact .practice-messages { padding: 16px; }
+.practice-dialogue.is-compact .practice-message { max-width: 100%; }
+.practice-dialogue.is-compact .practice-evaluation { max-height: 190px; padding: 12px 15px; }
+.practice-dialogue.is-compact .practice-evaluation__notes { grid-template-columns: 1fr; }
+
+@keyframes pulse { 0%, 60%, 100% { opacity: .3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin .8s linear infinite; }
+
+/* 面板宽度是用户拖出来的，跟视口无关 —— 所以头部按**容器**宽度退化，不是按媒体查询。
+   实测拖到 302px 时：眉标 + 阶段进度 + 提交 + 溢出菜单一行放不下，会顶出右边界。 */
+.practice-dialogue { container-type: inline-size; }
+@container (max-width: 430px) {
+  /* 眉标是三者里唯一冗余的（上面任务条已经写着任务类型），先撤它 */
+  .practice-dialogue__eyebrow { display: none; }
+  .practice-dialogue__tools { flex: 1; justify-content: flex-end; }
+  .phase-progress { flex: 1 1 auto; max-width: none; }
+}
+@container (max-width: 300px) {
+  /* 再窄就只剩提交和菜单；阶段进度退化成一行小字，描述性的进度条让位给可操作的东西 */
+  .phase-progress { padding: 4px 7px; }
+  .phase-progress__track { display: none; }
+  .practice-dialogue__submit { padding: 0 9px; }
+}
+
+@media (max-width: 780px) {
+  .practice-dialogue { height: clamp(420px, calc(100vh - 300px), 620px); }
+  .practice-messages { min-height: 360px; }
+  .practice-evaluation { padding: 15px 18px; }
+  .practice-evaluation__notes { grid-template-columns: 1fr; }
+}
 </style>
