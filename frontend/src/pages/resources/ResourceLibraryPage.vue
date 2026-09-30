@@ -180,13 +180,13 @@ onBeforeUnmount(() => window.clearTimeout(noticeTimer))
 .recommendation-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; }
 .recommendation-card { display: flex; min-width: 0; min-height: 274px; flex-direction: column; overflow: hidden; padding: 0; transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease; }
 .recommendation-card:hover { border-color: #a8ba9e; box-shadow: 0 8px 22px rgba(45,70,40,.08); transform: translateY(-1px); }
-.recommendation-card__cover { height: 112px; overflow: hidden; border-bottom: 1px solid var(--line); background: #1e3c34; }
+.recommendation-card__cover { height: 150px; overflow: hidden; border-bottom: 1px solid var(--line); background: #1e3c34; }
 .recommendation-card__cover img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.recommendation-card__content { display: flex; min-height: 0; flex: 1; flex-direction: column; padding: 13px 16px 15px; }
+.recommendation-card__content { display: flex; min-height: 0; flex: 1; flex-direction: column; padding: 11px 16px 13px; }
 .recommendation-card__top { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
 .recommendation-card__icon { display: grid; width: 29px; height: 29px; place-items: center; border-radius: 8px; background: #1e3c34; color: #e2f452; }
-.recommendation-card h3 { overflow: hidden; margin: 10px 0 0; color: var(--ink); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
-.recommendation-card p { display: -webkit-box; overflow: hidden; margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.recommendation-card h3 { overflow: hidden; margin: 8px 0 0; color: var(--ink); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.recommendation-card p { display: -webkit-box; overflow: hidden; margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .recommendation-link { display: inline-flex; align-items: center; gap: 5px; width: max-content; max-width: 100%; padding: 0; margin-top: auto; border: 0; background: transparent; color: var(--accent-deep); font-size: 11px; font-weight: 800; text-decoration: none; }
 .recommendation-link:hover { color: var(--ink); }
 .recommendation-state { display: flex; align-items: center; gap: 11px; min-height: 72px; padding: 16px; color: var(--muted); font-size: 12px; }

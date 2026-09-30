@@ -1,10 +1,10 @@
 <template>
-  <section ref="frameRoot" class="video-lesson-frame" aria-label="课程视频讲解">
+  <section ref="frameRoot" class="video-lesson-frame" :aria-label="label">
     <button class="video-lesson-frame__fullscreen" type="button" :title="isFullscreen ? '退出全屏播放' : '全屏播放'" :aria-label="isFullscreen ? '退出全屏播放' : '全屏播放'" @click="toggleFullscreen">
       <Minimize2 v-if="isFullscreen" :size="17" />
       <Maximize2 v-else :size="17" />
     </button>
-    <iframe :src="src" :title="`${title || '课程'}视频讲解`" allow="autoplay; fullscreen" allowfullscreen></iframe>
+    <iframe :src="src" :title="`${title || '课程'}${label}`" :referrerpolicy="referrerPolicy || undefined" allow="autoplay; fullscreen" allowfullscreen></iframe>
   </section>
 </template>
 
@@ -12,7 +12,12 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { Maximize2, Minimize2 } from 'lucide-vue-next'
 
-defineProps({ src: { type: String, required: true }, title: { type: String, default: '' } })
+defineProps({
+  src: { type: String, required: true },
+  title: { type: String, default: '' },
+  label: { type: String, default: '视频讲解' },
+  referrerPolicy: { type: String, default: '' },
+})
 
 const frameRoot = ref(null)
 const isFullscreen = ref(false)
