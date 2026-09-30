@@ -14,7 +14,7 @@
       </div>
     </header>
 
-    <div v-if="nodes.length" class="garden-scene" role="list" aria-label="学习树林">
+    <div v-if="nodes.length" class="garden-scene" :style="gardenSceneStyle" role="list" aria-label="学习树林">
       <span class="garden-scene__sun" aria-hidden="true"></span>
       <span class="garden-scene__cloud garden-scene__cloud--one" aria-hidden="true"></span>
       <span class="garden-scene__cloud garden-scene__cloud--two" aria-hidden="true"></span>
@@ -31,7 +31,7 @@
           {
             'is-active': String(node.id) === String(activeNode?.id),
             'is-locked': node.status === 'locked',
-            'has-label-above': plantPositions[index].label === 'above',
+            'has-label-above': plantPosition(index, visibleNodes.length).label === 'above',
           },
         ]"
         :style="plantStyle(index, node)"
@@ -47,7 +47,6 @@
         <span v-if="node.status === 'locked'" class="garden-plant__lock" aria-hidden="true">· · ·</span>
       </button>
 
-      <p v-if="hiddenNodeCount" class="garden-scene__more">+ {{ hiddenNodeCount }} 个节点</p>
     </div>
 
     <div v-else class="garden-empty">
@@ -61,12 +60,8 @@
 import { computed } from 'vue'
 import ForestTree from '@/features/fundamentals/ForestTree.vue'
 
-const plantPositions = [
-  { x: 10, row: 0, size: 0.9, label: 'below' }, { x: 24, row: 2, size: 0.72, label: 'above' }, { x: 39, row: 0, size: 1.04, label: 'below' },
-  { x: 55, row: 3, size: 0.8, label: 'above' }, { x: 70, row: 1, size: 1.12, label: 'below' }, { x: 88, row: 3, size: 0.76, label: 'above' },
-  { x: 17, row: 5, size: 1.02, label: 'above' }, { x: 33, row: 6, size: 0.82, label: 'above' }, { x: 49, row: 5, size: 0.92, label: 'above' },
-  { x: 64, row: 7, size: 0.72, label: 'above' }, { x: 78, row: 5, size: 1.05, label: 'above' }, { x: 91, row: 7, size: 0.72, label: 'above' },
-]
+const horizontalOffsets = [-2.8, 1.7, -1.2, 2.4, -2.1, 1.1, 2.7, -1.8]
+const sizeOffsets = [0.92, 1.07, 0.86, 1.12, 0.95, 1.04, 0.88, 1.09]
 
 const props = defineProps({
   nodes: { type: Array, default: () => [] },
@@ -76,8 +71,10 @@ const props = defineProps({
 defineEmits(['select'])
 
 const completedNodes = computed(() => props.nodes.filter((node) => node.status === 'completed'))
-const visibleNodes = computed(() => props.nodes.slice(0, plantPositions.length))
-const hiddenNodeCount = computed(() => Math.max(0, props.nodes.length - visibleNodes.value.length))
+const visibleNodes = computed(() => props.nodes)
+const gardenColumnCount = computed(() => Math.min(6, Math.max(3, Math.ceil(Math.sqrt(visibleNodes.value.length * 1.4)))))
+const gardenRowCount = computed(() => Math.ceil(visibleNodes.value.length / gardenColumnCount.value))
+const gardenSceneStyle = computed(() => ({ '--garden-rows': gardenRowCount.value }))
 const activeNode = computed(() => {
   if (props.activeNodeId === null || props.activeNodeId === undefined) return null
   return props.nodes.find((node) => String(node.id) === String(props.activeNodeId)) || null
@@ -102,10 +99,27 @@ function nodeStageLabel(node) {
 }
 
 function plantStyle(index, node) {
-  const position = plantPositions[index]
+  const position = plantPosition(index, visibleNodes.value.length)
   const stage = nodeStage(node)
-  const size = Math.max(0.28, position.size * [0.28, 0.38, 0.64, 1.02, 1.5][stage])
+  const density = Math.min(1, 15 / Math.max(visibleNodes.value.length, 1))
+  const size = Math.max(0.28, position.size * density * [0.28, 0.38, 0.64, 1.02, 1.5][stage])
   return { '--x': position.x, '--row': position.row, '--size': size }
+}
+
+function plantPosition(index, total) {
+  const columns = Math.min(6, Math.max(3, Math.ceil(Math.sqrt(total * 1.4))))
+  const rows = Math.ceil(total / columns)
+  const rowIndex = Math.floor(index / columns)
+  const columnIndex = index % columns
+  const nodesInRow = Math.min(columns, total - rowIndex * columns)
+  const x = 7 + ((columnIndex + 0.5) / nodesInRow * 86) + horizontalOffsets[index % horizontalOffsets.length]
+  const row = rows <= 1 ? 3 : Math.round(7 - rowIndex / (rows - 1) * 7)
+  return {
+    x: Math.max(7, Math.min(93, x)),
+    row,
+    size: sizeOffsets[index % sizeOffsets.length],
+    label: row >= 2 ? 'above' : 'below',
+  }
 }
 
 function treeVariant(node, offset) {
@@ -125,7 +139,7 @@ function treeVariant(node, offset) {
 .forest-review__count strong { color: var(--accent-deep); font-size: 28px; line-height: 1; }
 .forest-review__count span { margin-left: 3px; }
 
-.garden-scene { position: relative; min-height: 460px; overflow: hidden; isolation: isolate; border: 1px solid #d8e3d5; border-radius: 7px; background: #edf4e9; }
+.garden-scene { position: relative; min-height: max(460px, calc(330px + var(--garden-rows) * 74px)); overflow: hidden; isolation: isolate; border: 1px solid #d8e3d5; border-radius: 7px; background: #edf4e9; }
 .garden-scene::before { position: absolute; z-index: -4; inset: 0; background-image: linear-gradient(#ffffff55 1px, transparent 1px), linear-gradient(90deg, #ffffff55 1px, transparent 1px); background-size: 28px 28px; content: ''; opacity: .36; }
 .garden-scene__sun { position: absolute; z-index: -3; top: 36px; right: 10%; width: 72px; height: 72px; border-radius: 50%; background: #f1d78b; opacity: .64; }
 .garden-scene__cloud { position: absolute; z-index: -3; width: 86px; height: 19px; border-radius: 50%; background: #fff; opacity: .6; }
@@ -144,7 +158,7 @@ function treeVariant(node, offset) {
 .garden-scene__hint { position: absolute; right: 17px; bottom: 13px; margin: 0; color: #537451; font-size: 10px; }.garden-scene__more { position: absolute; top: 14px; right: 15px; margin: 0; color: #5f7e5f; font-size: 11px; font-weight: 800; }
 
 .garden-empty { display: grid; min-height: 300px; grid-template-columns: 180px minmax(0, 1fr); align-items: center; gap: 20px; border: 1px solid #d8e3d5; border-radius: 7px; background: #edf4e9; padding: 15px 28px; }.garden-empty :deep(.forest-tree) { height: 210px; }.garden-empty p { max-width: 270px; color: var(--muted); font-size: 12px; line-height: 1.6; }
-@media (max-width: 720px) { .forest-review { padding: 17px; }.forest-review__header { gap: 11px; flex-wrap: wrap; }.forest-review__status { order: 3; flex-basis: 100%; margin-left: 0; text-align: left; }.garden-scene { min-height: 420px; }.garden-scene__hint { display: none; }.garden-plant:nth-of-type(n + 12) { display: none; }.garden-empty { grid-template-columns: 1fr; gap: 0; padding: 10px 18px 18px; text-align: center; }.garden-empty :deep(.forest-tree) { height: 175px; }.garden-empty p { margin: 0 auto; } }
+@media (max-width: 720px) { .forest-review { padding: 17px; }.forest-review__header { gap: 11px; flex-wrap: wrap; }.forest-review__status { order: 3; flex-basis: 100%; margin-left: 0; text-align: left; }.garden-scene { min-height: max(420px, calc(300px + var(--garden-rows) * 72px)); }.garden-scene__hint { display: none; }.garden-empty { grid-template-columns: 1fr; gap: 0; padding: 10px 18px 18px; text-align: center; }.garden-empty :deep(.forest-tree) { height: 175px; }.garden-empty p { margin: 0 auto; } }
 @media (max-width: 430px) { .garden-scene { min-height: 370px; }.garden-plant { width: clamp(44px, calc(30px + var(--size) * 46px), 82px); }.garden-scene__sun { top: 26px; width: 52px; height: 52px; }.garden-scene__cloud { display: none; } }
 @keyframes garden-ground-pulse { 0%,100% { opacity: .45; transform: scale(.88); } 50% { opacity: .9; transform: scale(1.08); } }
 @media (prefers-reduced-motion: reduce) { .garden-plant.is-active::before { animation: none; } }
