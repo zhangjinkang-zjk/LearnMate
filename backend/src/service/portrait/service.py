@@ -1367,12 +1367,14 @@ class PortraitRadarService:
             logger.debug("雷达画像缓存刷新失败 user_id=%s", user_id, exc_info=True)
 
 
-async def build_learning_guidance(user_id: int) -> str:
-    """读雷达+画像+掌握度，输出显式的 LLM 学习指导文本"""
-    try:
-        radar_data = await PortraitRadarService.get(user_id)
-    except Exception:
-        return ""
+def _render_learning_guidance(radar_data: dict | None, weak_tags: list[str]) -> str:
+    """把雷达维度和弱项知识点排成一段给提示词用的指导文本。
+
+    **纯模板、不调模型。** 名字里的 guidance 指的是"写给模型看的指导"，不是"由模型写的
+    指导" —— 旧 docstring 写成"输出显式的 LLM 学习指导文本"，让每个调用方都以为这里有
+    一次模型调用，实际上一次都没有。它真正的成本在里面那次雷达重算上，所以调用方要用
+    雷达本体时应该走 `build_learning_guidance_with_radar`，不要再自己算第二遍。
+    """
     if not radar_data or not radar_data.get("dimensions"):
         return ""
 
@@ -1429,9 +1431,6 @@ async def build_learning_guidance(user_id: int) -> str:
         lines.append("- 应用能力薄弱：每道困难题附带详细解析")
 
     # 弱项知识点
-    from backend.src.models.exam_model import KnowledgeMastery
-    mastery_records = await KnowledgeMastery.filter(user_id=user_id).all()
-    weak_tags = [m.knowledge_tag for m in mastery_records if m.correct_count / max(m.total_attempts, 1) < 0.5]
     if weak_tags:
         lines.append(f"- 弱项知识点优先出题：{'、'.join(weak_tags[:8])}")
 
@@ -1451,6 +1450,47 @@ async def build_learning_guidance(user_id: int) -> str:
         lines.append("- 内容拆分为小块，降低单次学习时长")
 
     return "\n".join(lines)
+
+
+async def _load_weak_knowledge_tags(user_id: int) -> list[str]:
+    """正确率不到一半的知识点 —— 出题时优先安排。"""
+    from backend.src.models.exam_model import KnowledgeMastery
+
+    records = await KnowledgeMastery.filter(user_id=user_id).all()
+    return [m.knowledge_tag for m in records if m.correct_count / max(m.total_attempts, 1) < 0.5]
+
+
+async def build_learning_guidance_from_radar(user_id: int, radar_data: dict | None) -> str:
+    """雷达本体已经有了 —— 直接渲染，不再算第二遍。
+
+    给"同一个请求里别的地方已经取过雷达"的调用方用（`get_stats` 的弱项维度就是）。
+    """
+    if not radar_data or not radar_data.get("dimensions"):
+        return ""
+    return _render_learning_guidance(radar_data, await _load_weak_knowledge_tags(user_id))
+
+
+async def build_learning_guidance_with_radar(user_id: int) -> tuple[str, dict | None]:
+    """算**一次**雷达，把指导文本和雷达本体一起交出去。
+
+    `make_generation_state`、`generate_path` 这类地方两样都要（文本塞进提示词、雷达拼
+    portrait_context）。它们原来各调一次 `PortraitRadarService.get` —— 而那个函数没有缓存
+    分支，每次都是六维全量重算 + 落库，两遍算的是同一个用户同一时刻的同一份数据，还会在
+    同一把用户级锁上互相排队。返回本体就是让调用方复用这一次的结果。
+
+    雷达算不出来时返回 `("", None)`，和旧行为一致（不抛）。
+    """
+    try:
+        radar_data = await PortraitRadarService.get(user_id)
+    except Exception:
+        return "", None
+    return await build_learning_guidance_from_radar(user_id, radar_data), radar_data
+
+
+async def build_learning_guidance(user_id: int) -> str:
+    """读雷达+画像+掌握度，输出给提示词用的学习指导文本（模板拼接，不调模型）。"""
+    guidance, _ = await build_learning_guidance_with_radar(user_id)
+    return guidance
 
 
 async def extract_portrait_from_chat(

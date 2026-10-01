@@ -13,6 +13,7 @@
 """
 
 from types import SimpleNamespace
+import inspect
 
 import pytest
 
@@ -182,3 +183,30 @@ async def test_repair_returns_ids_so_the_caller_can_refresh_its_snapshot(monkeyp
     assert next(r for r in records if r.node_id == 11).node_status == "locked", (
         "写库和改内存是两件事，内存那份由调用方按返回的 id 更新"
     )
+
+
+# ── 前沿是怎么**长出来**的：出生状态 ─────────────────────────────────────────
+# 修复只兜底；正常路径的前沿必须从一开始就是连续的。这两条钉住出生规则。
+
+
+def test_only_the_first_station_is_unlocked_at_birth():
+    """新建路径时，只有第 1 站是 unlocked，其余全是 locked。
+
+    以前第 2 站起还有一条附加条件 ——"没有前置节点也算可学"。前置节点由路径生成模型
+    给出，它漏给一个（执行器提示词原本写的是"第一个节点的 prerequisites 为空数组"，
+    而它一次只看得到**本组**四个节点，于是每一组的组首都拿到空数组），那一站出生就
+    直接放行。实测 Transformer 那条 18 站的路径，前沿断成「已完成 ×10 → 未解锁 ×5 →
+    可开始 ×2 → 未解锁」，页面按「第 N / M 个节点」展示，路线图却画不出来。
+    """
+    assert [helpers.initial_node_status(i) for i in range(6)] == [
+        "unlocked", "locked", "locked", "locked", "locked", "locked",
+    ]
+
+
+def test_initial_status_takes_only_a_position():
+    """它只能看位置，看不到 `prerequisites` —— 签名本身就是那条约束的守卫。
+
+    出生条件一旦重新变回"看前置决定"，散开的前沿就会跟着回来：`prerequisites` 是路径
+    生成模型给的自由文本，不是可以信赖的门禁依据。
+    """
+    assert list(inspect.signature(helpers.initial_node_status).parameters) == ["position"]

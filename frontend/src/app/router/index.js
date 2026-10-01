@@ -30,7 +30,9 @@ const router = createRouter({
     { path: '/learnmate-summary', name: 'learnmateSummary', component: PortraitSummaryPage, meta: { layout: 'immersive' } },
     { path: '/onboarding/diagnosis', name: 'diagnosis', component: DiagnosisPage, meta: { layout: 'immersive', requiresAuth: true } },
     { path: '/onboarding/diagnosis/result', name: 'diagnosisResult', component: DiagnosisResultPage, meta: { layout: 'immersive', requiresAuth: true } },
-    { path: '/learning/overview', name: 'learningOverview', component: OverviewPage, meta: { requiresAuth: true } },
+    // contentLayout: 'workspace' —— 概览是两栏版式，默认那个 width: min(1180px, 100%) 的
+    // 阅读版心在 2.5K 屏上会把右栏挤没。这是仓库里既有的全宽机制（和基础学习、进阶学习同款）。
+    { path: '/learning/overview', name: 'learningOverview', component: OverviewPage, meta: { requiresAuth: true, contentLayout: 'workspace' } },
     { path: '/learning/task-analysis', redirect: '/learning/overview' },
     {
       path: '/learning/fundamentals',

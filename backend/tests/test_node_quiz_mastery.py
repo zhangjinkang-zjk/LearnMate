@@ -153,7 +153,10 @@ def test_question_tags_truncates_to_the_column_width():
 @pytest.mark.parametrize(
     "correct_count,total_attempts,is_correct,expected_level",
     [
-        (0, 0, True, "mastered"),
+        # 原来的第一行是 `(0, 0, True, "mastered")` —— 一次答对就宣称掌握。那不是期望值，
+        # 那是被钉住的 bug，已经拆成下面两条专门的测试（见
+        # test_a_single_correct_answer_does_not_claim_mastery 和
+        # test_mastery_returns_once_there_are_enough_samples）。
         (9, 10, True, "mastered"),
         (7, 9, True, "proficient"),
         (6, 9, True, "proficient"),
@@ -180,3 +183,47 @@ async def test_mastery_level_follows_running_accuracy(
     assert store["极限定义"].correct_count == correct_count + (1 if is_correct else 0)
     assert store["极限定义"].mastery_level == expected_level
     assert store["极限定义"].saved == 1
+
+
+@pytest.mark.asyncio
+async def test_a_single_correct_answer_does_not_claim_mastery(monkeypatch):
+    """第一次答对就是 1/1 = 100%，但那是样本不够，不是"已掌握"。
+
+    掌握度往下游走得很远：`_get_weak_tags` 拿 beginner/learning 挑薄弱知识点、
+    `sync_to_portrait` 把它写进画像的 strengths/weaknesses、雷达「广度」数的是掌握度
+    记录条数。一次作答就把知识点从"薄弱"翻成"掌握"，等于让一次运气直接改画像。
+    """
+    store, _ = _fake_store(monkeypatch)
+
+    await exam_service.update_knowledge_mastery(9, '["极限定义"]', True)
+
+    assert store["极限定义"].total_attempts == 1
+    assert store["极限定义"].correct_count == 1
+    assert store["极限定义"].mastery_level == "learning", "一次答对不该直接 mastered"
+
+
+@pytest.mark.asyncio
+async def test_a_single_wrong_answer_is_still_beginner(monkeypatch):
+    """掉档方向别搞反：样本不足是"不许宣称掌握"，不是"一律降成薄弱"。"""
+    store, _ = _fake_store(monkeypatch)
+
+    await exam_service.update_knowledge_mastery(9, '["极限定义"]', False)
+
+    assert store["极限定义"].mastery_level == "beginner"
+
+
+@pytest.mark.asyncio
+async def test_mastery_returns_once_there_are_enough_samples(monkeypatch):
+    """门坎只是"少样本"，不是"永远不给" —— 攒够三次高正确率还是要判 mastered。
+
+    没有这条，"把 _MIN_ATTEMPTS_FOR_STRONG_LEVEL 调成 999" 也能让上面那条绿。
+    """
+    seeded = FakeMastery("极限定义")
+    seeded.total_attempts = 2
+    seeded.correct_count = 2
+    store, _ = _fake_store(monkeypatch, {"极限定义": seeded})
+
+    await exam_service.update_knowledge_mastery(9, '["极限定义"]', True)
+
+    assert store["极限定义"].total_attempts == 3
+    assert store["极限定义"].mastery_level == "mastered"

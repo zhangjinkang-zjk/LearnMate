@@ -185,7 +185,10 @@ async def test_the_service_caps_only_the_first_subject(monkeypatch):
     """不传 node_counts 时（诊断收尾那条入口就是这么调的），第一条也走封顶。"""
     calls: list[tuple[str, int]] = []
 
-    async def fake_generate_path(subject, user_id, difficulty="medium", node_count=0, force_regenerate=False):
+    async def fake_generate_path(
+        subject, user_id, difficulty="medium", node_count=0,
+        force_regenerate=False, prewarm_first_node=True,
+    ):
         calls.append((subject, node_count))
         return {"path_id": len(calls), "subject": subject}
 
@@ -197,11 +200,65 @@ async def test_the_service_caps_only_the_first_subject(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_only_the_entry_subject_prewarms_its_first_node(monkeypatch):
+    """四条路径只给入口那条预热首节点 —— 另外三条的章节内容等学生真的点开再生成。
+
+    预热一份节点内容 = 文档 + PPT + 思维导图 + 检测题，一次四条就是四份；而学生一次只学
+    一条路径，另外三份的主人可能永远不点开那条路。
+    """
+    flags: list[bool] = []
+
+    async def fake_generate_path(
+        subject, user_id, difficulty="medium", node_count=0,
+        force_regenerate=False, prewarm_first_node=True,
+    ):
+        flags.append(prewarm_first_node)
+        return {"path_id": len(flags), "subject": subject}
+
+    monkeypatch.setattr(path_service.PathService, "generate_path", staticmethod(fake_generate_path))
+
+    await path_service.PathService.generate_subject_paths(21, ["甲", "乙", "丙"])
+
+    assert flags == [True, False, False]
+
+
+@pytest.mark.asyncio
+async def test_reusing_a_cached_path_also_keeps_the_other_subjects_cold(monkeypatch):
+    """复用回来的路径走的是 enroll_path 那条补预热的支路，那里也不能把三条又生成一遍。
+
+    `enroll_path` 内部的判据是"首节点还缺资料或没有测验" —— 批量入口刚决定不预热，这个
+    判据正好会把三条全部命中。所以 prewarm_first_node 必须一路传进去（诊断收尾和「确认
+    画像」相隔几十秒，第二次拿到的就是这一批 cached）。
+    """
+    enroll_flags: list[bool] = []
+
+    async def fake_generate_path(
+        subject, user_id, difficulty="medium", node_count=0,
+        force_regenerate=False, prewarm_first_node=True,
+    ):
+        return {"path_id": 1, "subject": subject, "cached": True}
+
+    async def fake_enroll_path(path_id, user_id, prewarm_first_node=True):
+        enroll_flags.append(prewarm_first_node)
+        return {}
+
+    monkeypatch.setattr(path_service.PathService, "generate_path", staticmethod(fake_generate_path))
+    monkeypatch.setattr(path_service.PathService, "enroll_path", staticmethod(fake_enroll_path))
+
+    await path_service.PathService.generate_subject_paths(22, ["甲", "乙", "丙"])
+
+    assert enroll_flags == [True, False, False]
+
+
+@pytest.mark.asyncio
 async def test_one_failed_subject_does_not_kill_the_rest(monkeypatch):
     """把四条捆在一起抛，等于一条失败就一条路都没有。"""
     done_calls: list[str] = []
 
-    async def fake_generate_path(subject, user_id, difficulty="medium", node_count=0, force_regenerate=False):
+    async def fake_generate_path(
+        subject, user_id, difficulty="medium", node_count=0,
+        force_regenerate=False, prewarm_first_node=True,
+    ):
         if subject == "乙":
             raise RuntimeError("这条挂了")
         done_calls.append(subject)
@@ -226,7 +283,10 @@ async def test_two_entries_do_not_generate_the_same_subject_twice(monkeypatch):
     generated: set[str] = set()
     model_calls: list[str] = []
 
-    async def fake_generate_path(subject, user_id, difficulty="medium", node_count=0, force_regenerate=False):
+    async def fake_generate_path(
+        subject, user_id, difficulty="medium", node_count=0,
+        force_regenerate=False, prewarm_first_node=True,
+    ):
         # 顺序要照真实实现来：**先查库、再跑整张图、几分钟后才落库**。
         # 如果写成"先记录再等待"，第二个调用方永远看不到竞态，这条测试就成了永远通过的摆设
         # —— 变异测试验过两次：去掉锁它照样绿。

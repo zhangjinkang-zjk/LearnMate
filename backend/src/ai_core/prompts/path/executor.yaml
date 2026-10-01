@@ -28,7 +28,7 @@ system: |
 
   ## 约束
   1. knowledge_tags：每个节点 2-4 个知识点标签，**全路径所有节点的 knowledge_tags 不可重复**
-  2. prerequisites：依赖的前置节点 order_index 列表，第一个节点的 prerequisites 为空数组 []；如果 PathPlanner 给了 prerequisite_topics，要映射到对应 order_index
+  2. prerequisites：依赖的前置节点 order_index 列表。**只有整条路径的第 1 个节点**（order_index = 1 的那一个）的 prerequisites 为空数组 []；本组里其余的节点**一律不能为空**，至少要指向一个 order_index 比它小的节点——哪怕它是本组的第一个。这里说的"第一个"是整条路径的第一个，不是本组的第一个。如果 PathPlanner 给了 prerequisite_topics，要映射到对应 order_index
   3. resource_types：默认且优先使用 document+mindmap；document 是完整主讲文档，mindmap 只负责梳理本节点知识结构。只有输入明确要求其他形态时才增加 ppt/video/case/reading，掌握检查由独立测验流程负责
   4. quiz_config：count 默认 3、threshold 默认 0.7
   5. order_index 必须与 topic_outline 中的位置一致

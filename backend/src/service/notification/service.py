@@ -214,17 +214,28 @@ async def _get_weak_tags(user_id: int) -> list[str]:
 
 
 async def _get_recent_error_tags(user_id: int) -> list[str]:
-    """最近一周错题涉及的知识点标签"""
+    """最近一周错题涉及的知识点标签
+
+    标签在**题目**上（`ExamQuestion.knowledge_tags`，`exam_model.py:15`），`ExamRecord`
+    自己**没有**这个字段（`:31`）。这里原来读的是 `r.knowledge_tags` —— Tortoise 对未声明
+    属性直接抛 AttributeError，被 `generate_weekly_report_and_ai_tip` 那层的 except 吞掉：
+    结果是"最近一周有错题"的用户永远收不到 AI 建议（周报本体不受影响，它在这之前就落库了）。
+    守门测试见 `backend/tests/test_weekly_report_error_tags.py`。
+
+    要预取 `question`：不预取的话这里会变成每条错题一次查询（最多 10 次）—— 也就是报告里
+    说的那种 N+1。
+    """
     one_week_ago = datetime.now() - timedelta(days=7)
     records = await ExamRecord.filter(
         user_id=user_id,
         is_correct=False,
         created_at__gte=one_week_ago,
-    ).limit(10).all()
+    ).order_by("-created_at").limit(10).prefetch_related("question").all()
 
     tags: set[str] = set()
     for r in records:
-        kt = r.knowledge_tags or ""
+        question = getattr(r, "question", None)
+        kt = (getattr(question, "knowledge_tags", None) or "") if question else ""
         if isinstance(kt, str):
             try:
                 tag_list = json.loads(kt)

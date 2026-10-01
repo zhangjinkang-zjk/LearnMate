@@ -204,6 +204,24 @@ async def update_progress_resource_ids(progress, all_ids: list[int]):
     await UserPathProgress.filter(id=progress.id).update(**update_fields)
 
 
+def initial_node_status(position: int) -> str:
+    """新建路径时，第 `position` 个节点（从 0 起）的初始状态。
+
+    **只有整条路径的第 1 站出生即解锁**，其余一律 `locked` —— 包括那些没有前置节点的。
+
+    这条规则以前是 `"unlocked" if (position == 0 or not has_prereqs) else "locked"`，
+    也就是把"没有前置节点"也当成"可以学"。听起来合理，实际会把路径的解锁前沿撕开：
+    节点的 `prerequisites` 由路径生成模型给出，它漏给一个，那一站就直接放行，和它前面
+    的站学没学完无关。实测 Transformer 那条 18 站的路径，前沿断成了三截 —— 前 10 站
+    已完成、中间 5 站锁着、后面 3 站却能进；页面按「第 N / M 个节点」展示，路线图却画
+    不出来。
+
+    线性是这条路径唯一的语义：`unlock_next_node` 只在交卷后解锁 `order_index + 1`，
+    `_fallback_group_nodes` 也只指向上一站。出生规则必须和它们一致。
+    """
+    return "unlocked" if position == 0 else "locked"
+
+
 async def reconcile_completed_prerequisites(progress_records, node_order: dict[int, int] | None = None):
     """修复线性路径中不可能的回退状态。
 

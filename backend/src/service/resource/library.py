@@ -181,12 +181,25 @@ class ResourceLibraryService:
         else:
             records = await GeneratedResource.filter(user_id=user_id).order_by("-created_at").all()
 
-        result = []
+        # 三张"按当前用户标在有资源上"的表都一次性查回来 —— 原来 liked / favorited 是
+        # 循环里逐条 `.exists()`，N 份资源就是 2N 次往返（旁边的 read_statuses 早就是批量做法了）。
+        resource_ids = [record.id for record in records]
+
+        from backend.src.models.study_model import ResourceCollection, ResourceLike
+
         read_statuses = await ResourceReadStatus.filter(
             user_id=user_id,
-            resource_id__in=[record.id for record in records],
+            resource_id__in=resource_ids,
         ).all() if records else []
         read_map = {status.resource_id: bool(status.is_read) for status in read_statuses}
+        liked_ids = set(await ResourceLike.filter(
+            user_id=user_id, resource_id__in=resource_ids,
+        ).values_list("resource_id", flat=True)) if records else set()
+        favorited_ids = set(await ResourceCollection.filter(
+            user_id=user_id, resource_id__in=resource_ids,
+        ).values_list("resource_id", flat=True)) if records else set()
+
+        result = []
         for record in records:
             ext = FILE_EXT_MAP.get(record.resource_type, "md")
             preview = record.content[:200] if record.content else ""
@@ -222,10 +235,8 @@ class ResourceLibraryService:
                 item["url"] = record.file_url
                 item["preview_url"] = record.file_url if record.resource_type in ("html", "video", "external_video") else ""
 
-            from backend.src.models.study_model import ResourceCollection, ResourceLike
-
-            item["liked"] = await ResourceLike.filter(user_id=user_id, resource_id=record.id).exists()
-            item["favorited"] = await ResourceCollection.filter(user_id=user_id, resource_id=record.id).exists()
+            item["liked"] = record.id in liked_ids
+            item["favorited"] = record.id in favorited_ids
             result.append(item)
         return result
 

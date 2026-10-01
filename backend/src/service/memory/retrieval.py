@@ -42,6 +42,9 @@ MEMORY_SIM_THRESHOLD = float(os.getenv("MEMORY_SIM_THRESHOLD", "0.30"))
 SAME_GROUP_BOOST = float(os.getenv("MEMORY_SAME_GROUP_BOOST", "1.35"))
 CONTEXT_TTL_SECONDS = int(os.getenv("MEMORY_CONTEXT_TTL_SECONDS", "5"))
 KV_TOP_K = int(os.getenv("MEMORY_KV_TOP_K", "12"))
+# 候选池的防呆上限，见 retrieve_kvs 的说明。它**不是**业务口径：现在的候选集由
+# `MAX_KV_PER_USER` 和"只取当前会话的 group 级"两条撑着，远到不了这个数。
+_KV_CANDIDATE_CEILING = 200
 EPISODE_TOP_K = int(os.getenv("MEMORY_EPISODE_TOP_K", "3"))
 MESSAGE_TOP_K = int(os.getenv("MEMORY_MESSAGE_TOP_K", "3"))
 
@@ -175,11 +178,20 @@ async def retrieve_messages(user_id: int, chat_group_id: int, query: str, top_k:
 
 
 async def retrieve_kvs(user_id: int, chat_group_id: int, query: str = "", top_k: int = KV_TOP_K):
-    """长期 KV：user 级全部 + 本组 group 级；query 命中 subjects 词面加权排前。"""
+    """长期 KV：user 级全部 + 本组 group 级；query 命中 subjects 词面加权排前。
+
+    **候选集不再按 `top_k` 预截断。** 原来是 `.order_by("-confidence").limit(top_k)`，
+    也就是先在 SQL 里按置信度切出 12 条，boost 只在这 12 条里重排 —— 高相关但置信度中等的
+    记忆永远进不了候选，"按查询加权"退化成"给最可信的 12 条换个顺序"。
+
+    为什么敢放开：候选集本身就是有界的 —— user 级由 `memory/service._evict_kv_if_over`
+    压在 `MAX_KV_PER_USER`（默认 40），group 级只取**当前这个会话**的行。下面那个 ceiling
+    是防呆（比如有人把 `MEMORY_MAX_KV` 调到很大），不是业务口径；调它不会改变现在的排序结果。
+    """
     rows = await MemoryKV.filter(
         Q(user_id=user_id),
         Q(scope="user") | Q(scope="group", source_group_id=chat_group_id),
-    ).order_by("-confidence", "-updated_at").limit(top_k).all()
+    ).order_by("-confidence", "-updated_at").limit(_KV_CANDIDATE_CEILING).all()
 
     out = []
     q = (query or "").lower()

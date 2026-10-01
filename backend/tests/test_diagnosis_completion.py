@@ -131,7 +131,7 @@ async def test_path_generation_runs_through_asyncio_gather(monkeypatch):
     async def fake_sync(user_id, direction, goal, limit):
         return ["科目A", "科目B"]
 
-    async def fake_generate_path(subject, user_id, difficulty, node_count):
+    async def fake_generate_path(subject, user_id, difficulty, node_count, **kwargs):
         generated.append(subject)
         return {"subject": subject}
 
