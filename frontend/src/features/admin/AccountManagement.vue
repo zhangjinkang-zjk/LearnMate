@@ -74,7 +74,7 @@ const viewTitles = { accounts: '账号管理', activity: '全站学习活跃度'
 const viewDescriptions = {
   accounts: '查看账号资料，编辑学校信息，或为用户重置密码。',
   activity: '从学习天数、投入时长和最近学习记录了解用户的学习情况。',
-  push: '先选择接收人，再选择资源；一次操作即可发送通知并安排学习任务。',
+  push: '先选择接收人，再选择资源，通过站内通知发送学习建议。',
 }
 const search = ref(''), days = ref(7), activity = ref('all'), sort = ref('study_seconds'), page = ref(1), total = ref(0), items = ref([])
 const summary = ref({ total_users: 0, active_users: 0, study_seconds: 0 }), selected = ref([]), pushRecipients = ref([])
@@ -135,6 +135,6 @@ async function saveUser() {
   } catch (cause) { dialogError.value = cause.message }
   finally { isSaving.value = false }
 }
-function onSent(result) { pushRecipients.value = []; notice.value = `已为 ${result.created} 人发送通知并创建任务${result.skipped ? `，${result.skipped} 人已有相同任务，已跳过` : ''}` }
+function onSent(result) { pushRecipients.value = []; notice.value = `已为 ${result.created} 人发送资源推荐通知${result.skipped ? `，${result.skipped} 人已收到相同推荐，已跳过` : ''}` }
 onMounted(load)
 </script>

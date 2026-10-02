@@ -1,6 +1,6 @@
 # 管理员前端交接
 
-前端页面已实现，后端同事继续负责接口完善、部署和联调。页面没有使用模拟用户数据，也不把任务、角色、活跃度持久化到 localStorage。原有后端改动保留在既有提交中，本轮仅收尾前端。
+前端页面已实现，后端同事继续负责接口完善、部署和联调。页面没有使用模拟用户数据，也不把角色、活跃度持久化到 localStorage。用户已取消独立学习任务功能，当前推送交互改为站内通知。后端需按下面的新约定调整原有推送实现，本轮未修改后端。
 
 ## 页面入口
 
@@ -10,15 +10,16 @@
 | `/admin?tab=accounts` | 账号搜索、学校/年级/专业编辑、重置密码、删除普通账号 |
 | `/admin?tab=activity` | 7/30 天汇总、全站排行、活跃/不活跃筛选、个人学习明细 |
 | `/admin?tab=push` | 跨页选择最多 100 人、搜索并选择公开资源、附带建议推送 |
-| `/learning/assignments` | 用户查看待完成/已完成任务、打开资源、标记完成 |
-| `/learning/assignments?task=123` | 通知点击进入任务，并自动打开对应资源 |
+| `/notifications?resource=123` | 在现有通知页打开推荐资源 |
+
+独立学习任务页面、侧边栏入口及任务 API 调用已删除。旧 `/learning/assignments` 地址仅兼容跳回通知页。
 
 管理员从普通登录页登录，登录响应 `role=admin` 时默认进入管理中心；侧边栏根据 `/user/read_user` 的真实角色显示入口。访问 `/admin` 时再次向服务端验证角色。前端检查不能代替后端鉴权。
 
 ## 公共约定
 
 - 请求统一通过 `frontend/src/shared/api/httpClient.js`，携带 `Authorization: Bearer <token>` 及兼容的 `token` header。实际后端地址由该现有客户端配置。
-- 管理员、任务接口封装位于 `frontend/src/shared/api/adminApi.js`。页面不拼接后端地址。
+- 管理员接口封装位于 `frontend/src/shared/api/adminApi.js`，通知和资源沿用 `notificationApi.js`、`resourceApi.js`。页面不拼接后端地址。
 - 成功信封为 `{ "code": 200, "data": ... }`；无数据的写操作可省略 `data`。
 - 业务失败可返回非 200 的 `code` 与中文 `msg`，也支持 HTTP 错误中的字符串 `detail`。HTTP 401 由现有公共客户端清理登录并跳转。
 - 时间字段使用带时区的 ISO 8601 字符串；无记录返回 `null`，不能用注册时间代替最近登录。
@@ -57,23 +58,21 @@ Account 使用字段：`id`, `username`, `role`, `email`, `university`, `grade`,
 
 前端学校/年级/专业长度限制分别为 100/20/200；密码至少 8 个字符且 UTF-8 不超过 72 字节。确认密码不发送到后端，不保存、不展示明文密码。管理员账号不提供删除按钮；服务端仍须独立校验。密码哈希、重置后的既有会话处理和账号删除关联数据策略由后端负责。
 
-## 推送与学习任务
+## 资源推送通知
 
 | 方法与接口 | 请求 | 成功 `data` |
 | --- | --- | --- |
 | `POST /admin/resource-pushes` | `{ resource_id, user_ids: number[], message }` | `{ created: number, skipped: number }` |
-| `GET /study/assignments` | 当前登录用户 | `Assignment[]` |
 | `GET /resource/{id}` | 当前登录用户 | 完整资源正文与文件地址，沿用既有资源接口 |
-| `POST /study/assignments/{id}/complete` | 无 | 更新后的完整 Assignment |
 
-Assignment 使用字段：`id`, `title`, `message`, `resource_id`, `resource_type`, `is_available`, `created_at`, `completed_at`。未完成时 `completed_at=null`。
+后端需停止在推送时创建学习任务，仅保存定向资源推荐通知。`created` 表示成功接收推荐的人数，`skipped` 表示去重跳过的人数。
 
-前端批量选择上限 100 人；推送备注最大 1,000 字符。同一用户已有相同资源任务时跳过，使用返回的计数向管理员反馈。
+前端批量选择上限 100 人；推送备注最大 1,000 字符。同一用户已有相同资源推荐时可跳过，使用返回的计数向管理员反馈。
 
-通知与任务必须在服务端同一事务保存，通知为定向消息，`target_url` 使用 `/learning/assignments?task={任务ID}`，不能写成旧版路径。推送不应把私人资源自动变为公开资源。读取/完成任务必须按当前登录用户隔离。资源删除或下架后保留任务标题，返回 `is_available=false`；前端会禁用查看和完成按钮。
+通知为定向消息，`target_url` 使用 `/notifications?resource={资源ID}`。已有指向 `/learning/assignments?task=...` 的推荐通知需要由后端根据旧任务的资源 ID 更新跳转链接及通知文案。推送不应把私人资源自动变为公开资源。资源删除或下架时，资源读取接口应返回明确错误，通知页显示错误与重试入口。
 
 ## 联调重点与验证边界
 
 前端构建与 `git diff --check` 可独立运行；当前浏览器工具未连接，未完成桌面/移动真实截图验收。页面已包含响应式表格滚动、弹窗、加载/空态/错误重试、未保存确认和提交禁用。
 
-后端接手后应实际验证：普通用户/失效 token 的权限、并发审核、密码重置、排行榜时间边界、重复推送、通知与任务事务、跨账号任务访问、资源下架后的任务状态。工作区中 `backend/tests/test_admin_management.py` 是上一轮准备的未执行测试草稿，未纳入本轮前端提交。
+后端接手后应实际验证：普通用户/失效 token 的权限、并发审核、密码重置、排行榜时间边界、重复推荐、通知接收人隔离、资源下架后的访问。此前准备的管理员测试草稿含旧学习任务流程，需要同步更新。

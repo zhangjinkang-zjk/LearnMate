@@ -65,7 +65,9 @@ export const resourceApi = {
 
   async get(resourceId) {
     if (!resourceId) throw new Error('资源标识无效')
-    return unwrap(await httpClient.get(`/resource/${resourceId}`))
+    const response = await httpClient.get(`/resource/${resourceId}`)
+    if (response.data?.code && response.data.code !== 200) throw new Error(response.data.msg || '资源暂时无法查看')
+    return unwrap(response)
   },
 
   async list(visibility) {

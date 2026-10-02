@@ -2,7 +2,7 @@
   <ActionDialog title="推送学习资源" :busy="isSending" @close="emit('close')">
     <div class="admin-dialog-content">
       <p>接收人：{{ recipients.map(user => user.username).join('、') }}（{{ recipients.length }} 人）</p>
-      <p class="admin-hint">资源将发送到站内通知，并加入每位用户的学习任务。已有相同任务的用户会自动跳过。</p>
+      <p class="admin-hint">用户会收到资源推荐通知，点击通知即可查看资源。</p>
       <form class="admin-toolbar" @submit.prevent="searchResources"><label class="admin-search"><span>选择已审核的公开资源</span><input v-model.trim="search" maxlength="100" placeholder="搜索资源标题" :disabled="isSending" /></label><button class="button button--quiet" :disabled="isLoading || isSending">查询</button></form>
       <p v-if="error" class="admin-error" role="alert">{{ error }} <button class="admin-link" :disabled="isLoading || isSending" @click="load">重新读取资源</button></p>
       <p v-if="isLoading" role="status">正在读取资源…</p>
@@ -12,7 +12,7 @@
       </div>
       <div class="admin-pagination"><span>共 {{ total }} 份 · 第 {{ page }} 页</span><button class="button button--quiet" :disabled="page === 1 || isLoading || isSending" @click="changePage(-1)">上一页</button><button class="button button--quiet" :disabled="page * 20 >= total || isLoading || isSending" @click="changePage(1)">下一页</button></div>
       <label><span>学习建议（可选）</span><textarea v-model.trim="message" rows="3" maxlength="1000" :disabled="isSending" placeholder="例如：建议先阅读前两节，再完成课后练习。" /></label>
-      <div class="admin-dialog-actions"><button class="button button--quiet" :disabled="isSending" @click="emit('close')">取消</button><button class="button button--primary" :disabled="!selectedId || isSending || isLoading" @click="send">{{ isSending ? '推送中…' : '推送并创建任务' }}</button></div>
+      <div class="admin-dialog-actions"><button class="button button--quiet" :disabled="isSending" @click="emit('close')">取消</button><button class="button button--primary" :disabled="!selectedId || isSending || isLoading" @click="send">{{ isSending ? '推送中…' : '推送资源' }}</button></div>
     </div>
   </ActionDialog>
 </template>

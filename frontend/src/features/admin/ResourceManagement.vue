@@ -39,7 +39,7 @@
     </div>
   </ActionDialog>
   <ActionDialog v-if="deleteTarget" title="删除资源" :busy="isSaving" @close="deleteTarget = null">
-    <div class="admin-dialog-content"><p>确定删除《{{ deleteTarget.topic }}》？此操作无法撤销，相关学习任务将显示资源不可用。</p><p v-if="dialogError" class="admin-error" role="alert">{{ dialogError }}</p><div class="admin-dialog-actions"><button class="button button--quiet" :disabled="isSaving" @click="deleteTarget = null">取消</button><button class="button button--primary" :disabled="isSaving" @click="remove">{{ isSaving ? '删除中…' : '确认删除' }}</button></div></div>
+    <div class="admin-dialog-content"><p>确定删除《{{ deleteTarget.topic }}》？此操作无法撤销。</p><p v-if="dialogError" class="admin-error" role="alert">{{ dialogError }}</p><div class="admin-dialog-actions"><button class="button button--quiet" :disabled="isSaving" @click="deleteTarget = null">取消</button><button class="button button--primary" :disabled="isSaving" @click="remove">{{ isSaving ? '删除中…' : '确认删除' }}</button></div></div>
   </ActionDialog>
 </template>
 <script setup>

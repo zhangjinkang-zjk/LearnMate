@@ -58,7 +58,7 @@ const router = createRouter({
     { path: '/profile', name: 'profile', component: ProfilePage, meta: { requiresAuth: true } },
     { path: '/notifications', name: 'notifications', component: NotificationsPage, meta: { requiresAuth: true } },
     { path: '/admin', name: 'admin', component: () => import('@/pages/admin/AdminPage.vue'), meta: { requiresAuth: true, requiresAdmin: true, contentLayout: 'workspace' } },
-    { path: '/learning/assignments', name: 'assignments', component: () => import('@/pages/learning/AssignmentsPage.vue'), meta: { requiresAuth: true } },
+    { path: '/learning/assignments', redirect: '/notifications' },
     { path: '/planner', name: 'planner', component: PlannerPage, meta: { requiresAuth: true } },
     { path: '/:pathMatch(.*)*', redirect: '/learning/overview' },
   ],
