@@ -127,7 +127,7 @@ onMounted(() => {
 <style scoped>
 /* 宽度上限：页脚在 1180 以下会叠成一栏，那时这一栏有 900 多像素宽，六根柱子会各自
    漂在一片空白里。封顶之后柱子继续按比例长，只是不再跟着容器无限拉开。 */
-.bars { display: grid; gap: 4px; max-width: 640px; }
+.bars { display: grid; width: 100%; max-width: 640px; gap: 4px; }
 /* `display: block` 去掉 svg 的行内基线间隙 —— 留着它，柱子底下会多出一条缝。 */
 .bars__plot { display: block; }
 /* 基线用 `--line`（页面里所有分隔线的颜色），它是坐标系不是数据。 */

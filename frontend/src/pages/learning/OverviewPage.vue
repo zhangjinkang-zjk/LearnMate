@@ -671,7 +671,7 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
    是 40px 的路线，56 让它上下各留 8px，仍然是"一行一条路径"的疏密。 */
 /* `--data-table-pad: 0`：表没有外框了（见 `DataTable.vue`），内容要和上面的区块标题
    对齐到同一条左边线，再留 28px 内边距就会整张表缩进去一截。 */
-.overview-page { --ink: #46504a; --data-table-row-height: 56px; --data-table-pad: 0px; display: grid; align-content: start; gap: clamp(10px, 1.4vh, 16px); width: 100%; max-width: 1760px; height: 100%; margin: 0 auto; overflow: hidden; }
+.overview-page { --ink: #46504a; --data-table-row-height: clamp(52px, 5vh, 72px); --data-table-pad: 0px; --data-table-gap: clamp(8px, 1vw, 20px); display: grid; align-content: start; gap: clamp(10px, 1.4vh, 16px); width: 100%; max-width: min(100%, 1920px); height: 100%; margin: 0 auto; overflow: hidden; }
 
 /* 主卡 + 走势图。**这一行是整页唯一一处不等宽的排布**，也是它存在的理由：两块通栏大矩形
    摞起来会读成"两个盒子"，拆成一宽一窄就把主次说清楚了 —— 左边是"现在做什么"（主），
@@ -680,12 +680,12 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
    0.55 这个比例是照**柱子**定的，不是照感觉：走势图那一栏减去内边距要有 540px 左右，
    六根柱子才会是 51px 宽、间隔 40px 那种正常的柱状图；再宽就变成六块色板漂在空地上。
    阈值 1420 也不是随手写的：再窄下去主卡里的标题 + 按钮就放不到一行了。 */
-.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.55fr); gap: 0 40px; align-items: center; }
+.top { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .75fr); gap: 0 clamp(20px, 2.2vw, 40px); align-items: center; }
 
-.context { display: flex; align-items: baseline; gap: 8px; margin: 0; color: var(--ink); font-size: 14px; white-space: nowrap; }
+.context { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin: 0; color: var(--ink); font-size: 14px; line-height: 1.5; }
 .context__kicker { color: var(--muted); font-size: 12px; }
 .context__sep { color: var(--line); }
-.context b { overflow: hidden; font-weight: 500; text-overflow: ellipsis; }
+.context b { min-width: 0; overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 /* 这一行右端原来挂着一颗「点击查看学习画像」。删掉有两个理由：一是它的去处现在由页脚
    那块「个人画像」承担，同一页上不该有两个入口通向同一页；二是它挂不住 —— 这行是
    `white-space: nowrap` 的一句长话（方向 + 目标），目标写得长时那颗链接会被挤到
@@ -714,7 +714,7 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
 .focus__lead { margin: 0; color: #a9bdb0; font-size: 12px; font-weight: 600; letter-spacing: .06em; }
 /* 40 是这一页字号阶梯里的 display 那一档。原来是 clamp(38px, 2.7vw, 60px) —— 在 2.5K 屏上
    顶上 60px，那已经是官网首屏的号，不是工作台的。 */
-.focus__title { margin: 0; color: #f2f7ec; font-size: 32px; font-weight: 600; letter-spacing: -.01em; line-height: 1.12; }
+.focus__title { margin: 0; color: #f2f7ec; font-size: clamp(24px, 2.2vw, 40px); font-weight: 600; letter-spacing: -.01em; line-height: 1.12; }
 .focus__where { margin: 0; color: #a9bdb0; font-size: 14px; }
 /* 「为什么是它」比 `where` 低一档：它是对上面那句话的补充说明，不是又一条标题。
    同一块面上靠字号拉开层次，不再多引进一种颜色。 */
@@ -738,7 +738,7 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
 
 /* ── 学习方向表 ── */
 .paths { display: grid; gap: 10px; }
-.paths__head { display: flex; align-items: baseline; gap: 14px; }
+.paths__head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px clamp(12px, 1.2vw, 20px); }
 .paths__title { margin: 0; color: var(--ink); font-size: 20px; font-weight: 600; }
 /* 总账一行：跨路径的节点数、已学完数、总体正确率。用间距分组，不用中圆点 ——
    中圆点把三个不相干的数连成一句，读起来像元信息栏。 */
@@ -749,7 +749,7 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
 
 /* 列宽走 --data-table-columns（在模板里由 pathColumnTemplate 绑定），表头和表体读同一个值。 */
 .row__no { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
-.row__name { overflow: hidden; color: var(--ink); font-size: 16px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.row__name { min-width: 0; overflow: hidden; color: var(--ink); font-size: clamp(14px, 1vw, 16px); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 /* 这里原来有一条 `.row.is-current .row__name { color: var(--accent-deep) }`，从来没生效过：
    `DataTable` 给当前行加的是 `data-table__row--current`，不是 `row is-current`。
    删掉而不是改对 —— 当前行已经有左侧 4px 色条 + 整行浅绿底纹（组件自带），
@@ -955,5 +955,41 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
 @media (min-width: 1101px) and (max-height: 900px) {
   .overview-page { height: auto; overflow: visible; }
   :global(.page-container:has(.overview-page)) { height: auto; overflow-y: auto; }
+}
+
+/* 中等宽度桌面仍然保留主卡片和趋势图并排，列宽由容器空间共同分配。 */
+@media (min-width: 1101px) {
+  .top { grid-template-columns: minmax(0, 1.35fr) minmax(300px, .75fr); gap: 0 clamp(20px, 2.2vw, 40px); }
+  .trend { align-self: center; align-content: center; padding-top: 0; border-top: 0; }
+}
+
+/* 窄屏表格改成两行信息，避免路径名称、进度条和统计数字互相挤压。 */
+@media (max-width: 720px) {
+  .overview-page { --data-table-gap: 8px; height: auto; gap: 20px; overflow: visible; }
+  .context { align-items: flex-start; flex-wrap: wrap; font-size: 13px; }
+  .context b { white-space: normal; }
+  .focus { padding: 16px; }
+  .focus__title { font-size: clamp(22px, 7vw, 30px); }
+  .focus__cta { width: 100%; justify-self: stretch; padding-inline: 16px; }
+  .focus__topics-list { font-size: 13px; }
+  .paths__head { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .paths :deep(.data-table__head) { display: none; }
+  .paths :deep(.data-table__row) {
+    grid-template-columns: 28px minmax(0, 1fr) auto !important;
+    grid-template-rows: auto auto;
+    column-gap: 8px;
+    row-gap: 8px;
+    padding: 12px 0;
+  }
+  .paths :deep(.row__no) { grid-column: 1; grid-row: 1 / span 2; }
+  .paths :deep(.row__name) { grid-column: 2; grid-row: 1; }
+  .paths :deep(.row__pct) { grid-column: 3; grid-row: 1; }
+  .paths :deep(.row__track) { grid-column: 2 / -1; grid-row: 2; min-width: 0; }
+  .paths :deep(.row__now),
+  .paths :deep(.row__when),
+  .paths :deep(.row__count) { display: none; }
+  .entry { padding-right: 0; }
+  .entry + .entry { padding-left: 0; }
+  .week { padding-left: 0; }
 }
 </style>
