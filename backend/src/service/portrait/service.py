@@ -1185,6 +1185,7 @@ class PortraitRadarService:
         from datetime import datetime, timedelta
         from backend.src.models.exam_model import ExamRecord, ExamQuestion, KnowledgeMastery
         from backend.src.models.portrait_radar_model import PortraitRadar
+        from backend.src.models.portrait_radar_history_model import PortraitRadarHistory
 
         user = await User.filter(id=user_id).first()
         if not user:
@@ -1241,6 +1242,7 @@ class PortraitRadarService:
         # 写入/更新 Radar 表。不要使用 Tortoise 的 select_for_update + create：
         # 首次并发请求在 MySQL 上可能对用户外键和唯一索引形成死锁。
         radar = await PortraitRadar.filter(user_id=user_id).first()
+        had_radar = radar is not None
         if not radar:
             from tortoise.exceptions import IntegrityError, OperationalError
 
@@ -1258,6 +1260,26 @@ class PortraitRadarService:
             if not radar:
                 raise RuntimeError(f"无法创建用户 {user_id} 的画像雷达记录")
 
+        if had_radar:
+            previous_values = {
+                "memory": radar.memory,
+                "understanding": radar.understanding,
+                "application": radar.application,
+                "analysis": radar.analysis,
+                "breadth": radar.breadth,
+                "persistence": radar.persistence,
+            }
+            current_values = {
+                "memory": memory,
+                "understanding": understanding,
+                "application": application,
+                "analysis": analysis,
+                "breadth": breadth,
+                "persistence": persistence,
+            }
+            if previous_values != current_values:
+                await PortraitRadarHistory.create(user_id=user_id, **previous_values)
+
         radar.memory = memory
         radar.understanding = understanding
         radar.application = application
@@ -1266,7 +1288,8 @@ class PortraitRadarService:
         radar.persistence = persistence
         await radar.save()
 
-        return PortraitRadarService._format(radar, answered_count=len(records))
+        previous = await PortraitRadarHistory.filter(user_id=user_id).order_by("-snapshot_at").first()
+        return PortraitRadarService._format(radar, answered_count=len(records), previous=previous)
 
     @staticmethod
     async def get(user_id: int) -> dict | None:
@@ -1292,11 +1315,14 @@ class PortraitRadarService:
         answered_count = await ExamRecord.filter(
             user_id=user_id, is_correct__not_isnull=True
         ).count()
-        return PortraitRadarService._format(radar, answered_count=answered_count)
+        from backend.src.models.portrait_radar_history_model import PortraitRadarHistory
+
+        previous = await PortraitRadarHistory.filter(user_id=user_id).order_by("-snapshot_at").first()
+        return PortraitRadarService._format(radar, answered_count=answered_count, previous=previous)
 
     @staticmethod
-    def _format(radar, *, answered_count: int | None = None) -> dict:
-        return {
+    def _format(radar, *, answered_count: int | None = None, previous=None) -> dict:
+        result = {
             "radar_id": radar.id,
             "user_id": radar.user_id,
             "answered_count": answered_count,
@@ -1310,6 +1336,21 @@ class PortraitRadarService:
             ],
             "updated_at": str(radar.updated_at),
         }
+        if previous:
+            result["previous"] = {
+                "updated_at": str(previous.snapshot_at),
+                "dimensions": [
+                    {"key": "memory", "label": "记忆", "score": previous.memory},
+                    {"key": "understanding", "label": "理解", "score": previous.understanding},
+                    {"key": "application", "label": "应用", "score": previous.application},
+                    {"key": "analysis", "label": "分析", "score": previous.analysis},
+                    {"key": "breadth", "label": "广度", "score": previous.breadth},
+                    {"key": "persistence", "label": "坚持", "score": previous.persistence},
+                ],
+            }
+        else:
+            result["previous"] = None
+        return result
 
     @staticmethod
     def format_for_prompt(radar: dict) -> str:
