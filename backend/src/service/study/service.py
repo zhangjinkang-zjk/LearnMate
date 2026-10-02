@@ -136,6 +136,20 @@ async def _build_path_summaries(
     return summaries
 
 
+def _knowledge_tag_key(value: object) -> str:
+    """Return a stable key for matching a mastery record to a path node.
+
+    **这个函数被合丢过一次**（2026-10-02 发现，`/study/overview` 直接 500）。经过是这样：
+    另一条支线在 09-30 删掉了它和它的两个兄弟（`_index_reviewable_nodes_by_tag` /
+    `_build_reviewable_weak_points`），而 10-01 的概览重构又在用它 —— 两条改动落在文件的
+    **不同位置**，git 合起来"没有冲突"，合出来的却是"调用一个不存在的函数"。
+
+    所以：**删函数之前先 grep 调用点**，尤其是跨支线的删除。git 只能保证文本不打架，
+    保证不了合出来的东西还自洽 —— 这是它看不见的那一类冲突，只有跑测试能发现。
+    """
+    return " ".join(str(value or "").split()).casefold()
+
+
 def _build_recommendation_reason(
     weak_tag: str,
     weak_accuracy: object,

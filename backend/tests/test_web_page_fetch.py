@@ -311,7 +311,11 @@ async def test_a_markdown_page_is_passed_through_as_is(monkeypatch):
     """
     _patch_http(monkeypatch, [_md_response()])
 
-    text, note = await fetch_readable_text("https://vuejs.org/guide/introduction.md")
+    # 地址用公网字面量，不用域名 —— 同上（`PUBLIC_A` 那条）。SSRF 那道闸是**先**解析
+    # 主机名再判公网，所以这个测试在被代理 fake-IP（DNS 把任何域名解到 198.18.0.0/15）
+    # 的机器上会**卡在闸上**，正文根本走不到 markdown 那一段，报出来还是"正文为空"。
+    # 这里要测的是 markdown 处理，闸本身有它自己的一组测试。
+    text, note = await fetch_readable_text("http://93.184.216.34/guide/introduction.md")
 
     assert '    return ["Rick", "Morty"]' in text, "代码缩进被压掉了"
     assert 'export const Callout = () => <div className="my-6">' in text
@@ -323,7 +327,7 @@ async def test_markdown_is_recognised_by_its_suffix_when_the_header_lies(monkeyp
     """有的站把 `.md` 标成 `text/html` —— 内容类型和路径后缀，中一个就算。"""
     _patch_http(monkeypatch, [_md_response(content_type="text/html; charset=utf-8")])
 
-    text, _ = await fetch_readable_text("https://example.com/guide/intro.md")
+    text, _ = await fetch_readable_text("https://93.184.216.35/guide/intro.md")
 
     assert '    return ["Rick", "Morty"]' in text
 

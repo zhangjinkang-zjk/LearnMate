@@ -25,9 +25,15 @@ class FakeNode:
 class FakeQuerySet:
     def __init__(self, item=None):
         self._item = item
+        self.updated = []
 
     async def first(self):
         return self._item
+
+    async def update(self, **fields):
+        # 只有"新建行之后补 agent_key"那条路会用到（见 get_or_create_domain_agent）
+        self.updated.append(fields)
+        return 1
 
 
 class FakeUser:
@@ -239,11 +245,26 @@ async def test_build_classroom_path_context_empty_node(monkeypatch):
     assert "数制" in ctx
 
 
-# ── get_or_create_classroom_agent 缓存幂等 ──
+# ── get_or_create_domain_agent：缓存幂等 + 领域不串 ──
+
+class FakeAgentRow:
+    """一条 user_agents 行（只用到这个函数碰的那几个字段）。"""
+
+    def __init__(self, agent_id, *, name="", persona="", tools="[]", agent_key=None):
+        self.id = agent_id
+        self.name = name
+        self.persona = persona
+        self.tools = tools
+        self.agent_key = agent_key
+        self.saved = 0
+
+    async def save(self):
+        self.saved += 1
+
 
 @pytest.mark.asyncio
 async def test_get_or_create_classroom_agent_cached(monkeypatch):
-    cg_chat._CLASSROOM_AGENT_IDS.clear()
+    cg_chat._DOMAIN_AGENT_IDS.clear()
     monkeypatch.setattr(cg_chat.User, "filter", lambda *a, **k: FakeQuerySet(FakeUser()))
     monkeypatch.setattr(cg_chat.UserAgent, "filter", lambda *a, **k: FakeQuerySet(None))  # 不存在 → 走 create
     created = {"id": 123}
@@ -263,9 +284,97 @@ async def test_get_or_create_classroom_agent_cached(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_or_create_classroom_agent_missing_user(monkeypatch):
-    cg_chat._CLASSROOM_AGENT_IDS.clear()
+    cg_chat._DOMAIN_AGENT_IDS.clear()
     monkeypatch.setattr(cg_chat.User, "filter", lambda *a, **k: FakeQuerySet(None))
     assert await cg_chat.get_or_create_classroom_agent(999) is None
+
+
+@pytest.mark.asyncio
+async def test_two_domains_get_two_rows_and_do_not_share_the_cache(monkeypatch):
+    """**缓存的键必须带领域。**
+
+    只用 user_id 做键时，先建的那个领域会被当成本领域那条返回 —— 学员切到幼师，拿到的
+    还是教练的 agent_id，而界面上已经换成演练台了：人格和界面对不上，最难查的一类错。
+    """
+    cg_chat._DOMAIN_AGENT_IDS.clear()
+    monkeypatch.setattr(cg_chat.User, "filter", lambda *a, **k: FakeQuerySet(FakeUser()))
+    monkeypatch.setattr(cg_chat.UserAgent, "filter", lambda *a, **k: FakeQuerySet(None))
+    ids = iter([101, 102])
+
+    async def fake_create(user_id, name, persona, tools, **kwargs):
+        return {"id": next(ids)}
+
+    monkeypatch.setattr(cg_chat, "_agent_create", fake_create)
+
+    coach = await cg_chat.get_or_create_domain_agent(1, "coach")
+    preschool = await cg_chat.get_or_create_domain_agent(1, "preschool")
+    again = await cg_chat.get_or_create_domain_agent(1, "coach")
+
+    assert coach == 101 and preschool == 102, "两个领域共用了同一个 agent_id"
+    assert again == 101, "同一个领域第二次没命中缓存"
+
+
+@pytest.mark.asyncio
+async def test_only_the_default_domain_claims_the_legacy_row(monkeypatch):
+    """存量库里的系统行没有 `agent_key`，只有默认领域能认领它。
+
+    别的领域去认领，等于把教练那份人格、工具和对话记忆一并改姓。
+    """
+    cg_chat._DOMAIN_AGENT_IDS.clear()
+    monkeypatch.setattr(cg_chat.User, "filter", lambda *a, **k: FakeQuerySet(FakeUser()))
+    legacy = FakeAgentRow(77, agent_key=None)
+
+    def fake_filter(**filters):
+        # 按 key 查 → 查不到；认领那条（agent_key 为空）→ 查得到
+        return FakeQuerySet(legacy if filters.get("agent_key__isnull") else None)
+
+    monkeypatch.setattr(cg_chat.UserAgent, "filter", fake_filter)
+
+    async def fake_create(user_id, name, persona, tools, **kwargs):
+        return {"id": 88}
+
+    monkeypatch.setattr(cg_chat, "_agent_create", fake_create)
+
+    claimed = await cg_chat.get_or_create_domain_agent(1, "coach")
+    assert claimed == 77, "存量那条教练行没被认领，老用户会白多一条同名的"
+    assert legacy.agent_key == "coach" and legacy.saved == 1
+
+    cg_chat._DOMAIN_AGENT_IDS.clear()
+    other = await cg_chat.get_or_create_domain_agent(1, "preschool")
+    assert other == 88, "非默认领域把存量那条行认领走了"
+
+
+@pytest.mark.asyncio
+async def test_a_new_row_gets_its_agent_key_written_back(monkeypatch):
+    """新建完要把 key 补回那一行 —— 漏了下次就找不着，每进一次页面多一条同名智能体。"""
+    cg_chat._DOMAIN_AGENT_IDS.clear()
+    monkeypatch.setattr(cg_chat.User, "filter", lambda *a, **k: FakeQuerySet(FakeUser()))
+    queryset = FakeQuerySet(None)
+    monkeypatch.setattr(cg_chat.UserAgent, "filter", lambda *a, **k: queryset)
+
+    async def fake_create(user_id, name, persona, tools, **kwargs):
+        return {"id": 55}
+
+    monkeypatch.setattr(cg_chat, "_agent_create", fake_create)
+
+    assert await cg_chat.get_or_create_domain_agent(1, "preschool") == 55
+    assert queryset.updated == [{"agent_key": "preschool"}]
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_domain_key_falls_back_to_the_default(monkeypatch):
+    """前端传来一个认不出的 key（代码里删过这个领域）不能抛异常 —— 抛了学生进不去这一页。"""
+    cg_chat._DOMAIN_AGENT_IDS.clear()
+    monkeypatch.setattr(cg_chat.User, "filter", lambda *a, **k: FakeQuerySet(FakeUser()))
+    monkeypatch.setattr(cg_chat.UserAgent, "filter", lambda *a, **k: FakeQuerySet(None))
+
+    async def fake_create(user_id, name, persona, tools, **kwargs):
+        return {"id": 9}
+
+    monkeypatch.setattr(cg_chat, "_agent_create", fake_create)
+
+    assert await cg_chat.get_or_create_domain_agent(1, "已经删掉的领域") == 9
+    assert cg_chat._DOMAIN_AGENT_IDS[(1, "coach")][0] == 9, "退回的应该是默认领域"
 
 
 # ── stream_classroom_chat 事件序列 ──

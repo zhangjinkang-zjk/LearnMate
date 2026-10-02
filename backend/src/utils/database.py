@@ -121,6 +121,33 @@ async def _ensure_path_node_difficulty_score_column():
         raise
 
 
+async def _ensure_user_agent_key_column():
+    """为存量库补上"内置领域智能体标识"这一列。
+
+    没有这一列之前，判别"这条系统行是哪个领域"只能靠 `is_system=True` —— 那时一个用户
+    身上只有一条系统行，取唯一的那个没问题。多一个领域就不成立了：`first()` 取到哪条是
+    随机的，等于把学幼师的学生接给写代码的教练。存量行留 NULL（它们都是开发教练那一份，
+    首次按 key 取时会认领，见 `classroom_chat._claim_legacy_row`）。
+    """
+    import logging
+
+    _log = logging.getLogger(__name__)
+    conn = Tortoise.get_connection("default")
+    try:
+        await conn.execute_query(
+            "ALTER TABLE user_agents ADD COLUMN agent_key VARCHAR(32) NULL "
+            "COMMENT '内置领域智能体标识；用户自建的为 NULL'"
+        )
+    except Exception as exc:
+        error_text = str(exc).lower()
+        is_duplicate_column = "1060" in error_text or "duplicate column" in error_text
+        if is_duplicate_column:
+            _log.debug("智能体标识字段已存在")
+            return
+        _log.exception("智能体标识字段迁移失败")
+        raise
+
+
 async def _drop_advanced_practice_phase_columns():
     """清掉进阶实践会话上阶段机留下的五列。
 
@@ -232,6 +259,7 @@ async def init_db():
         await _ensure_classroom_lesson_schema()
         await _ensure_path_node_teaching_spec_column()
         await _ensure_path_node_difficulty_score_column()
+        await _ensure_user_agent_key_column()
         await _drop_advanced_practice_phase_columns()
         await _ensure_curriculum_by_direction_table()
         _DB_INITIALIZED = True

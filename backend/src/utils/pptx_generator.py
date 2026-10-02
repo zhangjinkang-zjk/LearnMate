@@ -45,8 +45,22 @@ def _rgb(value: str) -> RGBColor:
     return RGBColor(r, g, b)
 
 
+# markdown 的加粗标记 `**词**`。**要求两侧紧贴非空白**，这条限制是有意的：
+# 生成侧没有这个约定（`prompts/resource/ppt.yaml` 的格式里根本没提 `**`），是模型自己加的；
+# 而 PPT 正文里可能出现 Python 幂运算（`a ** b`）—— 宽松的 `\*\*(.+?)\*\*` 会把
+# `a ** b ** c` 咬成 `a b c`，把代码改坏。严格形状两头都能兼顾。
+#
+# 剥掉标记而不是转成粗体运行：`_add_bullets` 已经按中文冒号把关键术语加粗成深蓝了，
+# 两套加粗叠在一起反而乱。
+_EMPHASIS_RE = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
+
+
+def _strip_emphasis(text: str) -> str:
+    return _EMPHASIS_RE.sub(r"\1", text)
+
+
 def _clean_ppt_text(value, limit: int | None = None) -> str:
-    text = unescape(str(value or ""))
+    text = _strip_emphasis(unescape(str(value or "")))
     text = re.sub(r"<!--[\s\S]*?-->", " ", text)
     text = re.sub(r"</?[^>\n]+>", " ", text)
     text = re.sub(r"<[^>\n]*$", " ", text)
@@ -305,52 +319,14 @@ def _add_title_line(slide, left=Inches(0.8), top=Inches(1.3), width=Inches(11.7)
     line.line.fill.background()
 
 
-def _add_bullets(slide, bullets, left=Inches(0.8), top=Inches(1.8),
-                 width=Inches(11.7), height=Inches(5.2), max_items=10):
-    """添加要点文本，关键术语加粗，层级清晰"""
-    box = slide.shapes.add_textbox(left, top, width, height)
-    tf = box.text_frame
-    tf.word_wrap = True
-    first_item = True
-    for i, bullet in enumerate(bullets[:max_items]):
-        if first_item:
-            p = tf.paragraphs[0]
-            first_item = False
-        else:
-            p = tf.add_paragraph()
-
-        # 彩色序号圆点
-        run_dot = p.add_run()
-        run_dot.text = "● "
-        run_dot.font.size = Pt(10)
-        run_dot.font.color.rgb = ACCENT_BLUE
-        run_dot.font.vertical_offset = Pt(-2)
-
-        # 尝试按中文冒号分割：加粗前半部分（关键术语）
-        parts = bullet.split("：", 1) if "：" in bullet else bullet.split(":", 1)
-        if len(parts) == 2:
-            run_key = p.add_run()
-            run_key.text = parts[0] + "："
-            run_key.font.size = Pt(17)
-            run_key.font.bold = True
-            run_key.font.color.rgb = DARK_BLUE
-
-            run_val = p.add_run()
-            run_val.text = parts[1]
-            run_val.font.size = Pt(16)
-            run_val.font.color.rgb = DARK_GRAY
-        else:
-            run_val = p.add_run()
-            run_val.text = bullet
-            run_val.font.size = Pt(16)
-            run_val.font.color.rgb = DARK_GRAY
-
-        p.space_after = Pt(6)
-        p.space_before = Pt(4)
-        p.level = 0
-    return box
-
-
+# 要点文本框。**这个函数曾经有三份同名定义**（2026-10-02 合并成这一份）：后定义的会静默
+# 覆盖前面的，Python 不报错、不警告，于是"哪一份在跑"只由**文件里的先后顺序**决定 ——
+# 三份里最后那份恰好是最弱的（不清理文本、不做字号自适应、丢掉关键术语加粗），而读代码的人
+# 看到的第一份却是最强的。谁去改上面那两份，改动会静默不生效。
+#
+# 留下的这份是能力最全的：`_fit_text_frame` + `_clean_ppt_text` + `_fit_font_size` 三重
+# 自适应，并且保留"中文冒号前加粗成深蓝"这一步。**不要再加第二份同名定义** ——
+# 要换样式就改这里。
 def _add_bullets(slide, bullets, left=Inches(0.8), top=Inches(1.8),
                  width=Inches(11.7), height=Inches(5.2), max_items=10):
     box = slide.shapes.add_textbox(left, top, width, height)
@@ -369,7 +345,9 @@ def _add_bullets(slide, bullets, left=Inches(0.8), top=Inches(1.8),
         parts = bullet.split("：", 1) if "：" in bullet else bullet.split(":", 1)
         if len(parts) == 2 and parts[0].strip() and parts[1].strip():
             run_key = p.add_run()
-            run_key.text = parts[0].strip() + ": "
+            # 保留原样的冒号：中文用「：」，别把它换成半角的 ": " —— 整张 PPT 都是中文，
+            # 一个半角冒号加空格就是一处看得见的排版毛病。
+            run_key.text = parts[0].strip() + ("：" if "：" in bullet else ": ")
             run_key.font.size = _fit_font_size(bullet, base_size + 1, base_size, max(9, base_size - 3))
             run_key.font.bold = True
             run_key.font.color.rgb = DARK_BLUE
@@ -386,36 +364,6 @@ def _add_bullets(slide, bullets, left=Inches(0.8), top=Inches(1.8),
 
         p.space_after = Pt(3 if len(clean_bullets) >= 6 else 5)
         p.space_before = Pt(2)
-        p.level = 0
-    return box
-
-
-def _add_bullets(slide, bullets, left=Inches(0.8), top=Inches(1.8),
-                 width=Inches(11.7), height=Inches(5.2), max_items=10):
-    box = slide.shapes.add_textbox(left, top, width, height)
-    tf = _fit_text_frame(box.text_frame)
-    clean_bullets = [_clean_ppt_text(bullet, 92) for bullet in (bullets or [])]
-    clean_bullets = [bullet for bullet in clean_bullets if bullet][:max_items]
-    if not clean_bullets:
-        return box
-
-    if len(clean_bullets) >= 6:
-        font_size = 10
-        after = 2
-    elif len(clean_bullets) >= 4:
-        font_size = 11
-        after = 3
-    else:
-        font_size = 12
-        after = 4
-
-    for index, bullet in enumerate(clean_bullets):
-        p = tf.paragraphs[0] if index == 0 else tf.add_paragraph()
-        p.text = f"- {bullet}"
-        p.font.size = _fit_font_size(bullet, font_size, max(9, font_size - 1), 8)
-        p.font.color.rgb = DARK_GRAY
-        p.space_after = Pt(after)
-        p.space_before = Pt(0)
         p.level = 0
     return box
 

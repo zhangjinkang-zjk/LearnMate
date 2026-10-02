@@ -16,7 +16,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.src.ai_core import resource_graph
+from backend.src.ai_core import resource_document, resource_graph
+from backend.src.service.resource.document_quality import (
+    validate_document_safety,
+    validate_document_section,
+)
 from backend.src.service.resource.document_quality import validate_document_chapter
 
 
@@ -82,8 +86,8 @@ async def _no_kb(*_args, **_kwargs):
 
 
 def _install(monkeypatch, llm):
-    monkeypatch.setattr(resource_graph, "llm", llm)
-    monkeypatch.setattr(resource_graph, "kb_search", _no_kb)
+    monkeypatch.setattr(resource_document, "llm", llm)
+    monkeypatch.setattr(resource_document, "kb_search", _no_kb)
 
 
 TITLES = ("语义边界", "窗口重叠", "召回精度")
@@ -102,7 +106,7 @@ async def test_section_failure_degrades_to_fallback_instead_of_raising(monkeypat
     # 「待补充」既是小节级硬失败，也是整章级的占位语失败。
     _install(monkeypatch, _FailingLlm("## 语义边界\n\n待补充"))
 
-    content = await resource_graph.generate_document_parallel(
+    content = await resource_document.generate_document_parallel(
         "文档切分",
         sections=list(TITLES),
         section_count=len(TITLES),
@@ -126,7 +130,7 @@ async def test_section_keeps_best_effort_draft_when_content_is_merely_weak(monke
     weak = "### 语义边界\n\n" + ("这一节讨论切分粒度与召回的关系。" * 30)
     _install(monkeypatch, _FailingLlm(weak))
 
-    content = await resource_graph.generate_document_parallel(
+    content = await resource_document.generate_document_parallel(
         "文档切分",
         sections=["语义边界"],
         section_count=1,
@@ -139,10 +143,10 @@ async def test_section_keeps_best_effort_draft_when_content_is_merely_weak(monke
 
 
 def test_section_heading_promotion_only_touches_a_leading_h3():
-    assert resource_graph._promote_section_heading("### 甲\n\n正文") == "## 甲\n\n正文"
-    assert resource_graph._promote_section_heading("## 甲\n\n正文") == "## 甲\n\n正文"
-    assert resource_graph._promote_section_heading("#### 甲\n\n正文") == "#### 甲\n\n正文"
-    assert resource_graph._promote_section_heading("正文\n\n### 甲") == "正文\n\n### 甲"
+    assert resource_document._promote_section_heading("### 甲\n\n正文") == "## 甲\n\n正文"
+    assert resource_document._promote_section_heading("## 甲\n\n正文") == "## 甲\n\n正文"
+    assert resource_document._promote_section_heading("#### 甲\n\n正文") == "#### 甲\n\n正文"
+    assert resource_document._promote_section_heading("正文\n\n### 甲") == "正文\n\n### 甲"
 
 
 # ── 整章校验：先改进，再接受 ──────────────────────────
@@ -157,7 +161,7 @@ async def test_chapter_validation_triggers_a_repair_round_that_converges(monkeyp
     ])
     _install(monkeypatch, llm)
 
-    content = await resource_graph.generate_document_parallel(
+    content = await resource_document.generate_document_parallel(
         "文档切分",
         sections=list(TITLES),
         section_count=len(TITLES),
@@ -182,7 +186,7 @@ async def test_chapter_still_failing_is_reported_not_fatal(monkeypatch):
     ])
     _install(monkeypatch, llm)
 
-    content = await resource_graph.generate_document_parallel(
+    content = await resource_document.generate_document_parallel(
         "文档切分",
         sections=list(TITLES),
         section_count=len(TITLES),
@@ -194,7 +198,7 @@ async def test_chapter_still_failing_is_reported_not_fatal(monkeypatch):
     assert content.startswith("# 文档切分")
     assert validate_document_chapter(content, _teaching_context()) != [], "这份稿子确实还不达标"
     # 但它是"还行但可以更好"，不是"坏到不能给学生看"
-    assert resource_graph.validate_document_safety(content) == []
+    assert validate_document_safety(content) == []
     final = [e for e in events if e.get("agent_id") == "executor:document"][-1]
     assert final["status"] == "done"
     assert "待改进" in final["message"]
@@ -205,7 +209,7 @@ async def test_clean_document_never_spends_a_repair_round(monkeypatch):
     llm = _ScriptedLlm([_section(t) for t in TITLES] + [_NO_CONSISTENCY_ISSUES])
     _install(monkeypatch, llm)
 
-    await resource_graph.generate_document_parallel(
+    await resource_document.generate_document_parallel(
         "文档切分",
         sections=list(TITLES),
         section_count=len(TITLES),
@@ -269,7 +273,7 @@ def test_repair_targets_localize_when_the_problem_is_one_section():
     """某一节自己坏了 → 只改那一节，已经写好的部分不连累。"""
     parts = [_section("甲"), "## 乙\n\n待补充", _section("丙")]
 
-    targets = resource_graph._document_repair_targets(parts, ["文档包含省略或待补充占位语"])
+    targets = resource_document._document_repair_targets(parts, ["文档包含省略或待补充占位语"])
 
     assert targets == [1]
 
@@ -286,13 +290,13 @@ def test_repair_targets_rewrite_the_whole_chapter_when_the_problem_is_global(err
     """字数不足、缺标题这类整章性问题定不到某一节，只补最短的一节也凑不够。"""
     parts = [_section("甲"), _section("乙"), _section("丙")]
 
-    assert resource_graph._document_repair_targets(parts, errors) == [0, 1, 2]
+    assert resource_document._document_repair_targets(parts, errors) == [0, 1, 2]
 
 
 def test_fallback_section_is_safe_and_structured():
-    content = resource_graph._fallback_document_section("文档切分", "语义边界")
+    content = resource_document._fallback_document_section("文档切分", "语义边界")
 
     assert content.startswith("## 语义边界")
-    assert resource_graph.validate_document_section(content, "语义边界") == []
-    assert resource_graph.validate_document_safety(content) == []
+    assert validate_document_section(content, "语义边界") == []
+    assert validate_document_safety(content) == []
     assert json.dumps({"c": content})  # 兜底文本可被正常序列化进事件流

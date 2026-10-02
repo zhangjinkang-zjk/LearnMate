@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.src.ai_core import path_graph, resource_graph
+from backend.src.ai_core import path_graph, resource_document, resource_graph, resource_prompts
 from backend.src.service.path.teaching_context import (
     PATH_DEFAULT_RESOURCE_TYPES,
     attach_teaching_specs,
@@ -84,7 +84,7 @@ def test_learning_path_default_resources_include_document_ppt_and_mindmap():
 
 @pytest.mark.parametrize("title", ["一元二次方程", "二叉树", "三角函数"])
 def test_document_outline_normalization_preserves_titles_starting_with_chinese_numerals(title):
-    sections = resource_graph._normalize_document_outline(
+    sections = resource_document._normalize_document_outline(
         [title],
         topic="数学与数据结构",
         count=1,
@@ -238,14 +238,14 @@ def test_document_quality_gate_allows_failure_analysis_as_a_real_topic():
 def test_markdown_cleanup_preserves_a_real_code_block_at_the_end():
     section = _valid_section("Python 示例") + "\n\n```python\nprint('LearnMate')\n```"
 
-    assert resource_graph._strip_outer_markdown_fence(section) == section
+    assert resource_document._strip_outer_markdown_fence(section) == section
     assert validate_document_section(section, "Python 示例") == []
 
 
 def test_markdown_cleanup_removes_only_a_complete_response_wrapper():
     wrapped = "```markdown\n## 语义边界\n\n完整解释。\n```"
 
-    assert resource_graph._strip_outer_markdown_fence(wrapped) == "## 语义边界\n\n完整解释。"
+    assert resource_document._strip_outer_markdown_fence(wrapped) == "## 语义边界\n\n完整解释。"
 
 
 @pytest.mark.asyncio
@@ -259,10 +259,10 @@ async def test_document_outline_prompt_contains_teaching_contract_and_learner_go
                 content='["切分要解决的检索问题", "语义边界与窗口重叠", "召回结果迁移检查"]'
             )
 
-    monkeypatch.setattr(resource_graph, "llm", FakeLlm())
+    monkeypatch.setattr(resource_document, "llm", FakeLlm())
     teaching_context = _make_teaching_context()
 
-    sections = await resource_graph.generate_doc_outline(
+    sections = await resource_document.generate_doc_outline(
         "文档切分",
         kb="内部资料强调按语义边界切分。",
         guidance="用可核验的对比例子解释。",
@@ -293,9 +293,9 @@ async def test_generic_document_outline_does_not_receive_path_contract(monkeypat
             prompts.append(prompt)
             return SimpleNamespace(content='["问题背景", "核心原理", "完整示例"]')
 
-    monkeypatch.setattr(resource_graph, "llm", FakeLlm())
+    monkeypatch.setattr(resource_document, "llm", FakeLlm())
 
-    sections = await resource_graph.generate_doc_outline(
+    sections = await resource_document.generate_doc_outline(
         "操作系统调度",
         count=3,
         portrait="计算机专业学生",
@@ -309,7 +309,7 @@ async def test_generic_document_outline_does_not_receive_path_contract(monkeypat
 
 
 def test_generic_document_body_uses_general_resource_prompt():
-    prompt = resource_graph.build_resource_prompt(
+    prompt = resource_prompts.build_resource_prompt(
         "document",
         "操作系统调度",
         portrait="计算机专业学生",
@@ -321,7 +321,7 @@ def test_generic_document_body_uses_general_resource_prompt():
 
 
 def test_path_mindmap_custom_prompt_cannot_replace_scope_contract():
-    prompt = resource_graph.build_resource_prompt(
+    prompt = resource_prompts.build_resource_prompt(
         "mindmap",
         "文档切分",
         teaching_context=_make_teaching_context(),
@@ -349,12 +349,12 @@ async def test_generic_parallel_document_assigns_a_distinct_section_to_each_prom
     async def fake_kb_search(*args, **kwargs):
         return "暂无相关知识库资料"
 
-    monkeypatch.setattr(resource_graph, "llm", FakeLlm())
-    monkeypatch.setattr(resource_graph, "kb_search", fake_kb_search)
+    monkeypatch.setattr(resource_document, "llm", FakeLlm())
+    monkeypatch.setattr(resource_document, "kb_search", fake_kb_search)
 
     # skip_review=True：本用例只关心"每节一个 prompt、内容各自不同"。
     # 不收尾的话还会多一次跨章节交叉验证，那不是这里要测的东西。
-    content = await resource_graph.generate_document_parallel(
+    content = await resource_document.generate_document_parallel(
         "操作系统调度",
         portrait="计算机专业学生",
         sections=list(section_titles),
@@ -374,7 +374,7 @@ async def test_generic_parallel_document_assigns_a_distinct_section_to_each_prom
 def test_custom_document_prompt_keeps_standard_path_teaching_contract():
     teaching_context = _make_teaching_context()
 
-    prompt = resource_graph.build_resource_prompt(
+    prompt = resource_prompts.build_resource_prompt(
         "document",
         "文档切分",
         portrait="软件工程专业大二学生",
@@ -420,11 +420,11 @@ async def test_document_section_prompts_use_teaching_context_and_call_nodes_sect
     async def fake_kb_search(*args, **kwargs):
         return "暂无相关知识库资料"
 
-    monkeypatch.setattr(resource_graph, "llm", FakeLlm())
-    monkeypatch.setattr(resource_graph, "kb_search", fake_kb_search)
+    monkeypatch.setattr(resource_document, "llm", FakeLlm())
+    monkeypatch.setattr(resource_document, "kb_search", fake_kb_search)
     teaching_context = _make_teaching_context()
 
-    content = await resource_graph.generate_document_parallel(
+    content = await resource_document.generate_document_parallel(
         "文档切分",
         portrait="软件工程专业大二学生",
         guidance="用可核验的对比例子解释。",
