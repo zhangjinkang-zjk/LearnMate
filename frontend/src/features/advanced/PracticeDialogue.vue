@@ -22,20 +22,44 @@
          这一条长在 header 里而不是另起一行 grid 子元素：另起一行要动 .practice-dialogue
          的 grid-template-rows，那是上一轮为了高度塌陷踩过坑的地方。 -->
       <div class="practice-visibility">
-        <button
-          v-if="workspaceSummary.details.length"
-          class="practice-visibility__toggle"
-          type="button"
-          :aria-expanded="workspaceDetailOpen"
-          @click="workspaceDetailOpen = !workspaceDetailOpen"
-        >
-          <Eye :size="13" />
-          <span class="practice-visibility__headline">{{ workspaceSummary.headline }}</span>
-          <component :is="workspaceDetailOpen ? ChevronUp : ChevronDown" :size="13" />
-        </button>
-        <p v-else class="practice-visibility__blind"><EyeOff :size="13" /><span>{{ workspaceSummary.headline }}</span></p>
+        <div class="practice-visibility__row">
+          <button
+            v-if="hasWorkspaceInfo"
+            class="practice-visibility__toggle"
+            type="button"
+            :aria-expanded="workspaceDetailOpen"
+            @click="workspaceDetailOpen = !workspaceDetailOpen"
+          >
+            <Eye :size="13" />
+            <span class="practice-visibility__headline">{{ workspaceSummary.headline }}</span>
+            <component :is="workspaceDetailOpen ? ChevronUp : ChevronDown" :size="13" />
+          </button>
+          <p v-else class="practice-visibility__blind"><EyeOff :size="13" /><span>{{ workspaceSummary.headline }}</span></p>
+          <!-- 「我改的」和「教练看的」中间那道缝，就落在这一句和右边那个按钮上。
+               没有它，学生就只能自己记得"我刚改过" —— 而人不会记得，所以那道缝
+               会一直没人合上。
+               两句裹在一个盒子里，是为了换行时一起走：分开摆的话，面板 420px 那一档会
+               变成"摘要 + 中缀"在第一行、按钮独自掉到第二行 —— 状态和它对应的动作被拆到
+               两行去，读起来就不像一件事了。 -->
+          <div class="practice-visibility__actions">
+            <span v-if="workspaceChanged" class="practice-visibility__stale">改动教练还没看到</span>
+            <button
+              class="practice-visibility__sync"
+              :class="{ 'is-stale': workspaceChanged }"
+              type="button"
+              :disabled="isBusy || !sessionId"
+              title="让教练读一遍你现在的工作区，再给一轮反馈"
+              @click="askCoachToLook"
+            >
+              <RefreshCw :size="13" />让教练看一遍
+            </button>
+          </div>
+        </div>
         <ul v-if="workspaceDetailOpen" class="practice-visibility__details">
-          <li v-for="(detail, index) in workspaceSummary.details" :key="index">{{ detail }}</li>
+          <!-- 规则在前、这一轮实际送了哪几份在后。规则不变、清单每轮都变，
+               所以刻意分开两个字段、也分两种墨色（见 workspaceSnapshot）。 -->
+          <li v-for="(rule, index) in workspaceSummary.rules" :key="`rule-${index}`" class="is-rule">{{ rule }}</li>
+          <li v-for="(detail, index) in workspaceSummary.details" :key="`detail-${index}`">{{ detail }}</li>
         </ul>
       </div>
     </header>
@@ -78,7 +102,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ChevronDown, ChevronUp, Ellipsis, Eye, EyeOff, Send, Square } from 'lucide-vue-next'
+import { ChevronDown, ChevronUp, Ellipsis, Eye, EyeOff, RefreshCw, Send, Square } from 'lucide-vue-next'
 import { fundamentalsApi } from '@/shared/api/fundamentalsApi'
 import { advancedLearningApi } from '@/shared/api/advancedLearningApi'
 import { renderMarkdown } from '@/shared/lib/markdown'
@@ -99,8 +123,24 @@ const props = defineProps({
   // **它是函数不是对象**：快照只在"按下发送那一刻"取才有意义，而正文随每次击键变，
   // 做成响应式 prop 会让这个组件每敲一个字符就重渲染一次。别"顺手"改成响应式数据。
   workspaceReader: { type: Function, default: null },
+  // 把教练谈定的一节写进方案文档。同样是**函数不是响应式数据** —— 它要落到
+  // CodeWorkspace 里那份 entries 上，而页面持有那个 ref。返回 { ok, reason }。
+  docWriter: { type: Function, default: null },
+  // 把教练要的那几篇官方文档写进工作区。取由这个组件发请求（和别的请求一样），
+  // 写交给页面（只有它拿着 CodeWorkspace）。同样返回 { ok, reason }。
+  frameworkDocsWriter: { type: Function, default: null },
+  // 上次发出去之后，学生是不是改过工作区。
+  //
+  // **是布尔，不是那个改动计数** —— 这条区别不是风格问题。这个组件的模板对每条消息都要
+  // 跑一遍 `renderMarkdown`（没有缓存，背后是 markdown-it + DOMPurify 一整套解析），
+  // 而 prop 一变、组件就重渲染、整段对话就重新解析一遍，对话越长越慢。改动计数每敲一个
+  // 字符都变，等于把这条开销挂到打字上。
+  // 布尔只在"改过 / 没改过"翻转的那一下变，所以每次编辑只让它重渲染两次（翻过去、翻回来）。
+  // 计数的比较放在页面里做：那边重渲染是廉价的，而且它不渲染消息。
+  workspaceChanged: { type: Boolean, default: false },
 })
-const emit = defineEmits(['end'])
+// `sent`：这一轮已经带着**当时**的工作区快照发出去了。页面拿它记下"教练看过的是哪一版"。
+const emit = defineEmits(['end', 'sent', 'doc-written'])
 
 const messages = ref([])
 const draft = ref('')
@@ -125,6 +165,9 @@ const menuOpen = ref(false)
 const workspaceShown = ref({ available: false })
 const workspaceDetailOpen = ref(false)
 const workspaceSummary = computed(() => describeWorkspaceSnapshot(workspaceShown.value))
+// 有东西可展开时才给那个开关（看不到工作区时给的是"教练还看不到你的文件"那一句，
+// 没有细节可展开）。
+const hasWorkspaceInfo = computed(() => workspaceSummary.value.rules.length > 0)
 const composerInput = ref(null)
 const composerBox = ref(null)
 // 输入框高度跟着内容长。原来写死 height: 62px + resize: none，学生写长一点就只能在
@@ -280,34 +323,31 @@ function clientChapterSummary() {
 // 的提示词都删了（见 classroom_chat 的 `_compose_user_prompt` 注释：那段话在**生产**
 // 一个不存在的议程）。这里少传两个字段完全没影响，因为服务端已经不看它们了。
 //
-// `script` 同理：任务说明现在**以服务端账本为准**（`AdvancedPracticeSession.task_snapshot`），
-// 这里这一行只是历史字段，服务端不采信。任务本身改由 TaskBar 直接展示给学生看。
+// `script` 里**只留服务端不知道的那一件事**：这一章有没有主讲材料。
+//
+// 任务说明（brief / problem / focus / criteria / constraints）一律不在这里拼 ——
+// 账本那份（`AdvancedPracticeSession.task_snapshot`）才是权威版本，服务端照它渲染上下文。
+// 以前这里也拼一份，而且用的是**表格栏位名**（`重点能力：${focus}`、`验收标准：${criteria}`），
+// 于是教练同时读到同一份任务的两套说法，并且照着表格那套念给学生听
+// （「你的验收标准是…」「交付物里白纸黑字写着…」）。两套说法里删掉一套，剩下的才有机会是真的。
+//
+// `points` / `question` 同理，它们是从互动课堂那两个字段借来的：`points` 会被渲染成
+// 「板书：」而这里装的其实是任务的约束，`question` 会渲染成「课堂提问：」。实践对话没有幕、
+// 也没有课堂提问，留着这两样就是给教练看两句不对的话。
 //
 // `workspace` 是**发送这一刻**现取的工作区只读快照（见 workspaceReader）。永远给一份
 // 带 available 字段的对象，绝不漏字段 —— 让后端去猜"这个键为什么没有"是丢信息的做法。
-// **空字段不能拼出半个标签。** 原来的写法是 `重点能力：${focus}`，自由任务没有 focus，
-// 于是拼出一句「重点能力：」—— 它非空，`filter(Boolean)` 留不住也拦不住，就成了
-// 一条只有标签没有内容的行。所以每段都先有内容才拼标签。
-function taskScriptParts() {
-  const task = props.task
-  const criteria = (task.criteria || []).join('；')
-  return [
-    task.brief,
-    task.problem,
-    task.focus && `重点能力：${task.focus}`,
-    criteria && `验收标准：${criteria}`,
-  ]
-}
-
 function practiceSegment() {
   readWorkspaceShown()
+  // 就在取快照这一行旁边通报"教练看过的是这一版了" —— 两者必须同一时刻，分开放就会
+  // 出现"页面以为教练看过了、其实发出去的是上一条"。
+  // 放在这里而不是 sendMessage 里，是因为它要覆盖开场那一轮（requestOpening 也走这条路）。
+  emit('sent')
   return {
     id: `practice-${props.task.id}`,
     type: 'practice',
     title: props.task.title,
-    script: [...taskScriptParts(), clientChapterSummary()].filter(Boolean).join('\n'),
-    points: (props.task.constraints || []).slice(0, 6),
-    question: { prompt: '请围绕这个任务推进对话。' },
+    script: clientChapterSummary(),
     workspace: workspaceShown.value,
   }
 }
@@ -316,6 +356,89 @@ function practiceSegment() {
 // 否则"教练看到的是这个"就和实际发出去的请求对不上了。
 function readWorkspaceShown() {
   workspaceShown.value = props.workspaceReader?.() ?? { available: false }
+}
+
+// 教练把谈定的一节写进方案文档（合并规则见 workspace/designDoc.js）。
+//
+// **写没写成功必须让学生看见。** 教练在对话里会说"这节我写进去了"，而写入本身发生在
+// 编辑器那边、可能失败（拿不到句柄、磁盘被占用）—— 失败时不说的话，学生会以为文档里
+// 有那一节，左边却什么都没有，而他会先怀疑是自己看错了。
+async function writeDocFromCoach(event) {
+  const section = String(event?.section || '').trim()
+  if (!props.docWriter || !section) return
+  try {
+    const result = await props.docWriter(section, String(event?.content || ''))
+    if (result && result.ok === false) {
+      errorMessage.value = `教练想写「${section}」这一节，没写成：${result.reason || '未知原因'}`
+      return
+    }
+    emit('doc-written')
+  } catch (error) {
+    errorMessage.value = `教练想写「${section}」这一节，没写成：${error?.message || error}`
+  }
+}
+
+// 教练决定把官方文档拉进他的项目。**取和写在两个地方**：取是这里发请求
+// （和这个组件其它的请求一样），写是落到学生硬盘上（页面那边，只有它拿着 CodeWorkspace）。
+//
+// 帧里给的是**两种东西**：认得的框架标识（服务端展开成挑好的那几页），和教练自己找的
+// 官方文档页地址（表里没有的技术走这条 —— 见 ai_core/tools/workspace.py）。
+//
+// 这个请求慢（服务端要并发抓最多 12 页官网正文），所以它**不挡住对话** —— 教练这一轮
+// 说完就完了，文件在后台慢慢到位。这也是帧里只走标识和地址、不走正文的原因：
+// 十几篇正文塞进一帧能到一两 MB。
+async function pullFrameworkDocs(event) {
+  const dir = String(event?.dir || '').trim()
+  const frameworks = Array.isArray(event?.frameworks) ? event.frameworks : []
+  const urls = (Array.isArray(event?.urls) ? event.urls : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+  if (!dir || (!frameworks.length && !urls.length) || !props.frameworkDocsWriter) return
+
+  // 说给学生听的名字。教练给的地址用域名 —— 和服务端那边的子目录同名，
+  // 他看到提示里的名字和左边文件夹上的名字是同一个。
+  const names = [...frameworks.map((item) => item.name), ...urls.map(urlHost)].join('、')
+
+  try {
+    const payload = unwrap(await advancedLearningApi.fetchReferenceDocs(
+      frameworks.map((item) => item.id),
+      urls,
+    ))
+    const files = Array.isArray(payload?.files) ? payload.files : []
+    const failures = Array.isArray(payload?.failures) ? payload.failures : []
+
+    if (!files.length) {
+      const detail = failures.map((item) => `${item.framework}《${item.title}》：${item.reason}`).join('；')
+      errorMessage.value = `${names} 的资料一页都没取到。${detail}`
+      return
+    }
+
+    const result = await props.frameworkDocsWriter(dir, files)
+    if (result && result.ok === false) {
+      errorMessage.value = `取到了 ${names} 的资料，但没能写进 ${dir}：${result.reason || '未知原因'}`
+      return
+    }
+    // 取到一部分也必须说。文档站改版、单页超时都是常态，静默少给会让学生
+    // 以为自己看到的就是全部 —— 那他可能拿着一份缺了关键那页的文档去写代码。
+    if (failures.length) {
+      errorMessage.value = `${names} 的资料放了 ${files.length} 篇，另有 ${failures.length} 篇没取到：`
+        + failures.map((item) => `${item.title}（${item.reason}）`).join('；')
+      return
+    }
+    emit('doc-written')
+  } catch (error) {
+    errorMessage.value = `拉 ${names} 的资料失败：${error?.response?.data?.detail || error?.message || error}`
+  }
+}
+
+// 地址取域名当显示名。解析不了的（服务端那边会被 check_fetchable_url 拦掉）
+// 原样显示 —— 报错时说得出学生/教练给的是哪一串，比显示"未知"有用。
+function urlHost(url) {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return url
+  }
 }
 
 // 学生发言和教练开场走的是同一条流式接口，只有 scenario 不同
@@ -334,6 +457,10 @@ function streamCoachReply({ scenario, text, signal, onChunk }) {
     // 只认文本增量。以前这里要显式忽略服务端推的 type='phase' 进度事件；
     // 阶段机删掉后已经没有任何地方会推它了。
     if ((event?.type === 'chunk' || event?.type === 'content') && event.content) onChunk(String(event.content))
+    // 教练把谈定的一节写进了方案文档。落盘在编辑器那边，这里只把帧递过去。
+    if (event?.type === 'doc_write') writeDocFromCoach(event)
+    // 教练决定去拉某个框架的官方文档（帧里只有框架 id，正文由这里现取）。
+    if (event?.type === 'framework_docs') pullFrameworkDocs(event)
   }, signal)
 }
 
@@ -437,6 +564,21 @@ async function sendMessage(forcedText = '') {
   }
 }
 
+// 一键把"我改的"交给"教练看的"。
+//
+// 它**不新增任何通道** —— 教练本来每条消息都拿一份新快照（见 practiceSegment）。它省掉的
+// 是"组织一句话"这件事：学生刚改完代码，想知道对不对，最自然的动作是让教练看一眼，
+// 而不是先编一个问题出来。挡在中间的那步措辞，对学会这件事没有任何贡献。
+//
+// **必须发一条真实消息**：进 messages、进 history、正常算一次调用。做成"静默刷新上下文"
+// 的话教练一个字都不产出，按钮按下去像坏了 —— 那比没有这个按钮更糟。
+//
+// 文案是恒真的（"我现在的这一版"），不写"我刚改的"：从"没改过"那一侧按下去，
+// 那句话就是假的，而它会留在对话记录里。
+function askCoachToLook() {
+  sendMessage('看我现在的这一版。')
+}
+
 async function endSession() {
   if (!sessionId.value || isStreaming.value) return
   abortOpening()
@@ -519,10 +661,18 @@ onBeforeUnmount(() => {
    一条常驻的窄条。它在说"这一轮教练看到的是这个" —— 与学生猜的那件事直接对应，
    所以不藏进菜单、也不做成悬浮提示。 */
 .practice-visibility { min-width: 0; }
+/* 摘要在左、动作在右，必须挨着：左边说"教练手里是哪一份"，右边是"把它换成最新的那一份"。
+   **`flex-wrap: wrap` 是有意的**：面板可以被拖到 300px 出头（分隔条上限 75%），那时候
+   右边这一套（中缀 88px + 按钮 104px）会把摘要挤到只剩一个图标 —— 实测 302px 时摘要
+   只剩 66px，"教练能看到…"那句话整个看不见了。宁可换行，也不把摘要压没：
+   它是这一块存在的一半理由。
+   `flex-basis: 200px` 让换行在"摘要放得下 200px"这个门槛上发生，`min-width: 0` 保证
+   放得下时它照样能截断长文件名。 */
+.practice-visibility__row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .practice-visibility__toggle,
 .practice-visibility__blind {
   display: flex;
-  width: 100%;
+  flex: 1 1 200px;
   min-width: 0;
   align-items: center;
   gap: 6px;
@@ -544,6 +694,30 @@ onBeforeUnmount(() => {
 .practice-visibility__toggle svg { color: var(--accent-deep); }
 /* 文案可能很长（文件多、名字长），截断而不是换行 —— 它是一行摘要，展开看细节。 */
 .practice-visibility__headline { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 状态（改了没给教练看）和动作（让教练看一遍）裹成一块，换行时同进同退。 */
+.practice-visibility__actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
+/* 「改动教练还没看到」。用 accent-deep 而不是红：这不是出错了，是一件还没做的事。 */
+.practice-visibility__stale { flex: 0 0 auto; color: var(--accent-deep); font-size: 11px; white-space: nowrap; }
+.practice-visibility__sync {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.practice-visibility__sync:hover:not(:disabled) { border-color: #c8d9b7; background: #f1f6eb; color: var(--accent-deep); }
+.practice-visibility__sync:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
+.practice-visibility__sync:disabled { cursor: default; opacity: .55; }
+/* 有改动时加重。整条窄条上只有这一处变重，所以"现在该按它"是一眼看得出来的。 */
+.practice-visibility__sync.is-stale { border-color: #c8d9b7; background: #f1f6eb; color: var(--accent-deep); font-weight: 800; }
 .practice-visibility__details {
   display: grid;
   gap: 3px;
@@ -557,6 +731,9 @@ onBeforeUnmount(() => {
   line-height: 1.6;
   list-style: none;
 }
+/* 规则（哪些文件会被送出去、送之前要提醒什么）用墨色，下面逐份文件的清单保持灰。
+   两者不是一类东西：规则不变，清单每轮都变；而且规则是"你要知道的事"，清单是"证据"。 */
+.practice-visibility__details .is-rule { color: var(--ink); }
 
 /* ── 消息区 ─────────────────────────────────────────── */
 .practice-dialogue__body { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr); overflow: hidden; }

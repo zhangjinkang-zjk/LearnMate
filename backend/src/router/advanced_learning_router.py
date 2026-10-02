@@ -5,8 +5,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from backend.src.service.advanced.reference_docs import collect as collect_reference_docs
 from backend.src.service.advanced.service import AdvancedLearningService
 from backend.src.service.advanced.practice_service import AdvancedPracticeService
+from backend.src.utils.framework_docs import catalogue
 from backend.src.utils.jwt import get_user_id_from_token
 
 router = APIRouter(prefix="/learning/advanced", tags=["进阶学习"])
@@ -19,10 +21,20 @@ class PracticeSessionRequest(BaseModel):
     task: dict[str, Any] = Field(default_factory=dict)
 
 
+class ReferenceDocsRequest(BaseModel):
+    # 框架标识（见 utils/framework_docs.py 的 FRAMEWORKS）。上限 8 是防呆：
+    # 请求体是客户端给的，而每个标识会展开成 3-6 次出网抓取。
+    frameworks: list[str] = Field(default_factory=list, max_length=8)
+    # 教练自己找的官方文档页地址 —— 表里没有的技术走这条（见 ai_core/tools/workspace.py）。
+    # 上限同样是防呆：**这条接口是登录用户的出网抓取口子**，不封顶等于给了个随便放大的
+    # 放大器。抓内网那条闸在 web_page.check_fetchable_url，逐跳拦，和这里无关。
+    urls: list[str] = Field(default_factory=list, max_length=8)
+
+
 class PracticeStateRequest(BaseModel):
-    # 这里只收消息体和两份已经没人读的旧字段。pydantic 默认忽略多余键，所以旧客户端
-    # 仍然发的 `current_phase` / `completed_phase_ids` / `deliverable_state` 会被丢掉，
-    # 不会报错也不会被存下来 —— 这是有意的：它们是死状态，收下来只会让人以为还在用。
+    # 这里只收消息体。早点期的客户端还会发 `current_phase` / `completed_phase_ids` /
+    # `deliverable_state` 这类阶段机的字段 —— pydantic 默认忽略多余键，它们会被静默丢掉，
+    # 不报错也不会被存下来。这是要的行为：那套状态已经删干净了，收下来只会让人以为还在用。
     messages: list[dict[str, Any]] = Field(default_factory=list, max_length=120)
     confirmed_facts: list[str] = Field(default_factory=list, max_length=20)
     assumptions: list[str] = Field(default_factory=list, max_length=20)
@@ -104,3 +116,28 @@ async def pause_practice_session(session_id: str, user_id: int = Depends(get_use
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"code": 200, "msg": "本次实践已暂存", "data": result}
+
+
+@router.get("/reference-docs/catalogue")
+async def list_reference_doc_frameworks(user_id: int = Depends(get_user_id_from_token)):
+    """能取到官方文档的框架清单。
+
+    界面拿它渲染"要哪个框架的资料"。**只给标识和名字，不给 URL** —— URL 是服务端的
+    实现细节，而且前端也不需要它。
+    """
+    return {"code": 200, "msg": "success", "data": {"frameworks": catalogue()}}
+
+
+@router.post("/reference-docs")
+async def fetch_reference_docs(
+    data: ReferenceDocsRequest,
+    user_id: int = Depends(get_user_id_from_token),
+):
+    """抓这些框架的官方文档（外加教练自己给的地址），返回一组可以直接落盘的文件。
+
+    **后端不写学生的磁盘**：学生在哪儿放这些文件由他的浏览器决定（FSA 选择目录），
+    这里只把内容备好。这一点不用 `user_id` —— 内容是公开文档，跟用户无关；
+    但鉴权仍然要有，否则它就成了一条对外的匿名抓取代理。
+    """
+    result = await collect_reference_docs(data.frameworks, data.urls)
+    return {"code": 200, "msg": "success", "data": result}

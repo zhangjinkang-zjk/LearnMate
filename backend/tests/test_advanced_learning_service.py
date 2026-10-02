@@ -213,8 +213,27 @@ def test_project_task_synthesizes_the_whole_completed_scope():
     assert "职责划分" in project["title"]
     assert "冲突消解" in project["title"], "必须跨节点，不能只围着最近一个节点"
     assert "已经学完 2 个节点" in project["scenario"]
-    assert "职责划分" in project["deliverables"][0]["label"]
+    # **按内容查，不按位置。** 原来断言的是 `deliverables[0]` —— 而方案现在排在第一位，
+    # 那样写就把"方案排前面"和"代码要点名覆盖标签"两件事搅在一起，改哪个都会误伤。
+    assert any("职责划分" in item["label"] for item in project["deliverables"])
     assert len(project["title"]) <= 42, "标题要能塞进卡片，别堆成一长串标签"
+
+
+def test_the_project_task_asks_for_a_written_proposal_first():
+    """project 的形态是"从头设计到跑通"，设计那一步必须落成**字**。
+
+    只在脑子里想过不算：学生下周会忘，教练也看不到。而 coach.yaml 的「他在写方案的时候」
+    整节都以"有一份能指到具体句子的材料"为前提 —— 没有它，那段指导只能对着空气说话。
+    """
+    profile = {"identity": "工程师", "direction": "数据结构与算法", "goal": "完成一个项目"}
+    tasks = build_advanced_tasks(profile, _path())
+    project = next(task for task in tasks if task["kind"] == "project")
+
+    first = project["deliverables"][0]["label"]
+    assert "方案" in first, first
+    assert "写" in first, "必须是写下来的，不是想过的"
+    # 方案排第一，但不能把代码那份挤掉 —— 这个任务的交付物核心仍然是能跑的东西
+    assert any("代码" in item["label"] for item in project["deliverables"])
 
 
 def test_project_task_falls_back_to_a_single_topic_without_completed_nodes():

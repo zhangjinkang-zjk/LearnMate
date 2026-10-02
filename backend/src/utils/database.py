@@ -121,33 +121,56 @@ async def _ensure_path_node_difficulty_score_column():
         raise
 
 
-async def _ensure_advanced_practice_deliverable_state_column():
-    """为存量进阶实践会话补充交付物勾选状态列。
+async def _drop_advanced_practice_phase_columns():
+    """清掉进阶实践会话上阶段机留下的五列。
 
-    `generate_schemas()` 只创建缺失的**表**，不会给已存在的表加列，所以模型上新增的
-    字段必须在这里显式补，否则读写会直接撞 MySQL 1054 "Unknown column"。
+    这五列（`current_phase` / `completed_phases` / `deliverable_state` /
+    `final_submission` / `evaluation`）是阶段机与判分的存储，**从来没有被任何代码
+    读写过**，删掉不丢任何信息。
 
-    这里用可空列而不是模型声明的 NOT NULL：新库由 generate_schemas 直接按模型建出
-    正确结构，本函数只对**存量库**生效，而存量行的语义就是"还没勾过任何交付物"，
-    读侧的 `_serialize` 用 `or {}` 兜底，NULL 与 {} 等价。
+    **为什么必须在这里删，而不是"顺手从模型上拿掉就行"**：`generate_schemas()` 只建
+    缺失的**表**，不删多余的**列**。存量库里那五列还在，而 `completed_phases` 是
+    `NOT NULL` 且没有默认值（MySQL 的 JSON 列本来就给不了默认值）—— 模型不再声明它、
+    列又还在，INSERT 会撞 MySQL 1364 把「打开实践会话」直接打成 500。所以删列这件事
+    必须发生在服务开始接请求之前，也就是这个函数里。
+
+    逐列一条 `ALTER`，而不是一条多列的语句：库里可能处在"删了一半"的状态（比如只被
+    早期版本补过 `deliverable_state` 的库），多列语句缺一列就整体失败，逐列则各删各的。
+    1091（列不存在）和 1146（表不存在）是**正常**结果 —— 新库由 `generate_schemas()`
+    按模型直接建出来，这里本就该什么都不做。其余异常原样抛出：连不上库、没权限这类
+    问题要在**启动时**看见，不能拖成运行期一条莫名其妙的 INSERT 报错。
+
+    等所有环境都跑过一遍之后，这个函数和 `init_db()` 里的那次调用可以一起删掉。
     """
     import logging
 
     _log = logging.getLogger(__name__)
     conn = Tortoise.get_connection("default")
-    try:
-        await conn.execute_query(
-            "ALTER TABLE advanced_practice_sessions "
-            "ADD COLUMN deliverable_state JSON NULL COMMENT '交付物勾选状态'"
-        )
-    except Exception as exc:
-        error_text = str(exc).lower()
-        is_duplicate_column = "1060" in error_text or "duplicate column" in error_text
-        if is_duplicate_column:
-            _log.debug("进阶实践交付物状态字段已存在")
-            return
-        _log.exception("进阶实践交付物状态字段迁移失败")
-        raise
+    dropped: list[str] = []
+    for column in (
+        "current_phase",
+        "completed_phases",
+        "deliverable_state",
+        "final_submission",
+        "evaluation",
+    ):
+        try:
+            await conn.execute_query(f"ALTER TABLE advanced_practice_sessions DROP COLUMN {column}")
+            dropped.append(column)
+        except Exception as exc:
+            error_text = str(exc).lower()
+            is_missing = (
+                "1091" in error_text
+                or "1146" in error_text
+                or "check that column" in error_text
+                or "doesn't exist" in error_text
+            )
+            if is_missing:
+                continue
+            _log.exception("进阶实践阶段遗留列清理失败（列名 %s）", column)
+            raise
+    if dropped:
+        _log.warning("进阶实践会话的阶段遗留列已清除：%s", "、".join(dropped))
 
 
 async def _ensure_curriculum_by_direction_table():
@@ -209,7 +232,7 @@ async def init_db():
         await _ensure_classroom_lesson_schema()
         await _ensure_path_node_teaching_spec_column()
         await _ensure_path_node_difficulty_score_column()
-        await _ensure_advanced_practice_deliverable_state_column()
+        await _drop_advanced_practice_phase_columns()
         await _ensure_curriculum_by_direction_table()
         _DB_INITIALIZED = True
 

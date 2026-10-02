@@ -44,9 +44,10 @@ const props = defineProps({
   // (row) => 布尔，标出"当前行"。
   //
   // 这里刻意**不叫 `is-current` 那种通用类名**，而是组件自己的 `data-table__row--current`：
-  // 曾用 `is-current`，结果 `PathTrail` 里表示"当前站点"的 `.is-current .trail__dot`
-  // 是个后代选择器，顺着 DOM 把整行的圆点全染成了当前站的颜色 —— 两个组件对同一个
-  // 类名有两种理解。状态类名一律带组件前缀。
+  // 调用方那一行里还有别的"当前" —— `OverviewPage` 的 `.row__track i.is-current` 指的是
+  // "路径正走到哪一站"，和"这一行是当前路径"是两件事。曾用 `is-current`，结果一个
+  // 后代选择器顺着 DOM 把整行的格子全染成了当前站的颜色：两个组件对同一个类名有两种理解。
+  // 状态类名一律带组件前缀。
   isCurrent: { type: Function, default: null },
 })
 

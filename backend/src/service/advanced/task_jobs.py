@@ -1,4 +1,4 @@
-"""进阶学习里的后台作业注册表（任务生成 / 实践评分）。
+"""进阶学习里的后台作业注册表（任务生成）。
 
 **为什么要有这个**：智能体生成一次要在 40~120 秒量级，原来它是**同步跑在
 `GET /learning/advanced/current` 里面**的（`asyncio.wait_for(..., timeout=40)`）。结果是
@@ -9,9 +9,9 @@
 所以生成搬到后台：请求立刻返回确定性任务（`source="pending"`），作业跑完把结果写回，
 前端下一次轮询就接上。
 
-（第二类作业「实践评分」的消费方已经不存在了 —— 判分连同阶段机一起删掉了，那批
-`_grading*` 函数目前没有调用者。它们和任务生成共用同一套注册表机制，留着无害；
-**新代码不要再往这里加作业类型**，直接删掉这几个函数比复用它们更省事。）
+**这里只跑一种作业（任务生成）。** 以前还有第二类「实践评分」，判分连同阶段机一起删掉
+之后那批 `_grading*` 函数也清掉了。**新代码不要再往这个文件里加作业类型** —— 真需要
+另一种后台作业，照这个文件另起一个模块，比往这里塞第二种 key 形状省事。
 
 结构照抄 `service/path/path_video_jobs.py`（同样只需要"单飞 + 可查状态"）：
 dataclass 持强引用 + `asyncio.Lock` 包住 check-and-create + 终态保留 TTL。
@@ -32,8 +32,6 @@ logger = logging.getLogger(__name__)
 
 # (user_id, path_id, milestone)
 AdvancedTaskKey = tuple[int, int, int]
-# (user_id, session_key)
-PracticeGradingKey = tuple[int, str]
 
 STATE_RUNNING = "generating"
 STATE_READY = "ready"
@@ -138,7 +136,6 @@ class JobRegistry:
 
 
 _TASK_JOBS = JobRegistry("进阶任务生成作业")
-_GRADING_JOBS = JobRegistry("实践评分作业")
 
 
 def _task_key(user_id: int, path_id: int, milestone: int) -> AdvancedTaskKey:
@@ -160,28 +157,3 @@ async def ensure_task_job(
     producer: Callable[[], Awaitable[None]],
 ) -> tuple[Job, bool]:
     return await _TASK_JOBS.ensure(_task_key(user_id, path_id, milestone), producer)
-
-
-def _grading_key(user_id: int, session_key: str) -> PracticeGradingKey:
-    return (int(user_id), str(session_key))
-
-
-def is_grading(user_id: int, session_key: str) -> bool:
-    """这次实践会话的评分作业是否在跑。
-
-    `get_session` 靠它区分"还在评分"和"评分作业没了（进程重启过）"—— 后者要拿确定性
-    评分补一份，否则用户永远停在"正在评价你的方案"。
-    """
-    return _GRADING_JOBS.is_running(_grading_key(user_id, session_key))
-
-
-def get_grading_job(user_id: int, session_key: str) -> Job | None:
-    return _GRADING_JOBS.get(_grading_key(user_id, session_key))
-
-
-async def ensure_grading_job(
-    user_id: int,
-    session_key: str,
-    producer: Callable[[], Awaitable[None]],
-) -> tuple[Job, bool]:
-    return await _GRADING_JOBS.ensure(_grading_key(user_id, session_key), producer)

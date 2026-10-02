@@ -110,11 +110,12 @@
           <template #default="{ row, index }">
             <span class="row__no">{{ index + 1 }}</span>
             <span class="row__name" :title="row.name">{{ row.name }}</span>
-            <PathTrail
-              :nodes="row.nodes"
-              :label="`${row.name}：已完成 ${row.completed_nodes} / ${row.total_nodes} 个节点`"
-              @select="openNode(row, $event)"
-            />
+            <!-- 路径的形状：**每个节点一个等宽方格**，横着铺满这一列。
+                 哪几站走过了、现在站在哪、前面还剩几站，一横条看完。
+                 读屏当一个图形读（见 `trackLabel`），不逐格念。 -->
+            <span class="row__track" role="img" :aria-label="trackLabel(row)">
+              <i v-for="cell in trackCells(row)" :key="cell.key" :class="`is-${cell.kind}`"></i>
+            </span>
             <span class="row__pct">{{ row.progress }}%</span>
             <span v-if="!isNarrow" class="row__now" :title="row.current_node ? row.current_node.title : '已学完'">
               {{ row.current_node ? row.current_node.title : '已学完' }}
@@ -227,13 +228,9 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { learningApi } from '@/shared/api/learningApi'
 import DataTable from '@/shared/ui/DataTable.vue'
-import PathTrail from '@/shared/ui/PathTrail.vue'
 import TrendBars from '@/shared/ui/TrendBars.vue'
-
-const router = useRouter()
 const loading = ref(true)
 const errorMessage = ref('')
 const profile = reactive({ direction: '', goal: '' })
@@ -463,13 +460,48 @@ const reviewTarget = computed(() => {
 })
 const weakCount = computed(() => weakPoints.value.length)
 
-// 点路线上的某一站 → 进那个节点的学习界面。带上 pathId，因为节点 id 只在它所属的
-// 路径里有意义。未解锁的站点在 PathTrail 里就已经不可点了，不会走到这里。
-function openNode(row, node) {
-  if (!node?.id) return
-  const query = { node: node.id }
-  if (row?.id) query.pathId = row.id
-  router.push({ name: 'fundamentals', query })
+// ── 路径方格 ────────────────────────────────────────────────
+// 后端四种节点状态 → 四种颜色的格子。**四种都留着，不把「可开始」并进「正在这里」。**
+// 并过一版：`unlocked` 和 `in_progress` 都画成柠檬绿"当前站"，于是**一条路径上有几个
+// 未开始的节点，就亮几个柠檬绿的当前站** —— 实测 Transformer 那条同时亮着两个，而右边
+// 「当前节点」那一列只写着一个标题，同一行自己跟自己打架。
+const TRACK_KIND = { completed: 'done', in_progress: 'current', unlocked: 'available' }
+
+/**
+ * 一行的格子序列：`[{ key, kind }]`。
+ *
+ * **"正在这里"全行只剩一个。** `in_progress` 是"打开过、没做完"—— 节点一被点开就写这个
+ * 状态（`helpers.py` 绑定资源时），而路径中段没有前置的节点一出生就是 `unlocked`，
+ * 所以同一条路径上挂着一串 `in_progress` 是常态，后端自己也按复数在数
+ * （`path/service.py` 里 `in_progress = sum(...)`）。照状态直接上色的话，这一行会亮起
+ * 好几个柠檬绿实心格，而右边「当前节点」只写着一个名字 —— 屏幕上同时有两个"你现在在这"。
+ *
+ * 规则和后端取当前节点的那句（`path/service.py`：按 order_index 第一个
+ * `unlocked`/`in_progress`）**同源**：第一个非"已完成"的格子升格为实心柠檬绿，
+ * 其余原本要画成实心的降为空心环（"能学，但不是这一站"）。
+ */
+function trackCells(row) {
+  const nodes = Array.isArray(row?.nodes) ? row.nodes : []
+  const kinds = nodes.map((node) => TRACK_KIND[String(node?.status ?? '')] || 'locked')
+  const at = kinds.findIndex((kind) => kind === 'current' || kind === 'available')
+  return nodes.map((node, i) => ({
+    key: node?.id ?? i,
+    kind: i === at ? 'current' : at >= 0 && kinds[i] === 'current' ? 'available' : kinds[i],
+  }))
+}
+
+const TRACK_WORD = { done: '已完成', current: '正在学', available: '可开始', locked: '未解锁' }
+
+// 整条轨道当一个图形念，**不逐格念**：最多 23 个格子，读屏一格一格报出来是一串噪声，
+// 而且右边「完成度」「进度」两列已经把总数说过了；这里补的是那两列没有的分布。
+// 数的是 `trackCells` 出来的结果，不是原始状态 —— 念出来的分布必须和画出来的一致。
+function trackLabel(row) {
+  const counts = {}
+  for (const cell of trackCells(row)) counts[cell.kind] = (counts[cell.kind] || 0) + 1
+  const parts = ['done', 'current', 'available', 'locked']
+    .filter((kind) => counts[kind])
+    .map((kind) => `${TRACK_WORD[kind]} ${counts[kind]} 个`)
+  return `${row?.name || '路径'}：${parts.join('，') || '还没有节点'}`
 }
 
 function formatDuration(seconds) {
@@ -720,6 +752,41 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
    `DataTable` 给当前行加的是 `data-table__row--current`，不是 `row is-current`。
    删掉而不是改对 —— 当前行已经有左侧 4px 色条 + 整行浅绿底纹（组件自带），
    再把路径名也染绿就是同一件事说三遍。（组件那两处样式在 `DataTable.vue` 里，够不着也不该够。） */
+
+/* 路径的形状：**一条等宽、等长、等高的细条，节点只体现在缝的密度上**。
+
+   上一版是"一个节点一个 16px 方格、每格平分列宽"（`flex: 1 1 0` + `gap: 4px`）。
+   它有个看着就不对、但说不上哪不对的毛病：**格子的大小跟着节点数走**。13 个节点那行
+   每格 48px，23 个节点那行每格 23px —— 四行并排，两行像粗条纹、两行像细梳子，
+   同一张表里出现四种纹理。**读者要比的本来就是这四行**，而这里比不了。
+
+   这不是审美问题，是有定论的：单位图（unit chart）一旦各行格子数不同，读者就没法比较
+   长度、只能去数格子 —— Stephen Few《Unit Charts Are For Kids》专门批这一类，
+   它举的例子正是"左边一格、右边五格"，并指出这种排布会"呈现出根本不存在的模式"；
+   同一页里同一单位的图形要用同一个刻度也是数据可视化里成文的规则（CDC 那条是说
+   成组展示必须同分母）。所以**不能**靠"给每格定死 16px"来解决 —— 那只是把
+   "格子大小不齐"换成"条子长短不齐"，比较照样做不了。
+
+   定下来的形状：四行都是同一条 10px 高、铺满整列的圆头条，**外轮廓完全一致**；
+   节点的分界退化成缝的颜色（`gap: 1px` 露出的行底色），一个节点一缝。
+   于是"我走了多少"由**填充的长度**回答（四行同一个刻度，能比），
+   "这条路径有多少站、我在第几站"由**缝的密度和柠檬绿那一段的位置**回答。
+
+   `height: 10px` 不是随手定的：它得比 16px 的方格矮（方格那种厚度会把注意力从
+   "填充到哪"抢到"格子多大"上），又得容得下 1px 的缝和可开始那圈 1.5px 的环。 */
+.row__track { display: flex; gap: 1px; height: 10px; overflow: hidden; border-radius: 99px; }
+/* 底色 = 未解锁。**这一段必须能看见**：看不见就等于"路径只有 10 个节点"，
+   而真相是后面还有 13 个没解锁。 */
+.row__track i { flex: 1 1 0; min-width: 2px; background: #e2e9e0; }
+.row__track i.is-done { background: var(--accent-deep); }
+/* 「正在这里」全行只有一个（见 `trackCells`）。 */
+.row__track i.is-current { background: var(--accent); }
+/* 可开始：柠檬绿环 + 比灰底略亮的心。它和"未解锁"都还没做，但一个能学一个不能，
+   在点开之前就该看出来 —— 这也是它不并进"正在这里"的原因。
+   底色不写 `transparent`：当前行有 `#f7faf1` 的浅绿底纹，透明的心会跟着变绿，
+   和"可开始"该有的"空心"读起来不是一回事。 */
+.row__track i.is-available { background: #f4f8ef; box-shadow: inset 0 0 0 1.5px var(--accent); }
+
 .row__pct { color: var(--ink); font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
 .row__now { overflow: hidden; color: var(--muted); font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
 /* 「上次学习」写成相对日（今天 / 3 天前）。它答的是"这条路径我多久没碰了"，

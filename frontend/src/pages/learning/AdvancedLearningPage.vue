@@ -71,6 +71,11 @@
             :chapter-content="chapterContent"
             :resource-id="resourceId"
             :workspace-reader="readWorkspaceSnapshot"
+            :doc-writer="writeDocSection"
+            :framework-docs-writer="writeFrameworkDocs"
+            :workspace-changed="workspaceChanged"
+            @sent="onPracticeSent"
+            @doc-written="onDocWritten"
             @end="endPractice"
           />
           <section v-else-if="!hasWorkspace" class="surface surface-pad state-panel state-panel--error"><CircleAlert :size="20" /><div><strong>实践任务缺少关联节点</strong><p>请重新同步任务后再开始巩固。</p></div><button class="button button--quiet" type="button" @click="loadTask({ refresh: true })">重新同步</button></section>
@@ -236,6 +241,53 @@ onBeforeUnmount(() => clearCurrentPage('advanced'))
 // 都变，等于把每次重渲染又还回来了。
 function readWorkspaceSnapshot() {
   return workspaceRef.value?.readSnapshot?.() ?? { available: false }
+}
+
+// 教练「看过的是哪一版」。`null` = 这个任务还没发过任何一轮，那时候谈不上"改没改"。
+//
+// **比较在这里做，往下只传一个布尔，这是有原因的。** 对话组件的模板对每条消息都要跑
+// 一遍 `renderMarkdown`（背后是 markdown-it + DOMPurify 一整套解析，**没有缓存**），
+// 所以它每重渲染一次就要把整段对话重新解析一遍，而且对话越长越慢。要是把那个改动计数
+// 直接传下去，等于把这条开销挂到每一次击键上。布尔只在"改过 / 没改过"翻转时变，
+// 一次编辑只让它重渲染两次。**别把比较挪进对话组件。**
+const sentWorkspaceRevision = ref(null)
+const workspaceChanged = computed(() => {
+  const current = workspaceRef.value?.revision
+  // 工作区被卸载时（重新同步会把整页换掉）`revision` 读不到 —— 那种时候不表态，
+  // 而不是拿 0 去比、把"暂时没有工作区"说成"你改了东西"。
+  if (current === undefined || sentWorkspaceRevision.value === null) return false
+  return current !== sentWorkspaceRevision.value
+})
+
+// 由对话在取到快照那一刻通报，而不是在发送前由这里先记 —— 发送会被 `isStreaming`、
+// 缺 session 这些条件挡掉，页面无从知道那一轮到底出去了没有。
+function onPracticeSent() {
+  sentWorkspaceRevision.value = workspaceRef.value?.revision ?? 0
+}
+
+// 换任务（含重新同步）就是换了一份工作区语境，上一笔记的账作废。
+watch(() => task.value?.id, () => { sentWorkspaceRevision.value = null })
+
+// 教练把谈定的一节写进了方案文档，同样走上面那条读取路径的镜像：
+// 写入落在 CodeWorkspace 里（学生硬盘上那个文件夹只有那边有句柄），页面只做转发。
+// 返回值 { ok, reason } 交给对话组件去说 —— 写失败必须让学生看见，见 PracticeDialogue。
+function writeDocSection(section, content) {
+  return workspaceRef.value?.writeDocSection?.(section, content)
+    ?? { ok: false, reason: '工作区还没准备好' }
+}
+
+// 官方文档十几份一起写，走的是和上面同一条路。取在对话组件那边（它负责发请求），
+// 写在这里 —— 目录内容的抓取失败同样要如实报出来，不能只报成功的那半。
+function writeFrameworkDocs(dir, files) {
+  return workspaceRef.value?.writeFrameworkDocs?.(dir, files)
+    ?? { ok: false, reason: '工作区还没准备好' }
+}
+
+// 这一版是**教练自己写的**：它当然知道里面有什么，所以刚写完就把账记上。
+// 不记的话，下面那条「教练还没看到这一版」的提示会在每次写入后立刻亮起来 ——
+// 那是在说"你改了东西他没看到"，而这次不是学生改的，是它自己写的。
+function onDocWritten() {
+  sentWorkspaceRevision.value = workspaceRef.value?.revision ?? 0
 }
 
 // 智能体生成现在跑在后台（见后端 service/advanced/task_jobs.py），首次请求会先返回
@@ -437,7 +489,7 @@ async function loadNodeContext() {
 // 所以任务一定就先把它取回来；取不到也不挡对话，只是上下文为空。
 watch(() => task.value?.id, () => { loadNodeContext() })
 
-// 暂存后请服务端按**它自己记的**会话记录写一份过程小结：消息、阶段、评价都在库里，
+// 暂存后请服务端按**它自己记的**会话记录写一份过程小结：对话消息都在库里，
 // 不用前端再描述一遍"我刚才学了什么"（那样总结就成了给自己打分）。
 // 失败就什么都不显示 —— 编一段"你已经掌握了…"比不显示更糟（同本文件里程碑默认值那条注释）。
 async function endPractice(sessionId = '') {

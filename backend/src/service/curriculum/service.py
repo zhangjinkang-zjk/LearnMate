@@ -168,6 +168,17 @@ async def sync_to_portrait(user_id: int, direction: str, goal: str = "") -> list
     return courses
 
 
+async def _is_portrait_subject_list_current(direction: str, cached_subjects: list) -> bool:
+    """画像里那份科目清单，和课程表那份是不是一样长。
+
+    画像是**拷贝**，课程表才是源。拷贝可能是早先"limit 一路透到拆解那一步"写下的 ——
+    一个十门课的方向只剩前四门，并且一旦写进去就再也不会自己变长：早退分支只读它。
+    判据取"表里更长就是旧的"：重同步走表缓存，不会再问模型，所以判错的代价是一次 SELECT，
+    而不是一次生成。
+    """
+    return len(cached_subjects) >= len(await _query_from_db(_normalise_direction(direction)))
+
+
 async def sync_direction_subjects(
     user_id: int,
     direction: str,
@@ -175,7 +186,13 @@ async def sync_direction_subjects(
     limit: int = 4,
     force_regenerate: bool = False,
 ) -> list[str]:
-    """读取或生成方向科目并写入画像；普通进入优先复用已保存结果。"""
+    """读取或生成方向科目并写入画像；普通进入优先复用已保存结果。
+
+    **返回值和写进画像的东西不是一回事**：写进去的是这个方向的**全部**科目，返回的是
+    "现在先建几条路径"（`limit` 条，仍然按学习依赖从基础到综合排序，所以第一条就是入口）。
+    以前这里把 limit 一路透到拆解那一步，画像里只剩前四门，而被截掉的那几门正是学生目标
+    所在的位置（排序把"工具调用""智能体编排"放在第 7～10 位），从此连记录都不剩。
+    """
     from backend.src.models.usermodel import User
     from backend.src.models.portraitmodel import User_picture
     from backend.src.service.portrait.service import dump_traits, is_usable_direction, parse_traits
@@ -197,15 +214,19 @@ async def sync_direction_subjects(
         and isinstance(cached_subjects, list)
         and cached_subjects
         and (not cached_goal or not goal or cached_goal == str(goal).strip())
+        and await _is_portrait_subject_list_current(direction, cached_subjects)
     ):
         return [item.strip() for item in cached_subjects if isinstance(item, str) and item.strip()][:limit]
 
     # force_regenerate 要能穿透两层缓存：traits 那份（上面的早退）和课程表那份。
-    subjects = await get_direction_subjects(direction, goal, limit, refresh=force_regenerate)
+    # **拆解要的是整个方向的清单，不是"现在要建几条"** —— limit 传进去的话，画像里那份拷贝
+    # 就只剩前几门（见函数 docstring）。课程表里那份一直是完整的：_infer_by_llm 按
+    # _MAX_CACHED_COURSES 生成，所以这里不传 limit 不会多问模型一次。
+    subjects = await get_direction_subjects(direction, goal, _MAX_CACHED_COURSES, refresh=force_regenerate)
     if not subjects:
         return []
     if not user:
-        return subjects
+        return subjects[:limit]
     if not picture:
         picture = await User_picture.create()
         user.picture = picture
@@ -216,4 +237,4 @@ async def sync_direction_subjects(
     traits["learning_direction_goal"] = goal[:160]
     picture.traits = dump_traits(traits)
     await picture.save()
-    return subjects
+    return subjects[:limit]

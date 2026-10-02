@@ -211,6 +211,7 @@ export function describeWorkspaceSnapshot(snapshot) {
   if (!snapshot?.available) {
     return {
       headline: '教练还看不到你的文件 · 打开文件夹后教练才能读到代码',
+      rules: [],
       details: [],
     }
   }
@@ -220,6 +221,20 @@ export function describeWorkspaceSnapshot(snapshot) {
   if (activeName) headline += `${activeName}（当前）+ `
   headline += `文件树里 ${snapshot.tree_total_files} 个文件`
   if (snapshot.omitted_count > 0) headline += `，还有 ${snapshot.omitted_count} 份已打开文件没带`
+
+  // 「哪些文件会被送出去」背后是两条**规则**，学生得知道 —— 不知道就只能靠猜，
+  // 而这一块存在的全部理由就是让人不必猜：
+  //   - 打开着的标签页都在里面。这就是"想让他看哪一份"的那个开关，之前从没被说出来过，
+  //     于是学生只会读结果（"这 5 份发出去了"），学不会用它。
+  //   - 被当前文件引用的文件也在里面。也就是说**他没打开过的文件也可能被送出去** ——
+  //     这件事本身在下面列出来了（没藏），但不知道为什么，学生看到会当成 bug。
+  // 规则和"这一轮实际送了哪几份"**分开两个字段**：前者不变，后者每轮都变，混在一个
+  // 列表里会让人以为规则也在变。
+  const rules = [
+    '打开着的标签页教练都读得到 —— 想让他看哪一份，在左边把它打开就行。',
+    '被当前文件引用的文件也会一起带上（审核要看依赖关系），所以你没打开过的文件也可能在里面。',
+    CODE_SENDING_NOTICE,
+  ]
 
   const details = []
   for (const file of snapshot.files) {
@@ -231,7 +246,6 @@ export function describeWorkspaceSnapshot(snapshot) {
   if (snapshot.omitted_paths.length) {
     details.push(`这些已打开的文件这次没带上：${snapshot.omitted_paths.join('、')}`)
   }
-  details.push(CODE_SENDING_NOTICE)
 
-  return { headline, details }
+  return { headline, rules, details }
 }
