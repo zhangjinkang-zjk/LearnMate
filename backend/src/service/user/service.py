@@ -117,6 +117,8 @@ async def login_user(data : Login_User):
         return None, "用户不存在"
     if not verify_password(data.password, user.password):
         return  None, "密码错误"
+    from backend.src.service.admin.activity import record_login
+    await record_login(user.id)
     return user, "登陆成功"
 
 async def read_user(user_id : int):
@@ -308,6 +310,8 @@ async def login_by_email(email: str, code: str):
 
     record.used = True
     await record.save()
+    from backend.src.service.admin.activity import record_login
+    await record_login(user.id)
     return user, "登录成功"
 
 async def delete_user(user_id : int, data : Delete_User) : 

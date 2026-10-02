@@ -51,7 +51,8 @@ async function submit() {
       : await authApi.login(username.value, password.value)
     localStorage.setItem('token', data.token)
     if (data.username) localStorage.setItem('learnmate_username', data.username)
-    const redirect = typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/') ? route.query.redirect : '/learning/overview'
+    const redirect = typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/') && !route.query.redirect.startsWith('//')
+      ? route.query.redirect : data.role === 'admin' ? '/admin' : '/learning/overview'
     await router.replace(redirect)
   } catch (error) {
     errorMessage.value = error.message || '登录失败，请稍后重试'

@@ -8,6 +8,18 @@ from backend.src.utils.jwt import get_user_id_from_token
 router = APIRouter(prefix="/study", tags=["学习统计"])
 
 
+@router.get("/assignments")
+async def list_assignments(user_id: int = Depends(get_user_id_from_token)):
+    from backend.src.service.admin.assignments import list_assignments as list_user_assignments
+    return {"code": 200, "data": await list_user_assignments(user_id)}
+
+
+@router.post("/assignments/{assignment_id}/complete")
+async def complete_assignment(assignment_id: int, user_id: int = Depends(get_user_id_from_token)):
+    from backend.src.service.admin.assignments import complete_assignment as complete_user_assignment
+    return {"code": 200, "data": await complete_user_assignment(user_id, assignment_id)}
+
+
 @router.post("/heartbeat")
 async def heartbeat(
     user_id: int = Depends(get_user_id_from_token),

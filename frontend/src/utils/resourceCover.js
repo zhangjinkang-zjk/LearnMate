@@ -7,6 +7,8 @@ const TYPE_LABELS = {
   reading: 'READING',
   ppt: 'PRESENTATION',
   mindmap: 'KNOWLEDGE MAP',
+  mind_map: 'KNOWLEDGE MAP',
+  knowledge_map: 'KNOWLEDGE MAP',
   exercise: 'PRACTICE',
   case: 'CASE STUDY',
   video: 'VIDEO LESSON',
@@ -101,7 +103,8 @@ function renderVideoCover(resource, title) {
 }
 
 export function generatedResourceCover(resource = {}) {
-  const type = String(resource.resource_type || 'document').toLowerCase()
+  const rawType = String(resource.resource_type || 'document').toLowerCase()
+  const type = rawType === 'mind_map' || rawType === 'knowledge_map' ? 'mindmap' : rawType
   const title = String(resource.title || resource.topic || 'Learning resource').trim()
   const label = escapeXml(TYPE_LABELS[type] || 'LEARNING RESOURCE')
   const artwork = {

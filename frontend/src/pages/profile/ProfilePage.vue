@@ -64,17 +64,15 @@
         <div v-else class="profile-empty"><BarChart3 :size="20" /> 完成一些诊断或练习后，这里会生成你的能力雷达图。</div>
       </section>
 
-      <section class="portrait-traits surface" aria-labelledby="traits-title">
+      <section class="portrait-traits portrait-puzzle surface" aria-labelledby="traits-title">
         <div class="puzzle-heading"><div><p class="eyebrow">学习特征</p><h2 id="traits-title">把你的学习画像拼起来</h2><p class="puzzle-intro">每块拼图是一条学习线索。它们会先落位，点击任意碎片，查看这条判断和它的依据。</p></div><span class="puzzle-count">{{ displayTraitItems.length }} 块线索</span></div>
         <div v-if="displayTraitItems.length" class="puzzle-layout">
           <div class="puzzle-board" aria-label="学习画像拼图">
-            <div class="puzzle-board-heading"><span>画像拼图</span><small>可信度越高，拼片颜色越饱和</small></div>
-            <div class="puzzle-pieces" role="list">
-              <button v-for="(item, index) in displayTraitItems" :key="item.key" type="button" class="puzzle-piece" :class="[`puzzle-piece--tone-${index % 4}`, { 'is-selected': selectedTrait?.key === item.key }]" :style="{ '--piece-delay': `${Math.min(index, 12) * 65}ms`, '--piece-tilt': `${index % 2 ? 1 : -1}deg`, '--confidence': `${item.confidence}%` }" role="listitem" :aria-pressed="selectedTrait?.key === item.key" :aria-label="`${item.label}：${item.value}`" @click="selectedTraitKey = item.key">
+            <div class="puzzle-board-heading"><span>画像拼图</span><small>点击一块拼片，看看它代表什么</small></div>
+            <div class="puzzle-pieces" role="group" aria-label="学习特征拼片">
+              <button v-for="(item, index) in displayTraitItems" :key="item.key" type="button" class="puzzle-piece" :class="[`puzzle-piece--tone-${index % 4}`, { 'is-selected': selectedTrait?.key === item.key }]" :style="{ '--piece-delay': `${Math.min(index, 12) * 65}ms`, '--piece-tilt': `${index % 2 ? 1 : -1}deg` }" :aria-pressed="selectedTrait?.key === item.key" :aria-label="`${item.label}：${item.value}`" @click="selectedTraitKey = item.key">
                 <span class="puzzle-piece__label">{{ item.label }}</span>
                 <strong class="puzzle-piece__value">{{ item.value }}</strong>
-                <span class="puzzle-piece__meta">{{ item.confidence ? `可信度 ${item.confidence}%` : '等待更多依据' }}</span>
-                <span class="puzzle-piece__bar" aria-hidden="true"><i></i></span>
               </button>
             </div>
           </div>
@@ -82,9 +80,7 @@
             <span class="puzzle-detail__eyebrow">当前拼片</span>
             <h3>{{ selectedTrait.label }}</h3>
             <p>{{ selectedTrait.value }}</p>
-            <div class="puzzle-detail__confidence"><span>判断可信度</span><strong>{{ selectedTrait.confidence }}%</strong></div>
-            <div class="puzzle-detail__track" role="progressbar" :aria-label="`${selectedTrait.label}判断可信度`" :aria-valuenow="selectedTrait.confidence" aria-valuemin="0" aria-valuemax="100"><span :style="{ width: `${selectedTrait.confidence}%` }"></span></div>
-            <small>这代表系统目前有多少依据支持这条画像判断，会随着诊断、练习和对话记录更新。</small>
+            <small>这是一条来自你的学习记录和画像对话的线索。继续学习，它会和其他拼片一起组成更完整的画像。</small>
           </aside>
         </div>
         <div v-else class="profile-empty"><UserRound :size="20" /> 完成画像访谈后，这里会显示你的学习特征。</div>
@@ -124,7 +120,6 @@ const formatTraitValue = (key, raw, depth = 0) => {
     return value ? `${traitLabels[childKey] || childKey}：${value}` : ''
   }).filter(Boolean).join('；')
 }
-const traitItems = computed(() => Object.entries(portrait.traits || {}).map(([key, raw]) => { const value = formatTraitValue(key, raw); if (!value) return null; const confidence = typeof raw === 'object' && Number.isFinite(Number(raw.confidence)) ? Math.round(Number(raw.confidence) * 100) : 0; return { key, label: traitLabels[key] || key, value, confidence } }).filter(Boolean))
 const displayTraitLabels = {
   onboarding: '学习定向',
   learning_signals: '学习动态',
@@ -224,9 +219,7 @@ const hiddenTraitKeys = new Set(['updated_at', 'created_at'])
 const displayTraitItems = computed(() => Object.entries(portrait.traits || {}).filter(([key]) => !hiddenTraitKeys.has(key)).map(([key, raw]) => {
   const value = formatDisplayTraitValue(key, raw)
   if (!value) return null
-  const rawConfidence = typeof raw === 'object' && raw !== null ? Number(raw.confidence) : NaN
-  const confidence = Number.isFinite(rawConfidence) ? Math.round(rawConfidence <= 1 ? rawConfidence * 100 : rawConfidence) : 0
-  return { key, label: displayTraitLabels[key] || '学习情况', value, confidence }
+  return { key, label: displayTraitLabels[key] || '学习情况', value }
 }).filter(Boolean))
 const selectedTraitKey = ref('')
 const selectedTrait = computed(() => {
@@ -311,11 +304,10 @@ onMounted(loadProfile)
 .profile-status-dot { position: absolute; right: 1px; bottom: 1px; width: 13px; height: 13px; border: 3px solid #f7f8ed; border-radius: 50%; background: #67a56a; }
 .profile-summary-footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 26px; margin-top: 22px; padding-top: 18px; border-top: 1px solid rgba(63, 65, 70, .12); }
 .profile-completion { display: grid; gap: 8px; min-width: 0; }
-.traits-help { max-width: 620px; margin: 6px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
 .profile-completion-heading { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 11px; }
 .profile-completion-heading strong { color: var(--accent-deep); font-size: 12px; }
-.profile-completion-track, .trait-confidence-track { height: 6px; overflow: hidden; border-radius: 99px; background: rgba(63, 91, 49, .12); }
-.profile-completion-track span, .trait-confidence-track span { display: block; height: 100%; border-radius: inherit; background: var(--accent-deep); transition: width .45s ease; }
+.profile-completion-track { height: 6px; overflow: hidden; border-radius: 99px; background: rgba(63, 91, 49, .12); }
+.profile-completion-track span { display: block; height: 100%; border-radius: inherit; background: var(--accent-deep); transition: width .45s ease; }
 .profile-sync { display: grid; gap: 5px; min-width: 130px; text-align: right; }
 .profile-sync span { color: var(--muted); font-size: 10px; }
 .profile-sync strong { color: var(--ink); font-size: 11px; font-weight: 700; }
@@ -353,9 +345,6 @@ onMounted(loadProfile)
 .radar-track { position: relative; }
 .radar-track i { position: absolute; top: 0; left: 0; display: block; height: 100%; border: 1px dashed #8c87b5; border-radius: inherit; background: transparent; box-sizing: border-box; }
 .trait-item-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.trait-confidence { color: var(--accent-deep); font-size: 10px; font-weight: 800; }
-.trait-confidence-track { height: 4px; margin-top: auto; background: rgba(63, 91, 49, .1); }
-.trait-confidence-track span { background: #7e9c46; }
 @media (max-width: 920px) { .profile-pulse-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 620px) { .profile-summary-footer { grid-template-columns: 1fr; gap: 15px; }.profile-sync { min-width: 0; text-align: left; }.profile-pulse-grid { grid-template-columns: 1fr; gap: 10px; }.pulse-card { min-height: 132px; }.radar-legend { justify-content: flex-start; } }
 :global(.app-content:has(.profile-page)) { background: #f7f7f7; }
@@ -388,14 +377,15 @@ onMounted(loadProfile)
 .puzzle-board-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 3px 14px; color: var(--ink); font-size: 12px; font-weight: 800; }
 .puzzle-board-heading small { color: var(--muted); font-size: 10px; font-weight: 500; }
 .puzzle-pieces { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
-.puzzle-piece { position: relative; display: flex; min-width: 0; min-height: 156px; flex-direction: column; align-items: flex-start; padding: 20px 18px 17px; overflow: hidden; border: 1px solid rgba(63, 91, 49, .15); border-radius: 12px; background: var(--piece-bg); color: var(--ink); text-align: left; cursor: pointer; isolation: isolate; animation: puzzle-piece-place .72s var(--piece-delay) both cubic-bezier(.2, .85, .3, 1.2); transition: transform .22s ease, border-color .22s ease, filter .22s ease; }
-.puzzle-piece::before, .puzzle-piece::after { position: absolute; z-index: -1; width: 26px; height: 26px; border-radius: 50%; background: inherit; content: ''; transition: transform .22s ease; }
+.puzzle-piece { position: relative; display: flex; min-width: 0; min-height: 156px; flex-direction: column; align-items: flex-start; padding: 20px 18px 17px; overflow: visible; border: 1px solid rgba(63, 91, 49, .15); border-radius: 12px; background: var(--piece-bg); color: var(--ink); text-align: left; cursor: pointer; isolation: isolate; animation: puzzle-piece-place .72s var(--piece-delay) both cubic-bezier(.2, .85, .3, 1.2); transition: transform .22s ease, border-color .22s ease, filter .22s ease; }
+.puzzle-piece::before, .puzzle-piece::after { position: absolute; z-index: 0; width: 26px; height: 26px; border-radius: 50%; background: inherit; content: ''; transition: transform .22s ease; }
 .puzzle-piece::before { right: -13px; top: 50%; transform: translateY(-50%); }
 .puzzle-piece::after { bottom: -13px; left: 50%; transform: translateX(-50%); }
 .puzzle-piece:nth-child(3n)::before { display: none; }
 .puzzle-piece:nth-child(-n + 3)::after { display: none; }
 .puzzle-piece:hover, .puzzle-piece:focus-visible { z-index: 2; border-color: rgba(63, 91, 49, .42); filter: saturate(1.1); outline: 0; transform: translateY(-5px) rotate(var(--piece-tilt)); }
 .puzzle-piece.is-selected { z-index: 3; border-color: var(--accent-deep); box-shadow: 0 9px 20px rgba(45, 76, 38, .16); transform: translateY(-4px) rotate(0deg); }
+.puzzle-piece > * { position: relative; z-index: 1; }
 .puzzle-piece--tone-0 { --piece-bg: #e7f0d8; }
 .puzzle-piece--tone-1 { --piece-bg: #e8e5f4; }
 .puzzle-piece--tone-2 { --piece-bg: #f5e5dc; }
@@ -405,20 +395,13 @@ onMounted(loadProfile)
 .puzzle-piece--tone-2 .puzzle-piece__label { color: #995b48; }
 .puzzle-piece--tone-3 .puzzle-piece__label { color: #4d806b; }
 .puzzle-piece__value { display: -webkit-box; margin: 11px 0 13px; overflow: hidden; color: var(--ink); font-size: 15px; font-weight: 650; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
-.puzzle-piece__meta { margin-top: auto; color: var(--muted); font-size: 10px; }
-.puzzle-piece__bar { display: block; width: 100%; height: 4px; margin-top: 8px; overflow: hidden; border-radius: 99px; background: rgba(63, 91, 49, .12); }
-.puzzle-piece__bar i { display: block; width: var(--confidence); height: 100%; border-radius: inherit; background: var(--accent-deep); transition: width .45s ease; }
 .puzzle-detail { display: flex; min-width: 0; flex-direction: column; justify-content: center; padding: 22px 4px 22px 4px; }
 .puzzle-detail__eyebrow { color: var(--accent-deep); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .puzzle-detail h3 { margin: 9px 0 11px; color: var(--ink); font-size: 23px; letter-spacing: -.03em; }
 .puzzle-detail p { margin: 0; color: var(--ink); font-size: 16px; line-height: 1.65; }
-.puzzle-detail__confidence { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 28px; color: var(--muted); font-size: 11px; }
-.puzzle-detail__confidence strong { color: var(--accent-deep); font-size: 19px; }
-.puzzle-detail__track { height: 6px; margin-top: 9px; overflow: hidden; border-radius: 99px; background: rgba(63, 91, 49, .12); }
-.puzzle-detail__track span { display: block; height: 100%; border-radius: inherit; background: var(--accent-deep); transition: width .35s ease; }
 .puzzle-detail small { margin-top: 16px; color: var(--muted); font-size: 10px; line-height: 1.7; }
 @keyframes puzzle-piece-place { 0% { opacity: 0; transform: translateY(-22px) rotate(-6deg) scale(.94); } 70% { transform: translateY(3px) rotate(2deg) scale(1.01); } 100% { opacity: 1; transform: translateY(0) rotate(0) scale(1); } }
 @media (prefers-reduced-motion: reduce) { .puzzle-piece { animation: none; transition: none; } }
-@media (max-width: 820px) { .puzzle-layout { grid-template-columns: 1fr; gap: 16px; }.puzzle-detail { padding: 8px 4px 2px; }.puzzle-detail__confidence { margin-top: 18px; } }
+@media (max-width: 820px) { .puzzle-layout { grid-template-columns: 1fr; gap: 16px; }.puzzle-detail { padding: 8px 4px 2px; } }
 @media (max-width: 620px) { .puzzle-heading { display: block; }.puzzle-count { display: block; margin-top: 9px; }.puzzle-board { padding: 11px; }.puzzle-pieces { grid-template-columns: repeat(2, minmax(0, 1fr)); }.puzzle-piece { min-height: 142px; padding: 16px 14px 14px; }.puzzle-piece:nth-child(3n)::before { display: block; }.puzzle-piece:nth-child(2n)::before { display: none; }.puzzle-piece:nth-child(-n + 3)::after { display: block; }.puzzle-piece:nth-child(-n + 2)::after { display: none; } }
 </style>

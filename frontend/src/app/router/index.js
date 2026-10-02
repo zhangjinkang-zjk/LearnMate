@@ -19,6 +19,7 @@ import ProfilePage from '@/pages/profile/ProfilePage.vue'
 import NotificationsPage from '@/pages/notifications/NotificationsPage.vue'
 import PlannerPage from '@/pages/planner/PlannerPage.vue'
 import LoginPage from '@/pages/auth/LoginPage.vue'
+import { authApi } from '@/shared/api/authApi'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -56,15 +57,27 @@ const router = createRouter({
     { path: '/settings', name: 'settings', component: SettingsPage, meta: { requiresAuth: true } },
     { path: '/profile', name: 'profile', component: ProfilePage, meta: { requiresAuth: true } },
     { path: '/notifications', name: 'notifications', component: NotificationsPage, meta: { requiresAuth: true } },
+    { path: '/admin', name: 'admin', component: () => import('@/pages/admin/AdminPage.vue'), meta: { requiresAuth: true, requiresAdmin: true, contentLayout: 'workspace' } },
+    { path: '/learning/assignments', name: 'assignments', component: () => import('@/pages/learning/AssignmentsPage.vue'), meta: { requiresAuth: true } },
     { path: '/planner', name: 'planner', component: PlannerPage, meta: { requiresAuth: true } },
     { path: '/:pathMatch(.*)*', redirect: '/learning/overview' },
   ],
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const hasToken = Boolean(localStorage.getItem('token'))
   if (to.meta.requiresAuth && !hasToken) return { name: 'login', query: { redirect: to.fullPath } }
-  if (to.name === 'login' && hasToken) return '/learning/overview'
+  if (to.meta.requiresAdmin || (to.name === 'login' && hasToken)) {
+    try {
+      const user = await authApi.readUser()
+      if (to.meta.requiresAdmin && user.role !== 'admin') return '/learning/overview'
+      if (to.name === 'login') return user.role === 'admin' ? '/admin' : '/learning/overview'
+    } catch {
+      if (!localStorage.getItem('token')) return { name: 'login', query: { redirect: to.fullPath } }
+      // Never render privileged content when the server cannot verify the role.
+      return to.meta.requiresAdmin ? '/learning/overview' : true
+    }
+  }
   return true
 })
 

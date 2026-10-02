@@ -60,6 +60,7 @@
       </button>
 
       <div class="sidebar-footer">
+        <RouterLink v-if="isAdmin" to="/admin" class="sidebar-link" aria-label="管理中心"><ShieldCheck :size="17" stroke-width="1.8" /><span>管理中心</span></RouterLink>
         <RouterLink v-for="item in utilityNavigation" :key="item.to" :to="item.to" class="sidebar-link">
           <component :is="item.icon" :size="17" stroke-width="1.8" />
           <span>{{ item.label }}</span>
@@ -110,13 +111,19 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Bell, ClipboardList, LogOut, Moon, Sun, Workflow } from 'lucide-vue-next'
+import { Bell, ClipboardList, LogOut, Moon, Sun, Workflow, ShieldCheck } from 'lucide-vue-next'
 import { allNavigation, learningNavigationGroups, primaryNavigation, secondaryNavigation, utilityNavigation } from '@/shared/config/navigation'
 import { clearAuthSession } from '@/shared/auth/session'
 import { setWorkflowOpen, workflowState } from '@/entities/agent/agentWorkflowState'
 import { notificationApi } from '@/shared/api/notificationApi'
+import { authApi } from '@/shared/api/authApi'
+
+const isAdmin = ref(false)
+onMounted(async () => {
+  try { isAdmin.value = (await authApi.readUser()).role === 'admin' } catch { isAdmin.value = false }
+})
 
 const route = useRoute()
 const router = useRouter()
@@ -140,7 +147,7 @@ async function refreshUnreadNotifications() {
   }
 }
 watch(() => route.fullPath, refreshUnreadNotifications, { immediate: true })
-const currentTitle = computed(() => allNavigation.find((item) => route.path.startsWith(item.to))?.label || '学习概览')
+const currentTitle = computed(() => route.path === '/admin' ? '管理中心' : allNavigation.find((item) => route.path.startsWith(item.to))?.label || '学习概览')
 const displayName = computed(() => localStorage.getItem('learnmate_username') || '我的学习者')
 const avatarLetter = computed(() => displayName.value.trim().slice(0, 1).toUpperCase() || '学')
 const isDarkMode = ref(localStorage.getItem('learnmate_theme') === 'dark')
