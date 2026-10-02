@@ -17,10 +17,15 @@
 3. **判分口径是死代码里最贵的那种。** 一条同时含「依据/验证/方案」的消息就能到 60 分
    通过线 —— 它量的不是方案好坏，是有没有出现这几个词。留着它只会让人以为这里有评价。
 
-数据库那几列（`current_phase` / `completed_phases` / `deliverable_state` /
-`final_submission` / `evaluation`）**故意不动**：`completed_phases` 是 `NOT NULL` 且
-没有默认值，从 model 里拿掉就会让 INSERT 直接报错，而删列必须先 `MODIFY ... NULL`
-再 `DROP`、和代码发布错开。多几列没人读的空列，比一次要卡发布的 schema 变更便宜。
+**存储上留下的那五个空列也删掉了**（`current_phase` / `completed_phases` /
+`deliverable_state` / `final_submission` / `evaluation`）：它们一个读写者都没有，
+留着的作用只剩"让后来的人以为会话记得一套流程，然后照着再写一遍"。库里的列由
+`utils/database.py` 的 `_drop_advanced_practice_phase_columns()` 在启动时清掉。
+
+**别再把"进度"存进这张表。** 上一版存了 `current_phase`，而没有任何代码推进它 ——
+于是它永远停在 `"understand"`，模型每轮读到的都是一个假的当前位置。进度得从学生在
+工作区里**真正写出来的文件**推出来：那是证据，不会停在原地；存成字段就是状态，
+而状态需要一个推进者，那个推进者从来就不存在。
 """
 
 from __future__ import annotations

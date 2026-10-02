@@ -6,6 +6,8 @@ import json
 import logging
 import shutil
 import time
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from backend.src.utils.constants import STATIC_DIR, CLEANUP_AGE_SECONDS
@@ -14,6 +16,21 @@ logger = logging.getLogger(__name__)
 
 _scheduler: AsyncIOScheduler | None = None
 _last_agent_fire: dict[int, float] = {}  # (user_id, agent_id) → 上次执行时间戳，防重复触发
+_malformed_cron_warned: set[int] = set()  # 已经报过"cron 解析不了"的 agent，避免每分钟刷日志
+
+# 用户自建智能体的 cron 走**手写匹配器**（下面几个函数），不是 APScheduler。
+# 所以 APScheduler 那个 `timezone="Asia/Shanghai"` 管不到它们，墙上时间得自己换。
+_SCHEDULE_TIMEZONE = "Asia/Shanghai"
+
+
+def _shanghai_now(moment: datetime | None = None) -> datetime:
+    """当前时刻的上海墙上时间（**带时区**）。
+
+    这里原来写的是 `datetime.now(tz.utc).replace(tzinfo=None)` —— `replace` 只撕掉时区
+    标记、不做换算，于是那个变量名虽然叫 now_shanghai，值其实是 UTC 的墙上时间：用户把
+    智能体的 cron 设成 `0 9 * * *`（想早上 9 点），实际在北京时间 **17 点** 触发。
+    """
+    return (moment or datetime.now(timezone.utc)).astimezone(ZoneInfo(_SCHEDULE_TIMEZONE))
 
 
 def _cleanup_old_files():
@@ -51,47 +68,74 @@ def _cleanup_old_files():
         logger.info("清理过期文件 %d 个", cleaned)
 
 
+def _cron_field_matches(field: str, current: int) -> bool:
+    """单个 cron 字段匹配，支持 `*`、`a`、`a-b`、`*/n`、`a-b/n`，逗号分隔任意组合。
+
+    两个原来会静默失效的写法：
+
+    - `a-b/n`（如 `5-10/2`）走的是 `int("5-10")` → ValueError。原来的外层把它吞成"不匹配"，
+      于是那条 cron **一次都不会触发，也没有任何日志**。
+    - 逗号分隔里只要有一个 `*/n` 分支不命中就直接 `return False`，后面的字段再没机会看。
+      现在统一成"逐个候选试，命中就返回"，不提前收摊。
+
+    表达式写坏时**抛 ValueError**（不吞）—— 由调用方决定记账还是忽略，这个函数只管解析。
+    """
+    for chunk in str(field).split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        base, _, step_text = chunk.partition("/")
+        base = base.strip()
+        step = int(step_text) if step_text.strip() else 1
+        if step <= 0:
+            raise ValueError(f"cron 步长必须为正数: {chunk!r}")
+        if base == "*":
+            if current % step == 0:
+                return True
+            continue
+        if "-" in base:
+            low_text, high_text = base.split("-", 1)
+        else:
+            low_text = high_text = base
+        low, high = int(low_text), int(high_text)
+        if low <= current <= high and (current - low) % step == 0:
+            return True
+    return False
+
+
 def _cron_matches(cron_expr: str, now_minute: int, now_hour: int,
                   now_dom: int, now_month: int, now_dow: int) -> bool:
-    """简易 cron 五字段匹配（minute hour dom month dow），不支持 / 和 , 以外的特殊字符"""
-    try:
-        parts = cron_expr.strip().split()
-        if len(parts) != 5:
-            return False
+    """简易 cron 五字段匹配（minute hour dom month dow）。
 
-        def _match(field: str, current: int) -> bool:
-            if field == "*":
-                return True
-            # 逗号分隔
-            for chunk in field.split(","):
-                chunk = chunk.strip()
-                if "/" in chunk:
-                    base, step = chunk.split("/", 1)
-                    step = int(step)
-                    if base == "*":
-                        return current % step == 0
-                    else:
-                        val = int(base)
-                        return current >= val and (current - val) % step == 0
-                if "-" in chunk:
-                    lo, hi = chunk.split("-", 1)
-                    if int(lo) <= current <= int(hi):
-                        return True
-                elif chunk == str(current):
-                    return True
-            return False
+    只支持 `*`、数字、区间、步长和逗号，没有 L/#/W 这类扩展，也没有名字（`MON`、`JAN`）。
+    表达式解析不了时抛 ValueError，由调用方记账。
+    """
+    parts = cron_expr.strip().split()
+    if len(parts) != 5:
+        raise ValueError(f"cron 必须是五字段，收到 {len(parts)} 个: {cron_expr!r}")
 
-        current_values = [now_minute, now_hour, now_dom, now_month, now_dow]
-        return all(_match(parts[i], current_values[i]) for i in range(5))
-    except (ValueError, IndexError):
+    if not _cron_field_matches(parts[0], now_minute):
         return False
+    if not _cron_field_matches(parts[1], now_hour):
+        return False
+    if not _cron_field_matches(parts[3], now_month):
+        return False
+
+    # dom 与 dow **同时**被限定时是"或"：标准 cron 里 `0 9 1 * 1` 表示"每月 1 号**或**每周一"。
+    # 原来五个字段一起丢进 all()，等于要求两个都满足 —— 那类表达式一次都不会触发。
+    dom_field, dow_field = parts[2].strip(), parts[4].strip()
+    dom_ok = _cron_field_matches(dom_field, now_dom)
+    dow_ok = _cron_field_matches(dow_field, now_dow)
+    if dom_field == "*":
+        return dow_ok if dow_field != "*" else True
+    if dow_field == "*":
+        return dom_ok
+    return dom_ok or dow_ok
 
 
 async def _execute_scheduled_agents():
     """每分钟扫描 UserAgent 表，执行匹配当前时间的定时任务"""
-    from datetime import datetime, timezone as tz
-    now = datetime.now(tz.utc)
-    now_shanghai = now.replace(tzinfo=None)  # APScheduler 用 Asia/Shanghai，无时区
+    now_shanghai = _shanghai_now()
     minute, hour, dom, month, dow = (
         now_shanghai.minute, now_shanghai.hour, now_shanghai.day,
         now_shanghai.month, (now_shanghai.weekday() + 1) % 7,  # 0=周日→6
@@ -116,7 +160,20 @@ async def _execute_scheduled_agents():
             if not cron_expr or not prompt:
                 continue
 
-            if not _cron_matches(cron_expr, minute, hour, dom, month, dow):
+            try:
+                matched = _cron_matches(cron_expr, minute, hour, dom, month, dow)
+            except ValueError:
+                # 表达式写坏了 = 这个智能体永远不会触发。原来它静默返回 False，用户那边只是
+                # "到点没动静"，日志里什么都没有。这里报一次（同一个 agent 只报一次，不限流
+                # 的话每分钟一条）。
+                if agent.id not in _malformed_cron_warned:
+                    _malformed_cron_warned.add(agent.id)
+                    logger.warning(
+                        "智能体 cron 表达式无法解析，永远不会触发 agent_id=%s cron=%r",
+                        agent.id, cron_expr,
+                    )
+                continue
+            if not matched:
                 continue
 
             # 防重复：同一智能体每分钟最多执行一次

@@ -19,7 +19,7 @@ from backend.src.ai_core.tools.skill import (
     read_skill, upsert_skill, list_skills, delete_skill, create_action_skill,
 )
 from backend.src.ai_core.tools.resource import generate_learning_resource
-from backend.src.ai_core.tools.search import web_search
+from backend.src.ai_core.tools.search import read_web_page, web_search
 from backend.src.ai_core.tools.mcp_external import load_external_mcp_tools
 from backend.src.ai_core.tools.image import generate_image
 from backend.src.ai_core.tools.exam import generate_exam_questions
@@ -31,6 +31,15 @@ from backend.src.ai_core.tools.animation import generate_slide_animation
 from backend.src.ai_core.tools.video_search import search_online_video
 from backend.src.ai_core.tools.history import get_used_history
 from backend.src.ai_core.tools.memory import search_memory
+from backend.src.ai_core.tools.workspace import (
+    DOC_PATH,
+    DOC_WRITE_TOOL,
+    FRAMEWORK_DOC_DIR,
+    FRAMEWORK_DOC_TOOL,
+    fetch_framework_docs,
+    resolve_doc_sources,
+    write_design_doc,
+)
 from backend.src.utils.prompt_loader import load_prompt
 from pydantic import create_model, Field as PydanticField
 try:
@@ -38,7 +47,7 @@ try:
 except ModuleNotFoundError:
     from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import BaseTool, StructuredTool
 from langchain_core.messages import HumanMessage, AIMessage
 
 
@@ -92,6 +101,19 @@ def _inject_chat_group_id(tool, chat_group_id: int):
         name=tool.name,
         description=(tool.description or ""),
         args_schema=new_schema,
+    )
+
+
+def _report_tool_error(exc: Exception) -> str:
+    """工具没跑成时**回给模型**的那句话。
+
+    写给模型看，不是写给日志看：它需要知道这次没执行、以及下一步该改什么。
+    只回一句报错原文的话，模型经常会原样再发一遍同样的参数。
+    """
+    return (
+        f"这次调用没有执行，参数没过校验：{exc}\n"
+        "照工具描述里参数的写法改一遍再调一次；改不出来就换个做法，"
+        "别把同样的参数原样再发一遍。"
     )
 
 
@@ -193,6 +215,10 @@ TOOL_REGISTRY: dict[str, callable] = {
     "get_used_history":            lambda uid, gid: _inject_chat_group_id(_inject_user_id(get_used_history, uid), gid),
     "search_memory":               lambda uid, gid: _inject_user_id(search_memory, uid),
     "web_search":                  lambda uid, gid: web_search,
+    "read_web_page":               lambda uid, gid: read_web_page,
+    # 落盘发生在浏览器里（见 tools/workspace.py），这里注册的是"校验 + 把内容带出去"那一步
+    DOC_WRITE_TOOL:                lambda uid, gid: write_design_doc,
+    FRAMEWORK_DOC_TOOL:            lambda uid, gid: fetch_framework_docs,
     "read_skill":                  lambda uid, gid: _inject_user_id(read_skill, uid),
     "upsert_skill":                lambda uid, gid: _inject_user_id(upsert_skill, uid),
     "list_skills":                 lambda uid, gid: _inject_user_id(list_skills, uid),
@@ -211,6 +237,63 @@ TOOL_REGISTRY: dict[str, callable] = {
     "add_path_node":               lambda uid, gid: _inject_user_id(add_path_node, uid),
     "delete_path_node":            lambda uid, gid: _inject_user_id(delete_path_node, uid),
 }
+
+
+def _frame_from_event(event: dict) -> dict | None:
+    """把一个 LangChain 事件翻成给前端的帧；翻不出来就返回 None。
+
+    v1/v2 两条路的事件形状**完全一样**，区别只在 `astream_events` 的版本参数上。原来两条路
+    各自抄了一遍这段转换，再加一种帧就得抄第三遍 —— 而漏抄一处是**静默失效**：v2 认得出、
+    v1 认不出，前端只会看到"说有工具、文件却没写进去"，没有任何报错。所以收成一份。
+
+    `doc_write` 这一帧特殊：真正落盘在浏览器里（见 tools/workspace.py），后端这里只是把
+    参数带出去。参数取 `on_tool_start`，因为 `on_tool_end` 的 data 里只有输出、没有输入。
+    """
+    kind = event.get("event", "")
+
+    if kind == "on_tool_start":
+        name = event.get("name", "")
+        args = event.get("data", {}).get("input") or {}
+        if not isinstance(args, dict):
+            args = {}
+        if name == DOC_WRITE_TOOL:
+            return {
+                "role": "tool",
+                "type": "doc_write",
+                "path": DOC_PATH,
+                "section": str(args.get("section") or ""),
+                "content": str(args.get("content") or ""),
+            }
+        if name == FRAMEWORK_DOC_TOOL:
+            known, unknown, pages = resolve_doc_sources(args.get("frameworks"), args.get("urls"))
+            # **帧里只走 id 和地址，不走正文。** 一次最多 12 篇、每篇正文上限 12 万字符，
+            # 全塞进一帧能到一两 MB —— SSE 帧扛不住，而且会把这一轮的首字节拖到几十秒后。
+            # 前端拿它们自己去 POST /reference-docs，拉和写都在浏览器里做。
+            return {
+                "role": "tool",
+                "type": "framework_docs",
+                "dir": FRAMEWORK_DOC_DIR,
+                "frameworks": known,
+                # 教练自己找的官方文档页（表里没有的技术走这条）。这里只传地址，
+                # 认不认得出、抓不抓得开都是前端那次请求的事。
+                "urls": pages,
+                "unknown": unknown,
+            }
+        return {"role": "tool", "type": "tool_start", "tool": name}
+
+    if kind == "on_tool_end":
+        output = event.get("data", {}).get("output", "")
+        if isinstance(output, str) and len(output) > 500:
+            output = output[:500] + "..."
+        return {"role": "tool", "type": "tool_end", "tool": event.get("name", ""), "output": str(output)}
+
+    if kind == "on_chat_model_stream":
+        chunk = event.get("data", {}).get("chunk")
+        content = getattr(chunk, "content", None) if chunk else None
+        if content:
+            return {"role": "assistant", "type": "chunk", "content": content}
+
+    return None
 
 
 class Brain:
@@ -367,8 +450,8 @@ class Brain:
         # 两条路都不在这里拼 `{tool_guides}`：**该不该有它由 persona 自己决定**。
         # 主智能体那份（chat/unified.yaml）里写着这个占位符，所以吃得到按需模块；
         # 实践教练那份故意不写 —— 它的工具集是只读的
-        # （search_knowledge_base / web_search / read_portrait / search_memory /
-        # get_used_history，见 classroom_chat._CLASSROOM_TOOLS），而那几个模块讲的
+        # （search_knowledge_base / web_search / read_web_page / read_portrait /
+        # search_memory / get_used_history，见 classroom_chat._CLASSROOM_TOOLS），而那几个模块讲的
         # 是 ingest_document / update_portrait / list_knowledge 这类它**没有**的工具。
         # 注进去只会让它去调不存在的工具。自建智能体想用就自己写上占位符，同样生效。
         if self._agent_persona:
@@ -408,6 +491,18 @@ class Brain:
 
         tools.extend(_inject_user_id(t, uid) for t in action_tools)
         tools.extend(mcp_tools)
+
+        # 工具报错不该把学生这条流打断。LangChain 的默认是**抛出去**：参数校验不过
+        # （模型把数组参数写成 JSON 字符串是常事）时异常一路穿过 AgentExecutor，
+        # 学生那边对话就断在半句上 —— 而模型**看不见**这件事，它只知道流没了，
+        # 于是下一轮把同一个参数原样再发一遍。`handle_validation_error` 把校验错误
+        # 变成一条工具返回，模型读到就能自己改。
+        for tool in tools:
+            # 只给真正的 BaseTool 设：`mcp_tools` 是适配器给的，形状不由我们定 ——
+            # 在这里对不上一个属性就往赋值上抛，整条 agent 都建不起来，代价太大。
+            if isinstance(tool, BaseTool):
+                tool.handle_validation_error = _report_tool_error
+                tool.handle_tool_error = _report_tool_error
 
         agent = create_tool_calling_agent(llm=llm, prompt=prompt, tools=tools)
         max_iters = max(8, len(tools) * 2)
@@ -505,54 +600,27 @@ class Brain:
                     break
                 yield event
 
+        async def _frames(version: str):
+            nonlocal tool_running, full_response
+            async for event in _stream_events(version):
+                frame = _frame_from_event(event)
+                if frame is None:
+                    continue
+                frame_type = frame.get("type")
+                if frame_type in ("tool_start", "doc_write", "framework_docs"):
+                    tool_running = True
+                elif frame_type == "tool_end":
+                    tool_running = False
+                elif frame_type == "chunk":
+                    full_response += frame["content"]
+                yield frame
+
         try:
-            async for event in _stream_events("v2"):
-                kind = event.get("event", "")
-
-                if kind == "on_tool_start":
-                    tool_running = True
-                    tool_name = event.get("name", "")
-                    yield {"role": "tool", "type": "tool_start", "tool": tool_name}
-
-                elif kind == "on_tool_end":
-                    tool_running = False
-                    tool_name = event.get("name", "")
-                    tool_output = event.get("data", {}).get("output", "")
-                    if isinstance(tool_output, str) and len(tool_output) > 500:
-                        tool_output = tool_output[:500] + "..."
-                    yield {"role": "tool", "type": "tool_end", "tool": tool_name, "output": str(tool_output)}
-
-                elif kind == "on_chat_model_stream":
-                    chunk = event.get("data", {}).get("chunk")
-                    if chunk:
-                        content = getattr(chunk, "content", None)
-                        if content:
-                            full_response += content
-                            yield {"role": "assistant", "type": "chunk", "content": content}
+            async for frame in _frames("v2"):
+                yield frame
         except (TypeError, NotImplementedError):
-            async for event in _stream_events("v1"):
-                kind = event.get("event", "")
-
-                if kind == "on_tool_start":
-                    tool_running = True
-                    tool_name = event.get("name", "")
-                    yield {"role": "tool", "type": "tool_start", "tool": tool_name}
-
-                elif kind == "on_tool_end":
-                    tool_running = False
-                    tool_name = event.get("name", "")
-                    tool_output = event.get("data", {}).get("output", "")
-                    if isinstance(tool_output, str) and len(tool_output) > 500:
-                        tool_output = tool_output[:500] + "..."
-                    yield {"role": "tool", "type": "tool_end", "tool": tool_name, "output": str(tool_output)}
-
-                elif kind == "on_chat_model_stream":
-                    chunk = event.get("data", {}).get("chunk")
-                    if chunk:
-                        content = getattr(chunk, "content", None)
-                        if content:
-                            full_response += content
-                            yield {"role": "assistant", "type": "chunk", "content": content}
+            async for frame in _frames("v1"):
+                yield frame
 
         self._history.append(HumanMessage(content=message))
         self._history.append(AIMessage(content=full_response))

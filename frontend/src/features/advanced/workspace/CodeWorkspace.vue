@@ -13,6 +13,18 @@
         <button v-if="pendingFolder" class="button button--quiet" type="button" :disabled="busy" @click="restoreFolder">
           <FolderOpen :size="14" />恢复上次的文件夹{{ pendingFolder.name ? `「${pendingFolder.name}」` : '' }}
         </button>
+        <!-- 清空**只清工作区，绝不动磁盘**（理由见 clearWorkspace）。按钮长得和旁边那些
+             无害的按钮一样，所以它必须自己把"再点一次"这一步说出来，而不是点下去就执行。 -->
+        <button
+          class="button button--quiet workspace__clear"
+          :class="{ 'is-armed': clearArmed }"
+          type="button"
+          :disabled="busy || !canClear"
+          :title="canClear ? '把这个工作区从页面上清掉（本机文件不会动）' : '工作区已经是空的'"
+          @click="armClear"
+        >
+          <Eraser :size="14" />{{ clearLabel }}
+        </button>
       </div>
       <div class="workspace__group">
         <span v-if="rootName" class="workspace__root" :title="rootName">{{ rootName }}</span>
@@ -100,7 +112,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Download, FileCode2, FilePlus2, FolderOpen, PanelLeft, Save } from 'lucide-vue-next'
+import { Download, Eraser, FileCode2, FilePlus2, FolderOpen, PanelLeft, Save } from 'lucide-vue-next'
 import CodeEditor from './CodeEditor.vue'
 import FileExplorer from './FileExplorer.vue'
 import {
@@ -124,6 +136,7 @@ import {
   splitEntryPath,
   writeEntryToDisk,
 } from './localWorkspace'
+import { DESIGN_DOC_PATH, mergeDocSection } from './designDoc'
 import { buildWorkspaceSnapshot } from './workspaceSnapshot'
 import { fromDraft, toDraft } from './workspaceDraft'
 import {
@@ -198,6 +211,72 @@ const tabs = computed(() => openPaths.value
   .map((path) => entries.value.find((entry) => entry.path === path))
   .filter(Boolean))
 const emptyTitle = computed(() => (entries.value.length ? '选一个文件开始' : '打开代码，开始这次实践'))
+// ── 清空工作区 ───────────────────────────────────────────────
+// **这个按钮只清工作区，绝不动磁盘 —— 这是它能不能存在的前提。**
+// FSA 模式下的文件就是学生**本机上那个真实项目**的文件（`openFolder` 走的是
+// `showDirectoryPicker`，句柄能原地写回）。一个叫「清空」的按钮如果顺手调
+// `deleteEntryOnDisk`，等于在这一排无害按钮中间放一颗"删掉我的工程"，
+// 而它长得和`打开文件`一模一样。真删错了没有回收站、也没有撤销。
+//
+// 所以这里做的事只有一件：把工作区**忘掉** —— 条目、标签、根句柄、草稿、
+// 以及存在 IndexedDB 里的文件夹句柄。磁盘上一个字节都不碰。
+// 这件事必须在提示里说出来，不能让学生自己猜"我的文件还在不在"。
+const canClear = computed(() => entries.value.length > 0 || Boolean(rootName.value))
+const clearLabel = computed(() => (clearArmed.value ? '再点一次' : '清空文件'))
+
+// 二次确认做在按钮自己身上（第一次点变「再点一次」，4 秒没跟手动就自己撤销）。
+// **不用 `window.confirm`**：原生弹窗在 iframe / 部分环境下会被直接吃掉（返回值恒为
+// false），那样"点了却没反应"比没有确认更糟；也不用 `FileExplorer` 那种行内确认 ——
+// 那个是长在右键菜单某一行里的，这里没有"行"可长。
+const clearArmed = ref(false)
+let clearTimer = 0
+
+function disarmClear() {
+  window.clearTimeout(clearTimer)
+  clearArmed.value = false
+}
+
+function armClear() {
+  if (busy.value || !canClear.value) return
+  if (clearArmed.value) {
+    disarmClear()
+    clearWorkspace()
+    return
+  }
+  clearArmed.value = true
+  window.clearTimeout(clearTimer)
+  clearTimer = window.setTimeout(() => { clearArmed.value = false }, 4000)
+}
+
+async function clearWorkspace() {
+  const count = entries.value.length
+  const hadFolder = Boolean(rootName.value)
+  busy.value = true
+  try {
+    // **存下来的文件夹句柄也要忘掉。** 只清内存的话，下次进页面
+    // `restoreFolderIfPermitted` 会把它原样恢复回来（Chrome 的「每次访问都允许」和
+    // PWA 安装态直接静默恢复），"清空了"就成了一句空话。
+    // 这两个调用自己不会抛（见 `workspaceDraftStore` 开头），所以不需要 try。
+    await deleteFolderHandle()
+    deleteDraft(props.draftKey)
+  } finally {
+    // `mode` 也要清：它决定「保存」那颗按钮是写回磁盘还是下载副本，
+    // 留着一个已经不存在的来源，下一次打开文件前它会先撒一次谎。
+    mode.value = ''
+    rootName.value = ''
+    rootHandle.value = null
+    pendingFolder.value = null
+    entries.value = []
+    openPaths.value = []
+    activePath.value = ''
+    errorMessage.value = ''
+    busy.value = false
+  }
+  setNotice(hadFolder
+    ? `已清空工作区（${count} 个文件）。本机文件夹里的文件一个都没动，随时可以再打开。`
+    : `已清空工作区（${count} 个文件）。`)
+}
+
 const emptyHint = computed(() => (canUseFsa.value
   ? '只读取文本类文件，单个不超过 256KB。凭据文件（.env、密钥）不会读进来。'
   : '当前浏览器不支持直接读写本机文件夹（Firefox、Safari 都不支持，也没有替代方案）。这里导入的文件是只读的，保存时会下载一份副本；用 Chrome 或 Edge 打开可以原地保存回磁盘。'))
@@ -462,6 +541,111 @@ async function saveActive() {
   }
 }
 
+// ── 教练写方案 ───────────────────────────────────────────────
+// 教练谈定一节就写一节（合并规则见 designDoc.js）。**这是这套 IDE 里唯一一个由 AI 发起、
+// 直接落到学生文件上的写入**，所以有两件事必须说清：写进了哪个文件、有没有真的落盘。
+// 没打开本机文件夹时它只活在这一屏里 —— 和「新建文件」那条路一样如实说，不能装作一样。
+// 拿到一份文件的条目；没有就顺带在本机和工作区里都建出来（缺的目录一起补）。
+//
+// 建文件这件事有两处要用（教练写方案、拉框架文档），抽出来是因为**它错起来是无声的**：
+// 差别在 `handle` 有没有拿到 —— 拿到才落盘，没拿到就只活在这一屏里。
+async function ensureEntry(path) {
+  const existing = entries.value.find((item) => item.path === path && !isDirectoryEntry(item))
+  if (existing) return existing
+  if (!mode.value) mode.value = detectWorkspaceMode()
+  const { directories, name: leaf } = splitEntryPath(path)
+  addMissingDirectories(directories)
+  const handle = await createFileOnDisk(rootHandle.value, directories, leaf)
+  const entry = createBlankEntry(path, handle ? { handle } : {})
+  entries.value = [...entries.value, entry]
+  return entry
+}
+
+// 落盘。返回有没有真的写回本机 —— 没打开文件夹时它只活在这一屏里，调用方要如实说。
+async function persistEntry(entry) {
+  if (!isFsa.value || !entry.handle) return false
+  await writeEntryToDisk(entry, entry.text)
+  entry.dirty = false
+  return true
+}
+
+async function writeDocSection(section, content) {
+  const title = String(section || '').trim()
+  const body = String(content || '').trim()
+  if (!title || !body) return { ok: false, reason: '这一节没有内容' }
+
+  busy.value = true
+  try {
+    const entry = await ensureEntry(DESIGN_DOC_PATH)
+    entry.text = mergeDocSection(entry.text, title, body)
+    entry.dirty = true
+    selectPath(entry.path)
+    const saved = await persistEntry(entry)
+    setNotice(saved
+      ? `教练把「${title}」写进了 ${DESIGN_DOC_PATH}`
+      : `教练把「${title}」写进了 ${DESIGN_DOC_PATH}（没打开本机文件夹，它只存在于这次会话里）`)
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, reason: `${DESIGN_DOC_PATH} 写入失败：${error?.message || error}` }
+  } finally {
+    busy.value = false
+  }
+}
+
+// 框架官方文档：一次十几份，写进 docs/框架文档/<框架名>/ 下面。
+//
+// 抬头写的必须是**抓下来的那一刻**，不是"写文件的那一刻"。服务端有缓存，一页可能是
+// 好几天前抓的 —— 两个都写"现在"的话，学生以为手里是刚拉的。
+//
+// 服务端只给 ISO 8601（UTC），**成句的显示在这里做**：`new Date()` 解析出来就是学生
+// 自己的墙上时间；让服务端拼字符串会因时区差一天（见后端 reference_docs.py 的说明）。
+// 拿不到时间戳（老数据、异常）才退回"现在"。
+//
+// **不自动跳到某一份。** 拉文档是教练在对话中途做的，学生可能正看着自己的代码；
+// 硬切走他正在读的文件比"没反应"更烦。文件在资源管理器里，他自己会点。
+function frameworkDocText(file) {
+  const stamp = file.fetched_at ? new Date(file.fetched_at) : new Date()
+  const shown = Number.isNaN(stamp.getTime()) ? new Date().toLocaleString() : stamp.toLocaleString()
+  const lines = [`# ${file.title}`, '']
+  if (file.url) lines.push(`> 来源：${file.url}`)
+  lines.push(`> 抓取时间：${shown}`)
+  // 服务端说这一页没抓干净时要写在抬头里 —— 不然学生看到一屏 `<span style="...">`
+  // 会以为文档本身长这样，或者以为是自己打开的方式不对。
+  if (file.note) lines.push(`> ⚠️ ${file.note}`)
+  lines.push('', String(file.markdown || '').trim())
+  return `${lines.join('\n').replace(/\s+$/, '')}\n`
+}
+
+async function writeFrameworkDocs(dir, files) {
+  const list = (Array.isArray(files) ? files : []).filter((file) => String(file?.path || '').trim())
+  if (!dir || !list.length) return { ok: false, reason: '没有要写的文档' }
+
+  const written = []
+  const failed = []
+  busy.value = true
+  try {
+    for (const file of list) {
+      const relative = String(file.path).trim()
+      try {
+        const entry = await ensureEntry(`${dir}/${relative}`)
+        entry.text = frameworkDocText(file)
+        entry.dirty = true
+        await persistEntry(entry)
+        written.push(entry.path)
+      } catch (error) {
+        // 一份写不动不该让剩下十几份都不写 —— 逐份记下来，最后一起说
+        failed.push(`${relative}：${error?.message || error}`)
+      }
+    }
+  } finally {
+    busy.value = false
+  }
+  if (written.length) {
+    setNotice(`官方文档已放进 ${dir}/（${written.length} 篇）${failed.length ? `，有 ${failed.length} 篇没写成` : ''}`)
+  }
+  return { ok: written.length > 0, written, failed }
+}
+
 function toggleExplorer() { explorerOpen.value = !explorerOpen.value }
 
 function readStoredExplorerWidth() {
@@ -558,7 +742,18 @@ function readSnapshot() {
   })
 }
 
-defineExpose({ readSnapshot })
+// 工作区改动过几次。**只回答一个问题**："上次发给教练之后，学生改过没有？"
+//
+// 它和 readSnapshot 是配套的两件事，别合成一件：快照贵（要排序几百份文件、读正文），
+// 所以只在按下发送那一刻取一次；这个计数器便宜（一个整数），可以跟着每次改动走。
+// 上面那条注释防的是"为了问一句'教练拿到的是不是最新的'就去建一份快照" —— 有了这个
+// 计数器，那个问题就能用 O(1) 回答，不必走那条热路径。
+//
+// **切标签也算一次改动**：active_path 一变，教练的视角就变了（当前文件在权重里是 +100，
+// 而且它单独占快照里那个 40000 字符的额度）。
+const revision = ref(0)
+
+defineExpose({ readSnapshot, revision, writeDocSection, writeFrameworkDocs })
 
 // ── 草稿：没打开本机文件夹时，新建的东西不该随组件一起消失 ──────────────
 //
@@ -596,7 +791,15 @@ function schedulePersistDraft() {
 // 深度侦听而不是在每个改动点手动调用：改动点有七八个（新建/删除/重命名/移动/
 // 关标签/切标签/编辑器输入），漏掉任何一个都是"悄悄不保存"，而那是查不出来的。
 // 代价是每次击键走一遍遍历 —— 几十个条目、几百 KB，可忽略。
-watch([entries, openPaths, activePath, rootName], schedulePersistDraft, { deep: true })
+//
+// `revision` 挂在这同一个侦听上，而不是另起一个：要数的就是同一批改动点，
+// 再养一个深度侦听只是把那次遍历多跑一遍。注意要在 schedulePersistDraft **之前** ——
+// 那个函数在 FSA 模式（拿到了真实文件夹句柄）下会直接 return，摆它后面就等于
+// 最常用的那种工作区反而数不到。
+watch([entries, openPaths, activePath, rootName], () => {
+  revision.value += 1
+  schedulePersistDraft()
+}, { deep: true })
 
 function applyRestoredWorkspace({ rootName: name, entries: rows, openPaths: paths, activePath: active }) {
   mode.value = detectWorkspaceMode()
@@ -681,6 +884,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.clearTimeout(noticeTimer)
+  window.clearTimeout(clearTimer)
   bodyResizeObserver?.disconnect()
   bodyResizeObserver = null
   // 卸载前把最后一次改动落盘：定时器可能正好还没到点，而那一次改动就是学生
@@ -705,6 +909,11 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnOnLeave))
 .workspace__bar { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--line); background: #fbfcfa; }
 .workspace__group { display: flex; align-items: center; gap: 7px; }
 .workspace__bar .button { gap: 6px; padding: 6px 11px; font-size: 12px; }
+
+/* 「再点一次」那一档。用仓库里已有的那支警示色（`FileExplorer` 的删除菜单项用的
+   就是 #a2452a / #fdf1ec），不新开一个红 —— 全站只有一个"这一步是破坏性的"的表示。 */
+.workspace__clear.is-armed { border-color: #e3c3b6; background: #fdf1ec; color: #a2452a; font-weight: 800; }
+.workspace__clear.is-armed:hover { border-color: #d3a999; background: #fbe8df; color: #8f3a22; }
 .workspace__root { max-width: 190px; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .workspace__notice { position: absolute; z-index: 8; right: 12px; bottom: 12px; left: 12px; margin: 0; padding: 7px 11px; border: 1px solid #d7e3c9; border-radius: 8px; background: #f4f8ed; box-shadow: 0 10px 24px rgba(31, 49, 40, .12); color: var(--accent-deep); font-size: 11px; line-height: 1.6; pointer-events: none; }
 .workspace__notice--error { background: #fdf4f0; color: #954e38; }

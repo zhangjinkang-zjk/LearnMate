@@ -1,0 +1,22 @@
+# 教练 persona 评估（eval/persona_eval.py）需要的额外包。
+#
+# **这不是产品依赖** —— 后端自己跑起来不需要它们。放这一份是为了让"评估要装什么"
+# 有个准确的地方可查，而不是只留在会话记录里。
+#
+#     F:\anaconda3\envs\zhiban\python.exe -m pip install -r eval/requirements.txt
+#
+# ⚠️ deepeval 会把这三个**降级**（它自己的上界卡在旧版本上）：
+#     click    <8.4.0    环境里通常是 8.4.1
+#     rich     <15.0.0   环境里通常是 15.0.0
+#     tabulate <0.10.0   环境里通常是 0.10.0
+# 后端不 import 这三个，所以降级本身不影响它；但它是**在产品环境里动包**，值得知道。
+# 想完全不动后端环境：把这两行装进单独的 venv，再把 persona_eval.py 顶上的
+# ZHIBAN_PYTHON 指过去 —— 桥本来就是子进程，换解释器只改那一个常量。
+#
+# ⚠️ 装完的一条真实冲突（2026-10-02 实测）：
+#     huggingface-hub 1.19.0 requires click>=8.4.0, but you have click 8.3.3
+#   huggingface-hub 在嵌入那条链上（BGE 一系走 sentence-transformers）。
+#   它的 click 只用在自带 CLI 上，正常的 import 路径不碰 —— **大概率不影响检索，
+#   但没有实测过**。重建环境时把 click 装回 8.4+ 就没了。
+deepeval
+python-dotenv

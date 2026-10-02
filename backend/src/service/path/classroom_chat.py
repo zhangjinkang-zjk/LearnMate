@@ -42,9 +42,19 @@ _CLASSROOM_AGENT_NAME = "LearnMate 实践教练"
 _CLASSROOM_TOOLS = [
     "search_knowledge_base",
     "web_search",
+    # 有了它教练才能**读到**官网那一页，而不只是看到一句摘要。学生问"这个 API 怎么调"、
+    # "这个项目骨架里有什么"，摘要答不了，正文能答。它是一个只读工具，和上面几个同一性质。
+    "read_web_page",
     "read_portrait",
     "search_memory",
     "get_used_history",
+    # 写方案文档。**它是这里唯一一个"会改东西"的工具**，但改的不是服务端的数据 ——
+    # 落盘在浏览器里，服务端只负责把内容带出去（见 ai_core/tools/workspace.py）。
+    # 代码代笔仍然禁止，所以这里只有写文档的一个，没有写代码的。
+    "write_design_doc",
+    # 拉框架官方文档放进学生的项目。和上面那个同理：服务端只把"要哪几个框架"发出去，
+    # 正文的抓取和写盘都在浏览器里做（见 ai_core/tools/workspace.py）。
+    "fetch_framework_docs",
 ]
 
 # 教练的人格。这里**只放与场景无关**的东西：身份、教学法、措辞纪律、边界。
@@ -499,7 +509,7 @@ def _render_task_block(task_snapshot: object) -> str:
         return "\n".join([
             "【本次实践任务】",
             "学生这次没有选任务：他带着自己的项目来，聊什么由他决定。不要替他挑一个任务，"
-            "也不要按任务的方式问他「要交付什么」「验收标准是什么」——这次根本没有。"
+            "也不要按任务的方式问他「要交什么」「做到什么程度算完」——这次根本没有。"
             "他问代码就看代码，他问设计就谈设计，他说不清楚想干什么就先问他想解决什么问题。",
             "【任务说明结束】",
         ])
@@ -507,15 +517,35 @@ def _render_task_block(task_snapshot: object) -> str:
     # 逐字段的行内长度：任务说明 2026-09-30 起改成大白话，同样一件事的字数比原来的术语版多，
     # 这几档跟着放宽；`_clip` 不还省略号，切了就**看不出来被切过**，所以宁可给足。
     title = _clip(task_snapshot.get("title"), 300)
+    brief = _clip(task_snapshot.get("brief"), 1500)
     problem = _clip(task_snapshot.get("problem"), 1500)
     focus = _clip(task_snapshot.get("focus"), 400)
     if title:
         lines.append(f"任务：{title}")
+    # `brief` 和 `constraints` 以前**只经客户端那条 segment** 到教练手上，而且带着表格栏位名
+    # （见 PracticeDialogue.vue 的 `taskScriptParts`）。那条重复通道去掉之后，两样都得在这里
+    # 渲染出来，否则是删信息而不是去重。
+    if brief:
+        lines.append(f"这次要做的事：{brief}")
+    # 栏位名一律用大白话。**这些词会被教练复述出来。** 原来写的是「验收标准」「需要交付」
+    # 「能力重点」，模型读到就照着说，于是学生收到的是"你的验收标准是……"这种表格腔 ——
+    # 用户的原话是"回复的语言很机械，比如验收标准什么的"。
+    #
+    # **但只改这里没用**，这是修过两次才看清的：教练同时读好几份材料，光把这一处换成白话，
+    # 别的通道（persona 自己的散文、客户端 segment 的 script、任务生成提示词写出来的正文）
+    # 还在用那些词，而模型读到的是用法不是禁令。这一份是**权威版本**，其余几处都得跟着改，
+    # 见 `eval/README.md` 和 coach.yaml 里那条说话规矩。
     if problem:
-        lines.append(f"要解决的问题：{problem}")
+        lines.append(f"要解决什么：{problem}")
     if focus:
-        lines.append(f"能力重点：{focus}")
-    for label, key, item_limit in (("验收标准", "criteria", 300), ("需要交付", "deliverables", 300)):
+        lines.append(f"这次主要练：{focus}")
+    for label, key, item_limit in (
+        ("做到什么程度算完", "criteria", 300),
+        ("要交的东西", "deliverables", 300),
+        # 任务约束（"边界或必须引用的证据"）。以前它装在 segment 的 `points` 里、被渲染成
+        # 「板书：」—— 一个不对的标签配一份对的内容。
+        ("边界", "constraints", 300),
+    ):
         raw = task_snapshot.get(key)
         if not isinstance(raw, list):
             continue
@@ -640,6 +670,7 @@ async def _build_classroom_path_context(
     resource_id: int | None = None,
     user_question: str = "",
     task_snapshot: dict | None = None,
+    is_practice: bool = False,
 ) -> str:
     """从服务端节点、已绑定教材和当前幕状态构建受限课堂上下文。
 
@@ -656,11 +687,24 @@ async def _build_classroom_path_context(
     seg_id = str(segment.get("id") or "")
     seg_idx = _SEGMENT_IDS.index(seg_id) + 1 if seg_id in _SEGMENT_IDS else None
 
-    lines = ["【课堂上下文】", f"当前课程：{_clip(topic, 80)}"]
-    if seg_idx:
-        lines.append(
-            f"当前幕（第 {seg_idx}/{len(_SEGMENT_IDS)} 幕·{_SEGMENT_NAMES[seg_id]}）：{_SEGMENT_ROLE_HINTS[seg_id]}"
-        )
+    # **实践对话不是互动课堂的某一幕**，所以这一层课堂框架整个不铺：它没有幕、没有板书、
+    # 也没有"课堂提问"，而任务说明由账本那份块（`_render_task_block`）已经说全了。
+    #
+    # 以前不管来的是谁，这里都先铺一层 —— `当前幕：「<任务标题>」，类型：practice`、
+    # `课堂提问：请围绕这个任务推进对话。`。教练读到的是课堂的腔调，于是照着课堂的方式说话：
+    # 评估里「说话像同行，不像照着表格念」那条从 100% 掉到 0/3，就是这么来的。
+    #
+    # 判据取**调用方传进来的** `is_practice`（服务端按 `scenario` 算的），不取客户端字段 ——
+    # 这是不是一次实践对话，服务端自己就知道，不该让客户端说了算。
+    lines: list[str] = []
+    if not is_practice:
+        lines += ["【课堂上下文】", f"当前课程：{_clip(topic, 80)}"]
+        if seg_idx:
+            lines.append(
+                f"当前幕（第 {seg_idx}/{len(_SEGMENT_IDS)} 幕·{_SEGMENT_NAMES[seg_id]}）：{_SEGMENT_ROLE_HINTS[seg_id]}"
+            )
+        else:
+            lines.append(f"当前幕：「{_clip(segment.get('title'))}」，类型：{_clip(segment.get('type'))}")
 
     if resource_id is not None:
         if user_id is None:
@@ -682,18 +726,27 @@ async def _build_classroom_path_context(
             "请优先依据摘录回答用户；摘录没有覆盖的问题要明确说明，不要编造教材内容。",
         ])
     else:
-        if not seg_idx:
-            lines.append(f"当前幕：「{_clip(segment.get('title'))}」，类型：{_clip(segment.get('type'))}")
-        # 500 → 1500：进阶练习这条线上 script 是客户端拼的任务说明（brief + problem +
-        # focus + 验收标准），500 字符装不下，而且 `_clip` 不还省略号 —— 截了看不出来。
-        # 有 resource_id 时这段本来就不渲染（任务说明走服务端账本那一份）。
-        lines.append(f"讲解要点：{_clip(segment.get('script') or segment.get('subtitle'), 1500)}")
-        board = segment.get("board_items") or segment.get("points") or []
+        # 500 → 1500：进阶练习这条线上 script 里是客户端手上的主讲材料摘要，
+        # 500 字符装不下，而且 `_clip` 不还省略号 —— 截了看不出来。
+        #
+        # **空了就不拼这一行。** 拼出来是一句「讲解要点：」—— 一个只有标签没有内容的行，
+        # 读起来却像"这里本该有东西"。前端那条 segment 现在只在真有材料时才给 script
+        # （任务说明已改由服务端账本渲染，见 `_render_task_block`）。
+        script = _clip(segment.get("script") or segment.get("subtitle"), 1500)
+        if script:
+            # 实践那边这行不叫「讲解要点」—— 它装的是"他手上有哪段主讲材料"，内容自己带了
+            # 抬头（「主讲材料摘要：…」「当前没有可用主讲材料」），再套一层课堂标签就是双重标签。
+            # 标签去掉，内容留着：教练需要知道有没有材料可依，只是不需要用课堂的词知道。
+            lines.append(script if is_practice else f"讲解要点：{script}")
+        # 板书 / 例子 / 课堂提问都是**互动课堂**的概念，实践对话里一样都不该出现。
+        # 实践那边的 segment 已经不带这几个键了，这里再按 `is_practice` 挡一道：
+        # 页面可能是旧的、缓存里的、或者别的端发来的，而这一层的写法决定了教练的腔调。
+        board = ([] if is_practice else segment.get("board_items") or segment.get("points") or [])
         if board:
             lines.append("板书：" + "、".join(_clip(str(b), 40) for b in board[:6]))
-        if segment.get("example"):
+        if not is_practice and segment.get("example"):
             lines.append(f"例子：{_clip(segment['example'], 160)}")
-        if question:
+        if question and not is_practice:
             lines.append(f"课堂提问：{_clip(question.get('prompt'), 120)}")
             options = question.get("options")
             if options:
@@ -706,7 +759,10 @@ async def _build_classroom_path_context(
         if block:
             lines.append(block)
 
-    lines.append("以上是当前课堂正在讲的内容，请围绕它回应用户。")
+    # 这句收尾是**说给课堂听的**（"当前课堂正在讲的内容"）。实践对话里上面那段是他这次的
+    # 任务和他手上的东西，套这句等于又把课堂的框子扣回去。
+    if not is_practice:
+        lines.append("以上是当前课堂正在讲的内容，请围绕它回应用户。")
     return "\n".join(lines)
 
 
@@ -909,6 +965,9 @@ async def stream_classroom_chat(
             resource_id=resource_id,
             user_question=text,
             task_snapshot=task_snapshot,
+            # 判据取**服务端的 scenario**，不取客户端 segment 里的字段：这是不是一次实践对话，
+            # 服务端自己就知道，不该让客户端说了算。
+            is_practice=scenario in _PRACTICE_SESSION_SCENARIOS,
         )
         agent_id = await get_or_create_classroom_agent(user_id)
         if agent_id is None:

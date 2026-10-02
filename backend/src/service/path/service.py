@@ -24,7 +24,7 @@ from backend.src.utils.prompt_loader import load_prompt, fill_prompt
 from backend.src.service.portrait.service import (
     format_portrait,
     PortraitRadarService,
-    build_learning_guidance,
+    build_learning_guidance_with_radar,
     record_learning_event,
 )
 from backend.src.service.exam.service import ExamService, _answer_matches, _display_answer, update_knowledge_mastery
@@ -44,6 +44,7 @@ from backend.src.service.path.helpers import (
     reconcile_completed_prerequisites,
     reconcile_unlocked_frontier,
     frontier_node_id,
+    initial_node_status,
 )
 from backend.src.service.path.generation_locks import get_node_generation_lock
 from backend.src.service.path.path_generation_lock import get_path_generation_lock
@@ -230,24 +231,22 @@ class PathService:
         portrait_context = "No portrait data"
         mastery_context = "No mastery data"
         kb_context = "No knowledge base context"
-        learning_guidance = ""
 
         user = await User.filter(id=user_id).first()
-        if user:
-            picture = await user.picture
-            if picture:
-                try:
-                    radar_data = await PortraitRadarService.get(user_id)
-                except Exception:
-                    radar_data = None
-                portrait_context = "\n".join(format_portrait(picture, show_missing=False, radar_data=radar_data))
-                if node_count <= 0:
-                    node_count = _compute_node_count(subject, picture)
+        picture = await user.picture if user else None
 
+        # 指导文本和雷达本体一次取回。下面拼 portrait_context 要的是同一个雷达，再单独取一次
+        # 就是把同一个用户同一时刻的数据重算一遍（`PortraitRadarService.get` 没有缓存分支）。
         try:
-            learning_guidance = await build_learning_guidance(user_id) or ""
+            learning_guidance, radar_data = await build_learning_guidance_with_radar(user_id)
         except Exception:
             logger.exception("学习指引生成失败 user_id=%s", user_id)
+            learning_guidance, radar_data = "", None
+
+        if picture:
+            portrait_context = "\n".join(format_portrait(picture, show_missing=False, radar_data=radar_data))
+            if node_count <= 0:
+                node_count = _compute_node_count(subject, picture)
 
         try:
             kb_result = await kb_search(subject, top_k=5, user_id=user_id)
@@ -560,6 +559,11 @@ class PathService:
         不传时**第一条自动封顶到 ENTRY_PATH_NODE_CAP** —— 学生最先要的是"有一条能进去的路"。
         已存在的科目默认直接复用（`generate_path` 返回 cached），只有 force_regenerate 才重建。
 
+        **只给第一条（入口路径）预热首节点。** 学生一次只学一条路径，而一次批量有四个科目：
+        四条都预热，等于为一个学生生成四份"第一章的文档 + PPT + 思维导图 + 检测题"，其中
+        三份的主人可能永远不会点开那条路径。其余三条件打开章节时按需生成 —— 前端每打开一个
+        章节都会调 `generate-resources`，那条路是幂等的，复用时只读库。
+
         单个科目失败只记日志、继续下一个：把四条捆在一起抛，等于一条失败就一条路都没有。
         返回真正落了库的科目名，供调用方记日志。
         """
@@ -571,14 +575,20 @@ class PathService:
         async with lock:
             for index, subject in enumerate(subjects):
                 node_count = caps[index] if index < len(caps) else (ENTRY_PATH_NODE_CAP if index == 0 else 0)
+                # 入口 = 批量里的第一条，和上面那个封顶的判据是同一个。
+                is_entry_path = index == 0
                 try:
                     existing = None
                     if force_regenerate:
                         existing = await LearningPath.filter(user_id=user_id, subject=subject).first()
                     result = (
-                        await PathService.regenerate_path(existing.id, user_id)
+                        await PathService.regenerate_path(
+                            existing.id, user_id, prewarm_first_node=is_entry_path
+                        )
                         if existing
-                        else await PathService.generate_path(subject, user_id, difficulty, node_count)
+                        else await PathService.generate_path(
+                            subject, user_id, difficulty, node_count, prewarm_first_node=is_entry_path
+                        )
                     )
                 except Exception:
                     logger.exception("学习路径生成失败 subject=%s user_id=%s", subject, user_id)
@@ -590,7 +600,9 @@ class PathService:
                 # 初始化；复用回来的缓存路径要在这里补齐，否则概览接口读不到它。
                 if result.get("cached"):
                     try:
-                        await PathService.enroll_path(path_id, user_id)
+                        await PathService.enroll_path(
+                            path_id, user_id, prewarm_first_node=is_entry_path
+                        )
                     except Exception:
                         logger.exception("复用路径接入进度失败 path_id=%s user_id=%s", path_id, user_id)
                 done.append(subject)
@@ -604,8 +616,14 @@ class PathService:
         difficulty: str = "medium",
         node_count: int = 0,
         force_regenerate: bool = False,
+        prewarm_first_node: bool = True,
     ) -> dict:
-        """LLM 生成路径结构 → 存库；默认复用同用户同科目，强制模式才重建。"""
+        """LLM 生成路径结构 → 存库；默认复用同用户同科目，强制模式才重建。
+
+        prewarm_first_node 控制"落库后立刻把首节点的资料和题目生成好"。学生一次只会学
+        一条路径，批量入口（`generate_subject_paths`）因此只给入口那条开预热 —— 见那里
+        的说明。单独点名生成一条路径的调用方保持默认 True。
+        """
         await init_db()
 
         # >admin 快捷模式：强制 2 节点，跳过预生成
@@ -621,24 +639,21 @@ class PathService:
         portrait_context = "暂无画像数据"
         mastery_context = "暂无掌握度数据"
         kb_context = "暂无相关知识库"
-        learning_guidance = ""
 
         user = await User.filter(id=user_id).first()
-        if user:
-            picture = await user.picture
-            if picture:
-                try:
-                    radar_data = await PortraitRadarService.get(user_id)
-                except Exception:
-                    radar_data = None
-                portrait_context = "\n".join(format_portrait(picture, show_missing=False, radar_data=radar_data))
-                if node_count <= 0:
-                    node_count = _compute_node_count(subject, picture)
+        picture = await user.picture if user else None
 
+        # 指导文本和雷达本体一次取回，理由同 generate_path_stream。
         try:
-            learning_guidance = await build_learning_guidance(user_id) or ""
+            learning_guidance, radar_data = await build_learning_guidance_with_radar(user_id)
         except Exception:
             logger.exception("学习指导生成失败 user_id=%s", user_id)
+            learning_guidance, radar_data = "", None
+
+        if picture:
+            portrait_context = "\n".join(format_portrait(picture, show_missing=False, radar_data=radar_data))
+            if node_count <= 0:
+                node_count = _compute_node_count(subject, picture)
 
         try:
             kb_result = await kb_search(subject, top_k=5, user_id=user_id)
@@ -766,8 +781,8 @@ class PathService:
         progress_list = []
         first_node = None
         for i, node in enumerate(sorted_nodes):
-            has_prereqs = node.prerequisites and json.loads(node.prerequisites)
-            status = "unlocked" if (i == 0 or not has_prereqs) else "locked"
+            # 出生状态只有第 1 站是 unlocked，见 `initial_node_status` 的说明。
+            status = initial_node_status(i)
             await UserPathProgress.create(
                 user_id=user_id,
                 path=path,
@@ -775,7 +790,11 @@ class PathService:
                 node_status=status,
             )
             progress_list.append({"node_id": node.id, "topic": node.topic, "status": status})
-            if status == "unlocked":
+            # `not first_node` 不能省：以前它被每一个 unlocked 节点覆盖，最后停在**最后**
+            # 一个可学节点上，而下面那句通知和预生成用的都是"首节点"。那时前沿可能散开、
+            # 这个 bug 才露得出来；现在只解锁第 1 站，两种写法结果相同 —— 但保持一致，
+            # 免得将来解锁规则再变时又静默地错回去。
+            if status == "unlocked" and not first_node:
                 first_node = node
 
         # 通知：首节点已解锁
@@ -784,7 +803,7 @@ class PathService:
 
         # 只为首个解锁节点预生成资源 + 测验，其余按需懒加载（admin 模式跳过预生成）
         node_results = {}
-        if first_node and not admin_mode:
+        if first_node and not admin_mode and prewarm_first_node:
             async def gen_resources():
                 try:
                     r = await PathService.generate_node_resources(path.id, first_node.id, user_id)
@@ -880,8 +899,13 @@ class PathService:
         }
 
     @staticmethod
-    async def enroll_path(path_id: int, user_id: int) -> dict:
-        """加入路径 → 初始化 UserPathProgress，解锁首节点并自动生成资源"""
+    async def enroll_path(path_id: int, user_id: int, prewarm_first_node: bool = True) -> dict:
+        """加入路径 → 初始化 UserPathProgress，解锁首节点并自动生成资源。
+
+        prewarm_first_node 同样由批量入口按"这条是不是入口路径"决定：`enroll_path` 跑到
+        已存在的路径上时，补预热的判据是"首节点还缺资料或没有测验" —— 批量入口刚为三条
+        非入口路径决定不预热，这里的补脚手架不能反手把它们又生成一遍。
+        """
         path = await LearningPath.filter(id=path_id).prefetch_related("nodes").first()
         if not path:
             raise ValueError("路径不存在")
@@ -905,15 +929,15 @@ class PathService:
                 node_id=first_node.id,
             ).first()
             bound_resource_ids = _load_resource_ids(first_progress.resource_ids) if first_progress else []
-            if first_progress and (not bound_resource_ids or not first_progress.quiz_session_id):
+            if prewarm_first_node and first_progress and (not bound_resource_ids or not first_progress.quiz_session_id):
                 _schedule_first_node_warmup(path_id, first_node.id, user_id)
             return {"message": "已加入该路径", "path_id": path_id}
 
         created = []
         first_node = None
         for i, node in enumerate(nodes_sorted):
-            has_prereqs = node.prerequisites and json.loads(node.prerequisites)
-            status = "unlocked" if (i == 0 or not has_prereqs) else "locked"
+            # 同建路径那一处：出生即解锁的只有整条路径的第 1 站。
+            status = initial_node_status(i)
             await UserPathProgress.create(
                 user_id=user_id,
                 path=path,
@@ -930,7 +954,7 @@ class PathService:
 
         # 自动为首个节点生成资源
         resources = []
-        if first_node:
+        if first_node and prewarm_first_node:
             try:
                 _schedule_first_node_warmup(path_id, first_node.id, user_id)
                 resources = []
@@ -1047,7 +1071,23 @@ class PathService:
 
     @staticmethod
     async def generate_node_classroom(path_id: int, node_id: int, user_id: int) -> dict | None:
-        """后台预生成节点课堂，复用课堂缓存、节点锁和低优先级限流。"""
+        """后台预生成节点课堂，复用课堂缓存、节点锁和低优先级限流。
+
+        **默认不再预热（`PATH_AUTO_PREGENERATE_CLASSROOM` 默认为 false）。** 这一份产物
+        是四幕剧本：一次要 writer 大纲 + 每幕写作 + 逐幕审核 + 最多一轮重写，离线预热还会
+        把四段讲解音频一起合成 —— 是节点预热里最贵的一块，比资料和题目加起来还重。
+
+        而它现在**没有任何前端入口**：课堂产物由 `GET /path/{id}/node/{id}/classroom` 读出，
+        前端一处都没调过（进阶学习只用 `/path/classroom/chat`，那是另一条链、按需走）。
+        也就是说这里生成的东西没有消费者。代码和路由都留着，只是不再自动跑 —— 前端接上
+        课堂页、或需要一个"立刻可开"的演示时，把这个环境变量打开就恢复原样，不必改代码。
+
+        按需那条路不受影响：`POST /path/{id}/node/{id}/classroom` → `generate_classroom_lesson`。
+        """
+        if not _env_bool("PATH_AUTO_PREGENERATE_CLASSROOM", False):
+            logger.info("课堂预热已关闭，跳过 path_id=%s node_id=%s", path_id, node_id)
+            return None
+
         from backend.src.service.path.classroom import generate_classroom_lesson
 
         return await generate_classroom_lesson(
@@ -1750,8 +1790,12 @@ class PathService:
         }
 
     @staticmethod
-    async def regenerate_path(path_id: int, user_id: int) -> dict:
-        """基于最新画像重建未完成节点（已完成的保留）"""
+    async def regenerate_path(path_id: int, user_id: int, prewarm_first_node: bool = True) -> dict:
+        """基于最新画像重建未完成节点（已完成的保留）。
+
+        prewarm_first_node 透传给 `generate_path`：批量入口重建三条非入口路径时不该顺手
+        预热它们的首节点（理由见 `generate_subject_paths`）。
+        """
         path = await LearningPath.filter(id=path_id).first()
         if not path:
             raise ValueError("路径不存在")
@@ -1769,6 +1813,7 @@ class PathService:
             path.difficulty,
             path.node_count,
             force_regenerate=True,
+            prewarm_first_node=prewarm_first_node,
         )
         if "error" in result:
             return result

@@ -6,8 +6,13 @@ deploy/ 里只有 nginx，.env 里没有任何 SEARXNG_* 变量，依赖它的�
 
 对外接口保持稳定，上游调用方无需改动：
     web_search(query)                     — 智能体工具
+    read_web_page(url)                    — 智能体工具（把某一页读成正文）
     search_recent_web_brief(query, n)     — 课堂等待页简报
     search_collect(query, n)              — 联网补库批量收集
+
+**`web_search` 和 `read_web_page` 是一对。** 前者只给标题+摘要+链接，摘要一两句话，
+回答不了"这个 API 到底怎么调"；后者把具体那一页读进来。模型自己会把两步串起来用，
+不需要为它再造一个组合工具。
 """
 
 import logging
@@ -16,6 +21,7 @@ import re
 from langchain_core.tools import tool
 
 from backend.src.utils.education_sources import label_for
+from backend.src.utils.web_page import fetch_readable_text
 from backend.src.utils.web_search_client import is_configured, search_web
 
 logger = logging.getLogger(__name__)
@@ -141,6 +147,38 @@ async def search_recent_web_brief(query: str, max_results: int = 3) -> list[dict
         len(briefs),
     )
     return briefs
+
+
+@tool
+async def read_web_page(url: str):
+    """打开一个具体网页，读出它的正文。
+
+    什么时候用它：`web_search` 给回候选链接之后，用它把**具体那一页**读进来。
+    搜索结果的摘要只有一两句，回答不了"这个 API 到底怎么调""这个骨架里有哪些文件"
+    这类问题；而学生问的通常正是这类问题。
+
+    **优先读官方文档**（框架官网、官方仓库里的 README / docs / quickstart），别读二手博客：
+    博客常是照着旧版本写的，读起来却和官方文档一样肯定。
+
+    不依赖搜索服务：只要给出地址就能读，没配搜索密钥时它照样能用。
+    """
+    target = str(url or "").strip()
+    if not target:
+        return "请给出要打开的网页地址。"
+
+    text, note = await fetch_readable_text(target)
+    if not text:
+        # 读不到就**如实说读不到**，并且明确要求不要凭记忆补内容 —— 这条链路上
+        # "假装读过"是最贵的错误：学生会拿一份编出来的 API 去写代码。
+        return (
+            f"没能读到这一页（{target}）：{note or '未知原因'}。\n"
+            "不要凭记忆补它的内容，也不要猜那一页大概写了什么 —— 如实告诉学生这一页没读到，"
+            "可以换一个地址再试。"
+        )
+    # 抓到了，但**可能没抓干净**（见 web_page.residual_markup_note）。这一句必须带上：
+    # 不说的话，模型会把一屏 `<span style="...">` 当成正文读，还会照着它给学生讲。
+    warning = f"\n（注意：{note}）" if note else ""
+    return f"网页正文（{target}）：{warning}\n\n{text}"
 
 
 @tool

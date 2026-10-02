@@ -132,6 +132,93 @@ async def test_a_generated_list_is_trimmed_to_the_caller_limit(monkeypatch):
     assert subjects == ["课程1", "课程2", "课程3"]
 
 
+# ── 画像里存全部，返回值只决定"现在建几条" ────────────────────────────────
+
+class _Picture:
+    def __init__(self, traits):
+        self.traits = traits
+        self.saved = 0
+
+    async def save(self):
+        self.saved += 1
+
+
+def _install_a_user(monkeypatch, *, stored_traits, row, llm):
+    """把 User / User_picture / 课程表三处查库换成假对象，返回那张能读回 traits 的画像。"""
+    from backend.src.models.usermodel import User
+
+    picture = _Picture(stored_traits)
+    user = type("U", (), {"picture": _Async(picture)})()
+    monkeypatch.setattr(User, "filter", lambda **_f: _Q(user))
+    _install(monkeypatch, row=row, llm=llm, written=[])
+    return picture
+
+
+@pytest.mark.asyncio
+async def test_the_portrait_keeps_every_subject_while_only_some_paths_are_built(monkeypatch):
+    """画像写的是**整个方向**的科目，返回值才是"现在先建几条路径"。
+
+    以前 limit 一路透到拆解那一步，画像里只剩前四门。而画像那份是别处唯一的来源：
+    概览页拿它筛"这个方向的相关路径"（`mergePathCatalog` 的 relatedSubjects）、
+    档案页把它当「学习主题」显示。被截掉的几门连记录都不剩，学生也没法知道自己目标所在的
+    那几门排在第 7～10 位。
+    """
+    everything = [f"课程{i}" for i in range(1, 7)]
+    picture = _install_a_user(
+        monkeypatch, stored_traits=None, row=None, llm=_ScriptedLlm(everything)
+    )
+
+    built = await curriculum.sync_direction_subjects(9, "机械制图", "做出一个零件图", 4)
+
+    assert built == everything[:4], "返回值是现在要建的那几条"
+    stored = json.loads(picture.traits)
+    assert stored["learning_direction_subjects"] == everything, "画像里少了科目"
+
+
+@pytest.mark.asyncio
+async def test_a_portrait_truncated_by_the_old_bug_is_refilled_from_the_table(monkeypatch):
+    """画像是拷贝，课程表才是源：旧拷贝遇到更完整的表，要自己补上，且不再问模型。"""
+    everything = [f"课程{i}" for i in range(1, 7)]
+    stale = json.dumps(
+        {
+            "learning_direction": "机械制图",
+            "learning_direction_goal": "做出一个零件图",
+            "learning_direction_subjects": everything[:4],
+        },
+        ensure_ascii=False,
+    )
+    picture = _install_a_user(
+        monkeypatch, stored_traits=stale, row=_row(everything), llm=_DeadLlm()
+    )
+
+    built = await curriculum.sync_direction_subjects(9, "机械制图", "做出一个零件图", 4)
+
+    assert built == everything[:4]
+    assert json.loads(picture.traits)["learning_direction_subjects"] == everything
+
+
+@pytest.mark.asyncio
+async def test_a_portrait_that_matches_the_table_is_not_rewritten(monkeypatch):
+    """补全只在"拷贝比源短"时发生 —— 一样长就别动它，否则每次进入都要多写一次库。"""
+    everything = [f"课程{i}" for i in range(1, 5)]
+    current = json.dumps(
+        {
+            "learning_direction": "机械制图",
+            "learning_direction_goal": "做出一个零件图",
+            "learning_direction_subjects": everything,
+        },
+        ensure_ascii=False,
+    )
+    picture = _install_a_user(
+        monkeypatch, stored_traits=current, row=_row(everything), llm=_DeadLlm()
+    )
+
+    built = await curriculum.sync_direction_subjects(9, "机械制图", "做出一个零件图", 2)
+
+    assert built == everything[:2]
+    assert picture.saved == 0, "命中的那份被重写了一遍"
+
+
 class _BrokenLlm:
     async def ainvoke(self, *_args, **_kwargs):
         raise RuntimeError("provider down")

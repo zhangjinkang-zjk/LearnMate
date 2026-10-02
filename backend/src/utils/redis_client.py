@@ -106,15 +106,25 @@ async def cache_set(key: str, value: Any, ttl: int):
 # ═══════════════════════════════════════════════
 
 async def check_rate_limit_key(prefix: str, identity: str, max_requests: int, window: int = 60) -> bool:
-    """按任意匿名身份限流，例如客户端 IP 或邮箱。"""
+    """按任意匿名身份限流，例如客户端 IP 或邮箱。
+
+    INCR 与 EXPIRE **必须一起进事务**（原来是一条 `incr` 之后跟一条 `if count == 1: expire`）：
+    两次请求之间只要进程被打断、或者 expire 那一步失败，这把 key 就留在 Redis 里**没有 TTL**
+    —— 之后 incr 只增不减，超过 max_requests 之后**永久拒绝**这个身份（登录、注册、付费
+    接口的当日配额都走这里）。
+
+    `expire(..., nx=True)` 表示"只在这把 key 还没有 TTL 时设置"：万一真留下了裸 key，
+    下一次请求会把它补上过期时间，不会一坏到底。
+    """
     if not identity:
         return True
     try:
         r = await get_redis()
         key = f"ratelimit:{prefix}:{identity}"
-        count = await r.incr(key)
-        if count == 1:
-            await r.expire(key, window)
+        async with r.pipeline(transaction=True) as pipe:
+            pipe.incr(key)
+            pipe.expire(key, window, nx=True)
+            count, _ = await pipe.execute()
         return count <= max_requests
     except Exception:
         return True  # Redis 不可用时保持现有降级策略
@@ -141,6 +151,32 @@ async def check_rate_limit(prefix: str, user_id: int, max_requests: int, window:
 
 # 内存中的 SSE 订阅者队列（同一个进程内直接用内存，避免 Redis 往返延迟）
 _sse_subscribers: dict[str, list] = {}
+
+# 本进程在 Redis 上的身份标记。见 notify_sse / _forward_redis_messages 的说明：
+# 发布用的是普通连接、订阅用的是 psubscribe，**Redis 会把消息投给发布者自己** ——
+# 不记来源的话，同一条事件会在同一个进程里被投两次（本地一次 + 转发回来一次）。
+_SSE_ORIGIN = f"{os.getpid()}-{os.urandom(4).hex()}"
+
+# Redis 载荷的外层信封标记。带它才做拆包，避免把恰好含 origin/data 键的业务事件认错。
+_SSE_ENVELOPE_KEY = "__sse_envelope__"
+
+
+def _wrap_sse_payload(data: dict) -> str:
+    return _json.dumps(
+        {_SSE_ENVELOPE_KEY: 1, "origin": _SSE_ORIGIN, "data": data},
+        ensure_ascii=False,
+    )
+
+
+def _unwrap_sse_payload(raw: Any) -> Any:
+    """拆信封；没有信封（旧格式、或别的进程还在跑旧代码）就原样返回。"""
+    try:
+        payload = _json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(payload, dict) and payload.get(_SSE_ENVELOPE_KEY) == 1:
+        return payload.get("data")
+    return payload
 
 
 def subscribe_sse(channel: str) -> list:
@@ -178,7 +214,7 @@ async def notify_sse(channel: str, data: dict, max_stream_len: int = 200):
     # 2) Redis Pub/Sub + Stream
     try:
         r = await get_redis()
-        payload = _json.dumps(data, ensure_ascii=False)
+        payload = _wrap_sse_payload(data)
         await r.publish(f"sse:{channel}", payload)
         # Stream 存最近 N 条，用于新连接重放
         await r.xadd(f"sse:{channel}:stream", {"d": payload}, maxlen=max_stream_len, approximate=True)
@@ -193,8 +229,9 @@ async def replay_sse(channel: str) -> list[dict]:
         events = await r.xrange(f"sse:{channel}:stream", min="-", max="+", count=200)
         result = []
         for _, entry in events:
-            raw = entry.get("d", "{}")
-            result.append(_json.loads(raw))
+            data = _unwrap_sse_payload(entry.get("d", "{}"))
+            if data is not None:
+                result.append(data)
         return result
     except Exception:
         return []
@@ -228,9 +265,17 @@ async def _forward_redis_messages():
                 # 跳过 Pub/Sub 内部消息
                 if data_raw == "1":
                     continue
+                # 自己发布的消息不用再灌一遍：notify_sse 的第 1 步已经投递过了。
+                # 不做这一步的话，Redis 可用时每条事件都被投两次 —— 同一个进度在页面上
+                # 渲染两遍，`__close__` 也收到两次。
                 try:
-                    data = _json.loads(data_raw)
+                    envelope = _json.loads(data_raw)
                 except (TypeError, ValueError):
+                    continue
+                if isinstance(envelope, dict) and envelope.get("origin") == _SSE_ORIGIN:
+                    continue
+                data = _unwrap_sse_payload(data_raw)
+                if data is None:
                     continue
                 # 写入本地内存队列
                 queues = _sse_subscribers.get(real_channel, [])

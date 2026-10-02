@@ -606,6 +606,77 @@ async def test_task_block_comes_from_server_ledger_not_client_segment(monkeypatc
     assert "客户端伪造的任务名" not in ctx_without
 
 
+def test_task_block_carries_brief_and_constraints():
+    """任务块得自己带全 `brief` 和 `constraints`。
+
+    这两样以前**只经客户端 segment** 到教练手上：brief 和 problem/focus/criteria 一起被前端
+    拼进 `script`（还带着「重点能力：」「验收标准：」那些表格栏位名），constraints 装在
+    `points` 里、被渲染成「板书：」—— 一个不对的标签配一份对的内容。
+
+    客户端那条重复通道去掉之后（任务说明只留账本这一份，见 `PracticeDialogue.practiceSegment`），
+    这两样必须在**这里**渲染出来，否则是删信息而不是去重。
+    """
+    block = cg_chat._render_task_block({
+        "title": "做一个能回答专业问题的程序",
+        "brief": "把散在几份资料里的答案串成一个能跑的程序",
+        "constraints": ["必须引用原始资料", "不许编造"],
+    })
+
+    assert "把散在几份资料里的答案串成一个能跑的程序" in block
+    assert "必须引用原始资料；不许编造" in block
+
+
+@pytest.mark.asyncio
+async def test_a_practice_turn_is_not_dressed_as_a_classroom_act(monkeypatch):
+    """实践对话没有幕、没有板书、也没有"课堂提问"。
+
+    以前这里不管来的是谁，都先铺一层课堂框架，于是教练读到
+    「当前幕：「<任务标题>」，类型：practice」和「课堂提问：请围绕这个任务推进对话。」，
+    就跟着用课堂的腔调说话 —— 评估里「说话像同行，不像照着表格念」从 100% 掉到 0/3。
+
+    判据是调用方传进来的 `is_practice`（服务端按 scenario 算的）。这里连客户端那几样键
+    都一起塞进去，是为了钉住"**服务端说了算**"：页面是旧的、缓存里的、别的端发来的，
+    都不该让教练的腔调跟着变。
+    """
+    monkeypatch.setattr(cg_chat.PathNode, "filter", lambda *a, **k: FakeQuerySet(FakeNode()))
+    segment = {
+        "id": "practice-abc", "type": "practice", "title": "做一个能跑的东西",
+        "script": "当前没有可用主讲材料",
+        "points": ["必须引用原始资料"],
+        "question": {"prompt": "请围绕这个任务推进对话。"},
+    }
+
+    ctx = await cg_chat._build_classroom_path_context(
+        1, 1, segment, task_snapshot={"title": "做一个能跑的东西"}, is_practice=True)
+
+    for classroom_word in ("【课堂上下文】", "当前幕", "板书", "课堂提问", "以上是当前课堂"):
+        assert classroom_word not in ctx, f"实践轮里不该出现「{classroom_word}」"
+    # 任务块和工作区照旧 —— 这是把课堂框架撤掉，不是把上下文整个关掉
+    assert "【本次实践任务】" in ctx
+    # 材料那句话留着（换的是标签，不是删内容）：教练要知道他手边有没有材料可依
+    assert "当前没有可用主讲材料" in ctx
+
+
+@pytest.mark.asyncio
+async def test_a_classroom_act_still_gets_its_frame(monkeypatch):
+    """互动课堂那一侧一个字都不能少 —— 别为了让实践干净，把课堂也一起关了。"""
+    monkeypatch.setattr(cg_chat.PathNode, "filter", lambda *a, **k: FakeQuerySet(FakeNode()))
+    segment = {
+        "id": "concept", "title": "补码", "script": "基数决定可用数字",
+        "points": ["位权"],
+        "question": {"prompt": "二进制里 10 表示几？"},
+    }
+
+    ctx = await cg_chat._build_classroom_path_context(1, 1, segment)
+
+    assert "【课堂上下文】" in ctx
+    assert "当前幕（第 2/4 幕·核心讲解）" in ctx
+    assert "讲解要点：基数决定可用数字" in ctx
+    assert "板书：位权" in ctx
+    assert "课堂提问：二进制里 10 表示几？" in ctx
+    assert "以上是当前课堂正在讲的内容" in ctx
+
+
 def test_workspace_goes_into_path_context_not_the_user_prompt():
     """工作区属于 path_context（系统侧材料），绝不能漏进 user prompt。"""
     workspace = {

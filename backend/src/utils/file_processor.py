@@ -198,28 +198,35 @@ def _parse_heading(line: str) -> tuple[int, str] | None:
 
 
 def _split_long_paragraph(text: str, max_chars: int, overlap_chars: int = 150) -> list[str]:
-    """按句号、问号、叹号、分号、换行切割超长段落。"""
+    """按句号、问号、叹号、分号、换行切割超长段落。
+
+    **句子之间原样的空白要留着。** 这个函数原来是 `sent.strip()` 之后 `current += sent`：
+    英文的 `"...end. Next..."` 会粘成 `"end.Next"`，段落内的单个换行也被吞掉（两行并成
+    一行）。切分点用的是 lookbehind，分隔符本来就在上一句末尾 —— 别 strip 就没有这个问题。
+    只在**块的边界**上去空白（那是切分产生的，不是原文里的）。
+
+    长度按原样算（原来那个 `+1` 是给一个从来没被加进去的分隔符留的位置）。
+    """
     sentences = re.split(r"(?<=[。！？!?；;\n])", text)
     chunks = []
     current = ""
 
     for sent in sentences:
-        sent = sent.strip()
-        if not sent:
+        if not sent.strip():
             continue
-        if len(current) + len(sent) + 1 <= max_chars:
+        if len(current) + len(sent) <= max_chars:
             current += sent
         else:
             if current:
-                chunks.append(current)
-            if len(sent) > max_chars:
+                chunks.append(current.strip())
+            if len(sent.strip()) > max_chars:
                 chunks.extend(_hard_split(sent, max_chars, overlap_chars))
                 current = ""
             else:
                 current = sent
 
-    if current:
-        chunks.append(current)
+    if current.strip():
+        chunks.append(current.strip())
 
     return chunks
 

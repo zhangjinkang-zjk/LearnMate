@@ -121,24 +121,29 @@ async def make_generation_state(
     if not topic and chat_group_id > 0:
         topic = await extract_topic_from_chat(user_id, chat_group_id)
 
-    from backend.src.service.portrait.service import PortraitRadarService, build_learning_guidance
+    # 指导文本和雷达本体一次取回。以前这里 guidance 一次、下面 portrait_context 又一次，
+    # 而雷达每次都是全量重算 + 落库（`PortraitRadarService.get` 没有缓存分支），同一个请求
+    # 里把同一个用户同一时刻的数据算了两遍，还都在同一把用户级锁上排队。
+    from backend.src.service.portrait.service import build_learning_guidance_with_radar
 
     portrait_context = "暂无画像数据"
     learning_guidance = ""
+    radar_data = None
 
     user_task = User.filter(id=user_id).first()
-    guidance_task = build_learning_guidance(user_id)
+    guidance_task = build_learning_guidance_with_radar(user_id)
     kb_task = kb_search(topic, top_k=3, user_id=user_id)
     skills_task = AgentSkill.filter(user_id=user_id, enabled=True).all()
 
-    user, learning_guidance, kb_result, skills = await asyncio.gather(
+    user, guidance_result, kb_result, skills = await asyncio.gather(
         user_task, guidance_task, kb_task, skills_task, return_exceptions=True
     )
     t_gather = time.perf_counter()
 
-    if isinstance(learning_guidance, Exception):
-        logger.error("学习指导生成失败 user_id=%s", user_id, exc_info=learning_guidance)
-        learning_guidance = ""
+    if isinstance(guidance_result, Exception):
+        logger.error("学习指导生成失败 user_id=%s", user_id, exc_info=guidance_result)
+    else:
+        learning_guidance, radar_data = guidance_result
 
     if isinstance(kb_result, Exception):
         logger.error("知识库搜索失败 topic=%s", topic, exc_info=kb_result)
@@ -158,10 +163,6 @@ async def make_generation_state(
     if user and not isinstance(user, Exception):
         picture = await user.picture
         if picture:
-            try:
-                radar_data = await PortraitRadarService.get(user_id)
-            except Exception:
-                radar_data = None
             portrait_context = "\n".join(
                 format_portrait(picture, show_missing=False, radar_data=radar_data)
             )

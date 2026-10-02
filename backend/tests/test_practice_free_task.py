@@ -100,7 +100,7 @@ def test_the_free_task_block_says_there_is_no_task():
     assert "没有选任务" in block
     # 三件事都要说：别替他挑任务、别问验收、他问什么就聊什么
     assert "不要替他挑一个任务" in block
-    assert "验收标准" in block and "根本没有" in block
+    assert "做到什么程度算完" in block and "根本没有" in block
 
 
 def test_the_free_block_does_not_render_the_option_label_as_a_task():
@@ -115,8 +115,13 @@ def test_the_free_block_does_not_render_the_option_label_as_a_task():
     assert not block.count("拿你自己的项目来聊")
 
 
-def test_a_regular_block_is_byte_for_byte_the_old_one():
-    """自由模式的早退**不许**顺手动到常规任务那一支。"""
+def test_a_regular_block_still_renders_every_field():
+    """自由模式的早退**不许**顺手动到常规任务那一支。
+
+    栏位名是**大白话**（"做到什么程度算完""要交的东西"），不是「验收标准」「需要交付」——
+    教练会把这些标签原样说给学生听，表格腔就是这么来的。所以这几个字面本身是**要断言的东西**，
+    不是顺手写的期望值：改它们等于改教练的措辞。
+    """
     block = cg_chat._render_task_block({
         "title": "做一个能跑的东西",
         "problem": "把调度用起来",
@@ -126,10 +131,10 @@ def test_a_regular_block_is_byte_for_byte_the_old_one():
     })
 
     assert "任务：做一个能跑的东西" in block
-    assert "要解决的问题：把调度用起来" in block
-    assert "能力重点：任务拆解" in block
-    assert "验收标准：能运行" in block
-    assert "需要交付：能跑的代码" in block
+    assert "要解决什么：把调度用起来" in block
+    assert "这次主要练：任务拆解" in block
+    assert "做到什么程度算完：能运行" in block
+    assert "要交的东西：能跑的代码" in block
 
 
 def test_is_free_task_rejects_junk():

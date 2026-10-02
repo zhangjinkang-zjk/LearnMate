@@ -16,6 +16,7 @@ from backend.src.service.portrait.service import (
     PortraitRadarService,
     active_day,
     build_learning_guidance,
+    build_learning_guidance_from_radar,
     record_learning_event,
 )
 from backend.src.service.notification.service import check_and_create_weekly_report
@@ -34,6 +35,201 @@ def _node_title(node: dict) -> str:
     if not isinstance(node, dict):
         return ""
     return str(node.get("title") or node.get("topic") or "").strip()
+
+
+def _non_negative_int(value: object) -> int:
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _path_last_active_map(user_id: int) -> dict[int, str]:
+    """每条路径最近一次动过是哪天（UTC 日，和「本周来了 N 天」共用同一个 `active_day`）。
+
+    **取的是 `user_path_progress` 的 `started_at` / `completed_at`，不是
+    `learning_events.path_id`。** 后者是稀疏的：`mark_read` 记 `resource_read` 时压根不传
+    `path_id`，`assessment` 也显式传 `None` —— 只看事件的话，"这条路径我一直在读资料、
+    只是还没做测验"会被显示成从没学过，正好把「哪条路径在养老」答反。
+
+    `started_at` 在节点被打开时写（`helpers.py` 绑定资源、`service.py` 启动节点两处），
+    `completed_at` 在通过时写，两者取最大就是"最后一次在这条路径上动过"。
+
+    一次查询取回全部路径，不是每条路径查一遍。
+    """
+    rows = await UserPathProgress.filter(user_id=user_id).values_list("path_id", "started_at", "completed_at")
+    latest: dict[int, date] = {}
+    for path_id, started_at, completed_at in rows:
+        for value in (started_at, completed_at):
+            day = active_day(value)
+            if day and (path_id not in latest or day > latest[path_id]):
+                latest[path_id] = day
+    return {path_id: str(day) for path_id, day in latest.items()}
+
+
+async def _build_path_summaries(
+    user_id: int,
+    path_stats: dict,
+    *,
+    current_path: dict | None,
+    last_active: dict[int, str] | None = None,
+) -> list[dict]:
+    """右栏「我的学习方向」：每条路径一行 —— 名称、完成度、当前节点、节点状态序列。
+
+    **当前路径之外的那几条，走一次 `get_current_path(user_id, path_id=…)`。** 路径读的
+    唯一入口就是它（节点顺序、状态修复、资源绑定、测验进度都在里面），自己另写一套轻量
+    查询等于把业务规则复制一份 —— 以后再改一处、漏一处。当前那条已经在 `get_overview`
+    里取过了，直接复用，不重复取。
+
+    只往外带页面要用的四样：名称、完成度、当前节点标题、按顺序的状态序列（画迷你轨道）。
+    """
+    from backend.src.service.path.service import PathService
+
+    current_path_id = (current_path or {}).get("path_id")
+    # 「上次学到哪天」由调用方一次取齐传进来，不在这里查 —— 它是一次真实查询，
+    # 而这个函数在单元测试里是脱离数据库跑的（`tests/test_study_overview_focus.py`）。
+    last_active = last_active or {}
+    summaries: list[dict] = []
+    for item in path_stats.get("paths", []):
+        path_id = item.get("path_id")
+        name = str(item.get("subject") or "").strip()
+        if not path_id or not name:
+            continue
+        if path_id == current_path_id:
+            nodes = (current_path or {}).get("nodes", [])
+        else:
+            other = await PathService.get_current_path(user_id, path_id)
+            nodes = (other or {}).get("nodes", [])
+        progress = item.get("progress") or {}
+        current_node = next(
+            (node for node in nodes if node.get("status") in ("in_progress", "unlocked")),
+            None,
+        )
+        summaries.append({
+            "id": path_id,
+            "name": name,
+            "is_current": path_id == current_path_id,
+            "progress": _non_negative_int(progress.get("percentage")),
+            "completed_nodes": _non_negative_int(progress.get("completed_nodes")),
+            "total_nodes": _non_negative_int(progress.get("total_nodes")) or len(nodes),
+            "current_node": (
+                {"id": current_node.get("id"), "title": _node_title(current_node), "status": current_node.get("status") or ""}
+                if current_node else None
+            ),
+            # 日期字符串或 null（null = 这条路径一个节点都没打开过）。给日期不给时间戳，
+            # 理由同 `last_active_date`：库里是 naive 时间，序列化后浏览器按本地时区解析会偏。
+            "last_active_date": last_active.get(path_id),
+            # 整条路径的节点，按顺序。**给 id 不是给状态字符串** —— 页面要把每一站画成
+            # 可点的站点，点一下进那个节点的学习界面；只有状态的话这个交互做不出来。
+            # 标题顺带带上，鼠标停在站点上就能显示学的是什么，不用回查。
+            "nodes": [
+                {
+                    "id": node.get("id"),
+                    "title": _node_title(node),
+                    "status": node.get("status") or "locked",
+                }
+                for node in nodes
+            ],
+        })
+    # 当前那条排最前，其余按完成度降序 —— 页面右栏从上往下就是"先看这条、再看那条"。
+    summaries.sort(key=lambda item: (not item["is_current"], -item["progress"]))
+    return summaries
+
+
+def _build_recommendation_reason(
+    weak_tag: str,
+    weak_accuracy: object,
+    node_title: str,
+    *,
+    completed_nodes: int,
+    total_nodes: int,
+    node_tags=(),
+) -> str:
+    """主行动卡的「为什么是它」。**必须引用可证实的事实**，不能是"AI 智能推荐"。
+
+    三条分支按证据强弱排：薄弱知识点**正好在这张卡指向的节点里**就用它的正确率；否则说清
+    "它是路径上的下一个"并带上已完成进度；连节点都没有才承认判断不了。
+
+    原来只有第 1、3 两条，于是**已经把 11/13 个节点学完的账号**看到的理由是
+    「完成一次学习节点后，系统才能给出更精确的下一步判断」—— 一句和学生现状直接矛盾的话
+    （实测于 learner_llm_agent，2026-10-01）。推荐理由是这一页的命门，自相矛盾比空着更糟。
+
+    **第 1 条带 `node_tags` 这个门槛，不是随手加的。** 它原来无条件优先，但
+    `target_id` 永远是 `current_node`（路径上的下一站），跟薄弱点所在的章节没关系 ——
+    于是卡片会写着「向量检索当前正确率约 44%，先补强该知识点」，按钮却带你去
+    「Agentic RAG 的迭代与自我纠正」。**理由说去 A、按钮带你去 B**，是这一页最不该出的错。
+    现在只有那个薄弱点确实属于这一站时才这么说，否则老实讲路径进度。
+
+    薄弱点本身不会因此丢掉：它一直有自己的入口 —— 卡片右下角那条
+    「这章有 N 个知识点该复习」，`blind_spots[0]` 带着 `path_id` / `node_id`，
+    落点正是覆盖该知识点的章节。所以这里收回来的不是信息，是一句不成立的因果。
+    """
+    tag = str(weak_tag or "").strip()
+    if tag and _knowledge_tag_key(tag) in {_knowledge_tag_key(item) for item in node_tags}:
+        accuracy = _non_negative_int(weak_accuracy)
+        if accuracy:
+            return f"{tag} 当前正确率约 {accuracy}%，先补强该知识点能减少后续反复。"
+        return f"{tag} 是你目前最薄弱的知识点，先补强它能减少后续反复。"
+    if str(node_title or "").strip():
+        if total_nodes > 0:
+            return f"路径上已完成 {completed_nodes} / {total_nodes} 个节点，这是下一个待学节点。"
+        return "这是你的学习路径上的下一个待学节点。"
+    return "完成一次学习节点后，系统才能给出更精确的下一步判断。"
+
+
+def _node_knowledge_tags(node: dict) -> list[str]:
+    """节点的知识点名。字符串和字符串数组之外一律当没有 —— 别在裸串上按长度数。
+    """
+    tags = node.get("knowledge_tags")
+    if not isinstance(tags, list):
+        return []
+    # 只认字符串：`str(None)` 会得到 "None" 这么个知识点，`str(3)` 更离谱。
+    # 列里本来存的就是 JSON 字符串数组，出现别的类型是脏数据，丢掉而不是硬转。
+    return [tag.strip() for tag in tags if isinstance(tag, str) and tag.strip()]
+
+
+def _build_focus_target(node: dict | None) -> dict | None:
+    """把「当前该学哪个节点」压成主行动卡要用的元信息。
+
+    **这里一个数都不新算**：知识点数来自节点的 `knowledge_tags`，资料数和任务进度来自
+    `get_current_path` 已经算好的 `garden_progress`。概览页以前把整份节点丢掉、只留一个
+    标题，于是主按钮上写不出"点下去要花什么代价"——学生只能盲点。
+
+    没有 `garden_progress` 时给 0，**不编一个预计时长**：系统里没有任何时长预估的来源，
+    编一个就是伪造精度（和已经删掉的 `masteryScore - 60` 同类）。
+    """
+    if not isinstance(node, dict):
+        return None
+    title = _node_title(node)
+    if not title:
+        return None
+    tags = _node_knowledge_tags(node)
+    progress = node.get("garden_progress") if isinstance(node.get("garden_progress"), dict) else {}
+    return {
+        "id": node.get("id"),
+        "title": title,
+        "action_label": str(node.get("action_label") or "开始学习"),
+        "knowledge_points": len(tags),
+        # 光有「3 个知识点」这种计数，卡片上就只有数字、没有内容 —— 学生看不出这一章
+        # 到底要学什么。标签名本来就是现成的，带上。
+        # **纯增量**：`knowledge_points` 那个计数一个字没改，老的消费方按原样读。
+        "knowledge_tags": tags,
+        "resources": _non_negative_int(progress.get("resource_total")),
+        "resources_done": _non_negative_int(progress.get("resource_completed")),
+        # **这里有过 `tasks_done` / `tasks_total`，已删除。** 它们透出的是
+        # `path/service.py` 里一对**派生计数**：`total = 资料数 + (有测验 ? 1 : 0)`，
+        # `completed = 已读资料数 + (测验全答完 ? 1 : 0)`。也就是说「任务 2 / 5」
+        # 只是「资料 1 / 4」+「测验 1 / 1」的和，不是学生能去做的一件独立的事 ——
+        # 概览页照着它渲染出第三行「任务」，读的人找不到那是什么。
+        # （`garden_progress` 里那对字段本身**没删也不能删**：`StudyGarden.vue` /
+        #  `TreeReviewScene.vue` 拿它挑树的生长阶段。是不能把它当"要做的事"透出来。）
+        # 测验进度与本章累计阅读时长。「接着上次」那张卡要说清"还剩什么"，
+        # 就得知道测验做没做完；时长来自 `ResourceReadStatus.duration_seconds`，
+        # **是真的**（基础讲解页在文档可见时上报秒数），不是那个恒为 0 的 heartbeat。
+        "quiz_total": _non_negative_int(progress.get("quiz_total")),
+        "quiz_answered": _non_negative_int(progress.get("quiz_answered")),
+        "time_spent_seconds": _non_negative_int(node.get("time_spent")),
+    }
 
 
 def _build_path_difficulty_trend(nodes: list[dict]) -> list[dict]:
@@ -76,15 +272,152 @@ def _build_path_difficulty_trend(nodes: list[dict]) -> list[dict]:
     ]
 
 
-# 活跃度的观察窗。「近 7 天」是报给学生的那个数，「30 天」是查询边界 —— 超出边界的记录
-# 连 last_active_date 都不参与，于是它的 None 有确切含义：这个人已经 30 天没来过了，
-# 而不是"最后一次来是三个月前"。
-_ACTIVITY_WEEK_DAYS = 7
+# 活跃度的查询边界。「本周」是报给学生的那个数（见 _week_start），「30 天」是查询边界 ——
+# 超出边界的记录连 last_active_date 都不参与，于是它的 None 有确切含义：这个人已经
+# 30 天没来过了，而不是"最后一次来是三个月前"。
 _ACTIVITY_WINDOW_DAYS = 30
+
+# 趋势图取几周。6 是柱状图还读得出走势的下限：4 根以下看不出"变多还是变少"，
+# 但也别贪多 —— 这套系统的数据本身只有几周，画 12 周会有半张图是空的，
+# 看着像坏了，而不是像"你才刚开始"。
+_TREND_WEEKS = 6
+
+# `learning_events` 的**取数**窗口，比 `_ACTIVITY_WINDOW_DAYS` 宽：趋势图最早那一周的
+# 周一最多在 7 * 6 = 42 天前，只取 30 天会少半根柱子。多取一段只多几行，一条查询。
+# **它不替代 `_ACTIVITY_WINDOW_DAYS`** —— 那个 30 天仍然定义 `last_active_date` 的语义
+# （None = 30 天内没来过）。两个窗口各管各的：一个管"取多少行进来"，一个管"哪些行算数"。
+_EVENT_QUERY_DAYS = _TREND_WEEKS * 7 + 7
+
+
+def _week_start(today: date) -> date:
+    """本周第一天，周一。
+
+    **不数「近 7 天」那种滚动窗口**：滚动窗口的起点每天都在动，学生没有哪一天是对齐它的，
+    「近 7 天来了 4 天」既不是"这周"也不是"上周"，读完不知道该干什么。日历周是学生真的会
+    用来给自己记账的单位 ——「这周来了 3 天」是能对上计划的。
+    """
+    return today - timedelta(days=today.weekday())
+
+
+def _metadata_duration(metadata) -> int:
+    """从事件的 `metadata` 里取 `duration_seconds`。
+
+    `metadata` 是 JSON **文本**列，不是 dict —— 脏数据（坏 JSON、不是对象、值是字符串）
+    一律当 0，不该让整个总览接口 500。
+    """
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except (TypeError, ValueError):
+            return 0
+    if not isinstance(metadata, dict):
+        return 0
+    return _non_negative_int(metadata.get("duration_seconds"))
+
+
+def _read_seconds_in_week(events, *, today: date) -> int:
+    """本周花在**读资料**上的秒数。`events` 是 `(created_at, event_type, metadata)` 三元组。
+
+    这是系统里**唯一**带真实时间戳的时长。别拿 `StudySession.total_seconds` 来回答这个问题：
+    它唯一的写入方是 `StudyService.heartbeat`，而前端从来没调用过 `/study/heartbeat`，
+    所以那个数结构性恒为 0（见 `get_stats` 里的注释），页面拿它渲染出的"学习 0 小时"是错的。
+
+    基础讲解页在文档可见时每 30 秒上报一次**距上次上报的增量**（`FundamentalsPage.vue`
+    的 `reportReadDuration`），所以这里累加增量不会重复计数。
+
+    口径上是「读了多久」，不是「学了多久」：测验、课堂、普通对话都没有记时。只做测验不读
+    资料的人这里就是 0，页面写成"学习了 0 小时"会和同一行的"本周来了 N 天"直接打架。
+    """
+    week_start = _week_start(today)
+    total = 0
+    for created_at, event_type, metadata in events:
+        if event_type != "resource_read":
+            continue
+        day = active_day(created_at)
+        # 上界同样要挡：时钟偏移混进来的未来时间不算进本周。
+        if day is None or day < week_start or day > today:
+            continue
+        total += _metadata_duration(metadata)
+    return total
+
+
+def _summarize_week_work(exam_records, events, *, today: date) -> dict:
+    """本周**做了多少**：答了几题、通过了几次节点测验。
+
+    两张表在 `get_stats` 里早就整个读进内存了（`exam_records` 全表、`learning_events`
+    近 30 天带 `metadata`），所以这里一个额外查询都不发。
+
+    收的是**全表**，不是调用方筛好的：`is_correct` 非空这个条件由这里自己判 —— 它是
+    "答了 N 题"这个数的定义的一部分（简答题没判分时 `is_correct` 是 None，算进去会和
+    正确率的分母对不上），留在调用方就迟早有一条路径忘了筛。
+
+    `quizzes_passed_this_week` 数的是 `node_quiz` 事件里 `metadata.passed` 为真的次数。
+    交卷、诊断这些事件不参与 —— 它们不是"过了一关"。
+    """
+    week_start = _week_start(today)
+
+    def in_week(value) -> bool:
+        day = active_day(value)
+        # 上界要挡：时钟偏移混进来的未来时间不算进本周（同 `_read_seconds_in_week`）。
+        return day is not None and week_start <= day <= today
+
+    questions = sum(
+        1 for record in exam_records
+        if record.is_correct is not None and in_week(record.created_at)
+    )
+    passed = 0
+    for created_at, event_type, metadata in events:
+        if event_type != "node_quiz" or not in_week(created_at):
+            continue
+        try:
+            payload = json.loads(metadata) if metadata else {}
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        if isinstance(payload, dict) and payload.get("passed"):
+            passed += 1
+    return {"questions_this_week": questions, "quizzes_passed_this_week": passed}
+
+
+def _summarize_week_trend(timestamps, *, today: date) -> list[dict]:
+    """最近 `_TREND_WEEKS` 个日历周，每周**有几天在学习**。返回从早到晚的一串桶。
+
+    数的是"天数"而不是"答了几题"或"学完几个节点"，三个原因：
+
+    1. **只有它有可信的时间戳。** 节点完成时间（`user_path_progress.completed_at`）不能用来
+       画走势 —— `reconcile_completed_prerequisites` 会给补记的记录写上 `datetime.now()`，
+       于是几个月前学完的节点会被盖成"今天"，图上凭空多出一根高柱。而
+       `learning_events`（交卷 / 节点小测 / 资料读完 / 课堂对话）和 `ExamRecord` 是当场写的。
+    2. **任何形式的学都算，不只是答题。** 只读资料、只在课堂上提问的人，用"答题量"画出来是
+       一片空白，那是在说他没学 —— 假话。天数只要那天动过就算，和上面「本周来了几天」同源。
+    3. **值域固定 0-7**，不会被某一周突击刷出来的量压扁其余几周。
+
+    口径与 `_summarize_learning_activity` 完全一致（同一批时间戳、同一个 `active_day`、
+    同一个周一为界的 `_week_start`），所以**最右边那根柱子的高度 == 上面那排七格里点亮的
+    格数**。两个地方对同一周给不出不同的答案。
+
+    没有来的那几周给 0 而不是跳过：那几根空柱正是这张图要说的事（哪一周断了），
+    缺桶会让横轴撒谎 —— 相邻两根柱子看起来挨着，中间其实隔了好几周。
+    """
+    days = {
+        day for day in (active_day(ts) for ts in timestamps)
+        # 上界要挡：时钟偏移混进来的未来日期不算（同 `_read_seconds_in_week`）。
+        if day and day <= today
+    }
+    this_week = _week_start(today)
+    buckets = {
+        str(this_week - timedelta(weeks=offset)): 0
+        for offset in range(_TREND_WEEKS - 1, -1, -1)
+    }
+    for day in days:
+        key = str(day - timedelta(days=day.weekday()))
+        if key in buckets:
+            buckets[key] += 1
+    # 键是 ISO 日期，字典序就是时间序；仍然显式排序，别去依赖 dict 的插入顺序。
+    return [{"week_start": key, "active_days": count} for key, count in sorted(buckets.items())]
 
 
 def _summarize_learning_activity(timestamps, *, today: date) -> dict:
-    """把时间戳归到天，给出「近 7 天活跃了几天」和「最后一次学习是哪天」。
+    """把时间戳归到天，给出「本周活跃了几天」和「最后一次学习是哪天」。
 
     口径与雷达的「坚持」维度同源（同一个 active_day、同样是答题记录与 learning_events
     的**并集**）：只数答题会把"看资料 / 做节点测验 / 课堂对话但没考试"的人算成没来过。
@@ -96,13 +429,31 @@ def _summarize_learning_activity(timestamps, *, today: date) -> dict:
     days = {day for day in (active_day(ts) for ts in timestamps) if day}
     window_start = today - timedelta(days=_ACTIVITY_WINDOW_DAYS - 1)
     recent = [day for day in days if day >= window_start]
-    if not recent:
-        return {"active_days_7d": 0, "last_active_date": None, "window_days": _ACTIVITY_WINDOW_DAYS}
-    week_start = today - timedelta(days=_ACTIVITY_WEEK_DAYS - 1)
-    return {
-        "active_days_7d": sum(1 for day in recent if day >= week_start),
-        "last_active_date": str(max(recent)),
+    week_start = _week_start(today)
+    base = {
+        "active_days_this_week": 0,
+        "week_start_date": str(week_start),
+        "last_active_date": None,
         "window_days": _ACTIVITY_WINDOW_DAYS,
+        # 本周七格。**连着七天一起给，不给"活跃的那几天"** —— 页面要画的是
+        # 周一→周日的日历，缺掉的那几天正是它要说的信息（哪一天断了）。
+        # 后半周还没到的日子也在里面，`active` 为 false，页面照画。
+        "weekly_days": [
+            {
+                "date": str(day),
+                "active": day in days and day <= today,
+                "is_today": day == today,
+            }
+            for day in (week_start + timedelta(days=offset) for offset in range(7))
+        ],
+    }
+    if not recent:
+        return base
+    # 上界写 `<= today` 是防时钟偏移带来的未来日期混进来 —— 那会把本周的天数算超。
+    return {
+        **base,
+        "active_days_this_week": sum(1 for day in recent if week_start <= day <= today),
+        "last_active_date": str(max(recent)),
     }
 
 
@@ -230,7 +581,12 @@ class StudyService:
         completed_nodes = sum(1 for node in nodes if node.get("status") == "completed")
         total_nodes = len(nodes)
         diagnosis = (current_path or {}).get("diagnosis") or {}
-        answered_questions = (stats.get("exam_summary") or {}).get("completed_questions", 0)
+        exam_summary = stats.get("exam_summary") or {}
+        answered_questions = exam_summary.get("completed_questions", 0)
+        # 一题没答时给 None 而不是 0：`correct_rate` 在服务端是
+        # `correct / max(completed, 1)`，没答过题的账号会拿到 0.0，直接渲染就是
+        # 「正确率 0%」——把"还没测过"说成"全错"。
+        correct_rate = exam_summary.get("correct_rate") if answered_questions else None
         diagnosis_score = diagnosis.get("latest_score")
         latest_score = round(sum(mastery_values) / len(mastery_values)) if mastery_values else (
             diagnosis_score if diagnosis_score is not None and answered_questions > 0 else None
@@ -246,10 +602,25 @@ class StudyService:
         if not current_node:
             current_node = next((node for node in nodes if node.get("status") in ("in_progress", "unlocked")), None)
         weak_tag = weak_points[0]["tag"] if weak_points else ""
+        weak_accuracy = weak_points[0].get("accuracy") if weak_points else None
         recommendation = {
-            "judgement": f"当前主要短板是 {weak_tag} 能力" if weak_tag else "当前还缺少足够练习数据",
+            # judgement 和 reason 是同一类东西（都是要说给学生听的一句判断），所以
+            # "有当前节点"这一档也要给，不能一没有薄弱点就退回"数据不足"。
+            "judgement": (
+                f"当前主要短板是 {weak_tag} 能力" if weak_tag
+                else (f"已经完成 {completed_nodes} / {total_nodes} 个节点，继续往后学" if current_node else "当前还缺少足够练习数据")
+            ),
             "action": current_node.get("title") if current_node else None,
-            "reason": f"{weak_tag} 当前正确率约 {weak_points[0]['accuracy']}%，先补强该知识点能减少后续反复。" if weak_tag else "完成一次学习节点后，系统才能给出更精确的下一步判断。",
+            "reason": _build_recommendation_reason(
+                weak_tag,
+                weak_accuracy,
+                current_node.get("title") if current_node else "",
+                completed_nodes=completed_nodes,
+                total_nodes=total_nodes,
+                # 这一站的标签。理由里那句"先补强 X"只有 X 属于这一站时才成立 ——
+                # 判据必须和 `target_id` 用的是同一个节点，所以在这里传进去。
+                node_tags=_node_knowledge_tags(current_node) if current_node else (),
+            ),
             "criteria": f"能够解释“{current_node.get('title')}”的关键方法，并通过节点测验。" if current_node else None,
             "target_id": current_node.get("id") if current_node else None,
             # `next_action` 这个键**一定存在**，没有当前节点时它的值是 None
@@ -258,6 +629,10 @@ class StudyService:
             # 整个学习总览 500。默认值要用 `or {}` 兜。
             "action_type": ((current_path or {}).get("next_action") or {}).get("type") if current_path else None,
             "status": "ready" if current_node or weak_tag else "generating",
+            # 推荐指向的那个节点本身（知识点数 / 资料数 / 任务进度）。
+            # 这是**纯增量**：`action` / `reason` / `criteria` / `target_id` 一个没动，
+            # 老的消费方按原样读不会受影响。
+            "target": _build_focus_target(current_node),
         }
         summary_text = ""
         if latest_score is not None:
@@ -286,6 +661,14 @@ class StudyService:
                 "resource_difficulty_match": resource_difficulty_match,
             },
             "subjects": subjects,
+            # 右栏「我的学习方向」：每条路径的当前节点 + 节点状态序列。
+            # **纯增量** —— `subjects` 一个字没动，老的消费方按原样读。
+            "paths": await _build_path_summaries(
+                user_id,
+                path_stats,
+                current_path=current_path,
+                last_active=await _path_last_active_map(user_id),
+            ),
             "goals": goals,
             "next_content": next_content,
             "blind_spots": weak_points,
@@ -303,13 +686,36 @@ class StudyService:
                 "completed_nodes": completed_nodes,
                 "total_nodes": total_nodes,
                 "mastery_score": latest_score,
+                # 0–1 的小数（和历史口径一致），一题没答过时是 None。页面拿它渲染
+                # 「答题正确率 N%」；**这个数是真的**，不像 total_study_seconds。
+                "correct_rate": correct_rate,
                 "text": summary_text,
             },
             # 活跃度与 summary 平级，而不是塞进 summary 里：summary 那几个数是"学到什么程度"，
             # 这一项是"最近来没来"，两件事。summary.total_study_seconds 恒为 0 是真的 0
             # （见 get_stats 里的注释），所以页面上回答"多久没来"的只能是这一项。
-            "activity": stats.get("activity") or {"active_days_7d": 0, "last_active_date": None, "window_days": _ACTIVITY_WINDOW_DAYS},
+            "activity": stats.get("activity") or {
+                "active_days_this_week": 0,
+                "read_seconds_this_week": 0,
+                "questions_this_week": 0,
+                "quizzes_passed_this_week": 0,
+                "weekly_days": [],
+                "week_trend": [],
+                "week_start_date": None,
+                "last_active_date": None,
+                "window_days": _ACTIVITY_WINDOW_DAYS,
+            },
             "recommendation": recommendation,
+            # 资料库那一块的三个数。**纯转手，一个新数都不算**：`get_stats` 为了算
+            # `open_rate` 早就把 `GeneratedResource` / `ResourceReadStatus` /
+            # `ResourceCollection` 三张表整个读进内存了，这里只是把同一份结果透出去。
+            # 页面以前一个字都没读它。
+            "resources": stats.get("resources") or {
+                "total": 0,
+                "read_count": 0,
+                "unread_count": 0,
+                "collected_count": 0,
+            },
         }
 
     @staticmethod
@@ -414,7 +820,10 @@ class StudyService:
             for r in mastery_records
             if r.mastery_level in ("beginner", "learning")
         ]
-        # 追加雷达弱项维度
+        # 追加雷达弱项维度。这一次取数留在外层给下面的学习指导复用 —— 雷达每次都是六维全量
+        # 重算 + 落库，而 `build_learning_guidance` 内部还会再取一次：不留下这一份，同一个请求
+        # 里就会把同一个用户同一时刻的数据算两遍（`/study/overview` 另外还要自己取一次）。
+        radar = None
         try:
             radar = await PortraitRadarService.get(user_id)
             if radar and radar.get("dimensions"):
@@ -521,19 +930,27 @@ class StudyService:
         # （assessment / node_quiz / resource_read / classroom_chat / chat）。
         # exam_records 上面已经整体读进内存了，并集不多花查询；只多一条 learning_events 查询。
         now_utc = datetime.now(timezone.utc)
-        event_times = await LearningEvent.filter(
+        # 一次取齐三个字段：时间戳用来数"来了几天"，事件类型和 metadata 用来加"读了多久"。
+        # 分两次查同一张表没有意义。
+        event_rows = await LearningEvent.filter(
             user_id=user_id,
-            created_at__gte=now_utc - timedelta(days=_ACTIVITY_WINDOW_DAYS),
-        ).values_list("created_at", flat=True)
-        activity = _summarize_learning_activity(
-            [r.created_at for r in exam_records] + list(event_times),
-            today=now_utc.date(),
-        )
+            created_at__gte=now_utc - timedelta(days=_EVENT_QUERY_DAYS),
+        ).values_list("created_at", "event_type", "metadata")
+        # 两张表的时间戳并成一份，下面三个汇总共用 —— "哪天来过"和"哪一周来过几天"必须是
+        # 同一批数据算出来的，各拼一次迟早会走散。
+        activity_timestamps = [r.created_at for r in exam_records] + [row[0] for row in event_rows]
+        today = now_utc.date()
+        activity = _summarize_learning_activity(activity_timestamps, today=today)
+        activity["read_seconds_this_week"] = _read_seconds_in_week(event_rows, today=today)
+        # 本周做了多少 —— 和上面那条一样，数据早就在内存里，不额外查库。
+        activity.update(_summarize_week_work(exam_records, event_rows, today=today))
+        activity["week_trend"] = _summarize_week_trend(activity_timestamps, today=today)
 
         # ── 学习指导 ──
         guidance = ""
         try:
-            guidance = await build_learning_guidance(user_id)
+            # 用上面已经取到的 radar，不再让 helper 自己算一遍。
+            guidance = await build_learning_guidance_from_radar(user_id, radar)
         except Exception:
             logger.warning("已忽略异常 backend/src/service/study/service.py:207", exc_info=True)
 

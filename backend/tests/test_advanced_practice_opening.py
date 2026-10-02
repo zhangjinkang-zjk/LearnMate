@@ -24,7 +24,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.src.service.advanced import practice_service
+from backend.src.models.advanced_practice_model import AdvancedPracticeSession
+from backend.src.service.advanced import practice_service, task_jobs
 from backend.src.service.advanced.practice_service import (
     _opening_pending,
     _serialize,
@@ -226,6 +227,41 @@ def test_the_serialized_session_no_longer_ships_a_phase_ledger():
         "evaluation_status",
     ):
         assert gone not in payload
+
+
+def test_the_session_model_no_longer_declares_the_phase_columns():
+    """阶段机的五列从**模型上**也删了 —— 库里那五列由启动时的 DROP 清掉。
+
+    上面那条守接口形状，这条守存储形状。只删一边的话，另一半会把人带回去：模型里
+    还写着 `completed_phases`，谁看见都会以为会话记得自己的阶段，然后接着往里写。
+    """
+    fields = set(AdvancedPracticeSession._meta.db_fields)
+    for gone in (
+        "current_phase",
+        "completed_phases",
+        "deliverable_state",
+        "final_submission",
+        "evaluation",
+    ):
+        assert gone not in fields, f"模型上还留着 {gone}"
+
+
+def test_nothing_here_can_drive_a_phase_machine_again():
+    """判分那套协作方（后台评分作业、判分提示词）也一起没了。
+
+    阶段机要靠"输入 + 状态 + 输出"三样才转得起来。状态列没了，这条守另外两样：只要
+    `task_jobs` 里还挂着 `ensure_grading_job`、或者 `prompts/advanced/` 下还躺着一份
+    判分提示词，下一个想做评价的人就会直接接上去，而不是重新想一遍口径 —— 而那一版
+    口径量的是"有没有出现依据/验证/方案这几个词"，不是方案好坏。
+    """
+    assert not hasattr(task_jobs, "ensure_grading_job")
+    assert not hasattr(task_jobs, "is_grading")
+
+    scoring_prompt = (
+        Path(__file__).resolve().parents[1]
+        / "src" / "ai_core" / "prompts" / "advanced" / "practice_evaluator.yaml"
+    )
+    assert not scoring_prompt.exists(), "判分提示词还留在 prompts/advanced 里"
 
 
 # ═══════════════════════════════════════

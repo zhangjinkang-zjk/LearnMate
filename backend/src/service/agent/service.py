@@ -9,10 +9,19 @@ from backend.src.models.user_agent_model import UserAgent
 
 logger = logging.getLogger(__name__)
 
+# ⚠️ 这份名单同时管着**用户自建智能体**和**系统内置的实践教练**：`_agent_create` 对两者
+# 都跑 `_validate_tools`，而它是静默过滤 —— 漏掉一个名字，教练那边不会报错，只是**少一个
+# 工具**，而且看起来和生产一模一样（见下面那三个的注释）。改教练的工具表时，这里要一起改。
 _ALLOWED_TOOLS = {
     "search_knowledge_base", "ingest_document", "search_web_and_stage_knowledge",
     "list_knowledge", "update_knowledge", "delete_knowledge",
     "read_portrait", "update_portrait", "get_used_history", "web_search",
+    # 这三个是实践教练的，曾经漏在这份名单外面：新库上第一次创建教练时 `_agent_create`
+    # 把它们静默滤掉，教练只剩 5 个工具（读不了网页、写不了方案、拉不了框架文档），
+    # 而且 `_CLASSROOM_AGENT_IDS` 缓存的 hash 是按**代码里的**工具表算的，所以它认为
+    # "已是最新"、直接返回，自愈分支根本走不到 —— 要等后端重启才会修回来。
+    # tests/test_classroom_tool_whitelist.py 钉住"教练的工具一个都不能被滤掉"。
+    "read_web_page", "write_design_doc", "fetch_framework_docs",
     "read_skill", "upsert_skill", "list_skills", "delete_skill", "create_action_skill",
     "generate_learning_resource", "generate_image", "generate_exam_questions",
     "generate_slide_animation", "search_online_video",

@@ -116,9 +116,9 @@ TASK_TEMPLATES = {
     },
     "project": {
         "title": "用{topic}做出能跑的一块",
-        "brief": "接着当前的项目往下做一块，动手实现，然后跑一遍证明它真的能用。",
+        "brief": "接着当前的项目往下做一块 —— 先想清楚要做成什么样，再动手实现，最后跑一遍证明它真的能用。",
         "deliverables": [
-            "写清这一块要解决什么",
+            "一份写下来的方案：做什么、给谁用、边界在哪",
             "实现它的代码",
             "跑一遍的输入和输出",
         ],
@@ -731,10 +731,17 @@ def build_advanced_tasks(profile: dict, path: dict, mastery_records: Iterable[An
             f"这次要把它们放进同一个目标里做出一个东西，而不是只演示其中某一个点。"
         )
         # 交付物要点名覆盖到的标签，否则"综合"只是一句话，学习者不知道该覆盖什么
+        #
+        # **方案排在最前。** 这个任务的形态是"从头设计到跑通"，而设计那一步的产物必须是一份
+        # **写下来的**东西 —— 只在脑子里想过不算：学生下周会忘，教练也看不到。
+        # 有了它，教练才有一份能"指到具体某一句"的材料（见 coach.yaml 的「他在写方案的时候」）；
+        # 没有它，那段指导就没有对象，教练只能对着空气问"你想做什么"。
+        # 几句话写死就够，不是要长文 —— 所以它排第一但不该压过后面那份代码。
         project_deliverables = [
-            {"id": "deliverable-1", "label": f"能跑起来的代码，用到「{scope_copy}」里的东西", "completed": False},
-            {"id": "deliverable-2", "label": "每个取舍的理由，以及你放弃的做法", "completed": False},
-            {"id": "deliverable-3", "label": "跑一遍的输入和输出（截图或日志都行）", "completed": False},
+            {"id": "deliverable-1", "label": "一份写下来的方案：做什么、给谁用、边界在哪", "completed": False},
+            {"id": "deliverable-2", "label": f"能跑起来的代码，用到「{scope_copy}」里的东西", "completed": False},
+            {"id": "deliverable-3", "label": "每个取舍的理由，以及你放弃的做法", "completed": False},
+            {"id": "deliverable-4", "label": "跑一遍的输入和输出（截图或日志都行）", "completed": False},
         ]
         project_why = f"{base['context']['node_status_label']}；已经学完 {len(scope)} 个节点，用一个开放的东西看看能不能把它们合起来自己做完。"
     else:

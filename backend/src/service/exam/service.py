@@ -278,6 +278,17 @@ def _question_tags(raw_tags: Any) -> list[str]:
     return [str(tag).strip()[:128] for tag in parsed if str(tag).strip()][:12]
 
 
+# 宣称"掌握 / 熟练"所需的最少作答次数。
+#
+# 没有这道门坎时，**第一次答对就 1/1 = 100% → mastered**（`test_mastery_level_follows_running_accuracy`
+# 原来第一行就把这个写成了期望值）。而掌握度不是给自己看的分数，它往下游走：
+# `_get_weak_tags` 用 beginner/learning 挑薄弱知识点、`sync_to_portrait` 把它写进画像的
+# strengths/weaknesses、雷达「广度」维度数的是掌握度记录条数 —— 一次作答就把一个知识点
+# 从"薄弱"翻成"掌握"，等于让噪声直接改画像。样本不足时退回按正确率定位的 lower 档
+# （1 题答对 = learning，不是 beginner）。
+_MIN_ATTEMPTS_FOR_STRONG_LEVEL = 3
+
+
 async def update_knowledge_mastery(user_id: int, raw_tags: Any, is_correct: bool | None) -> list[str]:
     """按一次作答更新知识点掌握度，返回本次计入的标签。
 
@@ -294,15 +305,23 @@ async def update_knowledge_mastery(user_id: int, raw_tags: Any, is_correct: bool
         if is_correct:
             mastery.correct_count += 1
         rate = mastery.correct_count / max(mastery.total_attempts, 1)
-        if rate >= 0.9:
+        # 样本不足时不许宣称掌握/熟练 —— 但要**掉到按正确率算的下一档**，不是一律 beginner：
+        # 1 题答对是"在学"（learning），不是"薄弱"（beginner）。
+        has_enough_samples = mastery.total_attempts >= _MIN_ATTEMPTS_FOR_STRONG_LEVEL
+        if has_enough_samples and rate >= 0.9:
             mastery.mastery_level = "mastered"
-        elif rate >= 0.7:
+        elif has_enough_samples and rate >= 0.7:
             mastery.mastery_level = "proficient"
         elif rate >= 0.4:
             mastery.mastery_level = "learning"
         else:
             mastery.mastery_level = "beginner"
         mastery.last_practiced_at = datetime.now()
+        # 这里的计数是"读出来 + 内存自增 + 整行 save"，并发交卷会丢更新
+        # （同一代码库的 `resource/library.py` 用 `F("view_count") + 1` 做同一件事）。
+        # 没跟着改：改成 `F()` 就得把等级拆成第二条 update，而等级是计数的纯函数、下次作答
+        # 会自愈；多出来的那次写落在每次交卷的热路径上。要改就该连 `select_for_update`
+        # 一起在同一笔事务里定，那需要真库的测试。
         await mastery.save()
     return tags
 

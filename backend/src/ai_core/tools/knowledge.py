@@ -1,12 +1,8 @@
 """Knowledge-base tools for the chat agent."""
 
 import asyncio
-import html
 import re
-from html.parser import HTMLParser
-from urllib.parse import urlparse
 
-import httpx
 from langchain_core.tools import tool
 
 from backend.src.ai_core.tools.search import search_collect
@@ -18,71 +14,9 @@ from backend.src.utils.knowledge_base import (
     search as kb_search,
     update as kb_update,
 )
-
-
-_SOURCE_FETCH_TIMEOUT = 8.0
-_SOURCE_FETCH_MAX_BYTES = 8 * 1024 * 1024
-_SOURCE_TEXT_MAX_CHARS = 120000
-_SOURCE_TEXT_MIN_CHARS = 220
-
-_ARTICLE_START_MARKERS = (
-    'id="cnblogs_post_body"',
-    "id='cnblogs_post_body'",
-    'class="postBody"',
-    "class='postBody'",
-    'class="article-content"',
-    "class='article-content'",
-    'class="article_content"',
-    "class='article_content'",
-    'class="post-content"',
-    "class='post-content'",
-    'class="entry-content"',
-    "class='entry-content'",
-    "<article",
-)
-
-_ARTICLE_END_MARKERS = (
-    'id="MySignature"',
-    "id='MySignature'",
-    'id="blog_post_info_block"',
-    "id='blog_post_info_block'",
-    'class="postDesc"',
-    "class='postDesc'",
-    'class="post-footer"',
-    "class='post-footer'",
-    "posted @",
-    "上一篇：",
-    "下一篇：",
-)
-
-
-class _VisibleTextParser(HTMLParser):
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self._skip_depth = 0
-        self._parts: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs):
-        if tag.lower() in {"script", "style", "noscript", "svg", "canvas"}:
-            self._skip_depth += 1
-        if tag.lower() in {"p", "br", "div", "section", "article", "li", "tr", "h1", "h2", "h3"}:
-            self._parts.append("\n")
-
-    def handle_endtag(self, tag: str):
-        if tag.lower() in {"script", "style", "noscript", "svg", "canvas"} and self._skip_depth:
-            self._skip_depth -= 1
-        if tag.lower() in {"p", "li", "tr", "h1", "h2", "h3"}:
-            self._parts.append("\n")
-
-    def handle_data(self, data: str):
-        if self._skip_depth:
-            return
-        text = str(data or "").strip()
-        if text:
-            self._parts.append(text)
-
-    def get_text(self) -> str:
-        return "\n".join(self._parts)
+# 抓取内核在 utils/ 里 —— 它不该知道"智能体"这个概念，而且"把官网文档落进学生工作区"
+# 那条路要走 service/router，按分层规矩 service 不许 import ai_core。见该模块开头。
+from backend.src.utils.web_page import fetch_readable_text
 
 
 def _compact_text(value: str, max_chars: int = 1200) -> str:
@@ -92,143 +26,6 @@ def _compact_text(value: str, max_chars: int = 1200) -> str:
 
 def _normalize_source_url(value: str) -> str:
     return str(value or "").strip()
-
-
-def _is_fetchable_source_url(url: str) -> bool:
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return False
-    lower_path = parsed.path.lower()
-    return not lower_path.endswith((".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".zip", ".rar"))
-
-
-def _extract_visible_text(markup: str) -> str:
-    parser = _VisibleTextParser()
-    try:
-        parser.feed(markup)
-    except Exception:
-        return ""
-    text = html.unescape(parser.get_text())
-    lines = []
-    seen = set()
-    for raw_line in text.splitlines():
-        line = re.sub(r"\s+", " ", raw_line).strip()
-        if len(line) < 2:
-            continue
-        if line in seen:
-            continue
-        seen.add(line)
-        lines.append(line)
-    return "\n".join(lines).strip()
-
-
-def _slice_article_markup(markup: str) -> str:
-    lower = markup.lower()
-    start = -1
-    for marker in _ARTICLE_START_MARKERS:
-        idx = lower.find(marker.lower())
-        if idx < 0:
-            continue
-        tag_start = lower.rfind("<", 0, idx)
-        start = tag_start if tag_start >= 0 else idx
-        break
-
-    if start < 0:
-        return markup
-
-    end_candidates = []
-    for marker in _ARTICLE_END_MARKERS:
-        idx = lower.find(marker.lower(), start + 1)
-        if idx > start:
-            tag_start = lower.rfind("<", 0, idx)
-            end_candidates.append(tag_start if tag_start > start else idx)
-    end = min(end_candidates) if end_candidates else len(markup)
-    return markup[start:end]
-
-
-def _clean_source_text(text: str) -> str:
-    lines: list[str] = []
-    seen = set()
-    noise = {
-        "会员",
-        "周边",
-        "新闻",
-        "博问",
-        "闪存",
-        "赞助商",
-        "所有博客",
-        "当前博客",
-        "我的博客",
-        "我的园子",
-        "账号设置",
-        "会员中心",
-        "简洁模式",
-        "退出登录",
-        "注册",
-        "登录",
-        "刷新页面",
-        "返回顶部",
-        "公告",
-    }
-    for raw_line in str(text or "").splitlines():
-        line = re.sub(r"\s+", " ", raw_line).strip()
-        if not line or line in noise:
-            continue
-        if len(line) <= 2 and re.fullmatch(r"[\W_]+", line):
-            continue
-        if line in seen:
-            continue
-        seen.add(line)
-        lines.append(line)
-    return "\n".join(lines).strip()
-
-
-def _clip_source_text(text: str, max_chars: int) -> tuple[str, bool]:
-    text = str(text or "").strip()
-    if len(text) <= max_chars:
-        return text, False
-    return text[:max_chars].rstrip(), True
-
-
-async def _fetch_source_text(url: str) -> tuple[str, str]:
-    url = _normalize_source_url(url)
-    if not _is_fetchable_source_url(url):
-        return "", "来源不是可直接抓取的网页"
-
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.6",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.6",
-    }
-    try:
-        async with httpx.AsyncClient(
-            timeout=_SOURCE_FETCH_TIMEOUT,
-            follow_redirects=True,
-            headers=headers,
-        ) as client:
-            resp = await client.get(url)
-            if resp.status_code >= 400:
-                return "", f"来源网页返回 HTTP {resp.status_code}"
-            content_type = resp.headers.get("content-type", "").lower()
-            raw = resp.content[:_SOURCE_FETCH_MAX_BYTES]
-            if "text/plain" in content_type:
-                text = raw.decode(resp.encoding or "utf-8", errors="ignore")
-            else:
-                markup = raw.decode(resp.encoding or "utf-8", errors="ignore")
-                text = _extract_visible_text(_slice_article_markup(markup))
-    except Exception as exc:
-        return "", f"来源网页抓取失败：{type(exc).__name__}"
-
-    text = _clean_source_text(text)
-    if len(text) < _SOURCE_TEXT_MIN_CHARS:
-        return "", "来源网页正文过短或需要动态渲染"
-    text, clipped = _clip_source_text(text, _SOURCE_TEXT_MAX_CHARS)
-    if clipped:
-        text = f"{text}\n\n[正文过长，已截取前 {_SOURCE_TEXT_MAX_CHARS} 字用于审核和入库]"
-    return text, ""
 
 
 _AUTO_STAGE_TRIGGERS = (
@@ -348,7 +145,7 @@ async def search_web_and_stage_knowledge(topic: str, user_request: str, user_id:
             break
 
     fetch_tasks = [
-        _fetch_source_text(_normalize_source_url(result.get("url") or result.get("href") or ""))
+        fetch_readable_text(_normalize_source_url(result.get("url") or result.get("href") or ""))
         for result in candidates
     ]
     fetched_sources = await asyncio.gather(*fetch_tasks, return_exceptions=True)
