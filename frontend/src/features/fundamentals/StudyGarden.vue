@@ -20,6 +20,9 @@
       <span class="garden-scene__cloud garden-scene__cloud--two" aria-hidden="true"></span>
       <span class="garden-scene__hill garden-scene__hill--back" aria-hidden="true"></span>
       <span class="garden-scene__hill garden-scene__hill--front" aria-hidden="true"></span>
+      <span class="garden-scene__field" aria-hidden="true"></span>
+      <span class="garden-scene__furrow garden-scene__furrow--one" aria-hidden="true"></span>
+      <span class="garden-scene__furrow garden-scene__furrow--two" aria-hidden="true"></span>
       <span class="garden-scene__path" aria-hidden="true"></span>
 
       <button
@@ -71,8 +74,7 @@ defineEmits(['select'])
 
 const completedNodes = computed(() => props.nodes.filter((node) => node.status === 'completed'))
 const visibleNodes = computed(() => props.nodes)
-const gardenColumnCount = computed(() => columnCountFor(visibleNodes.value.length))
-const gardenRowCount = computed(() => Math.ceil(visibleNodes.value.length / gardenColumnCount.value))
+const gardenRowCount = computed(() => Math.max(1, Math.ceil(visibleNodes.value.length / 4)))
 const gardenSceneStyle = computed(() => ({ '--garden-rows': gardenRowCount.value }))
 const activeNode = computed(() => {
   if (props.activeNodeId === null || props.activeNodeId === undefined) return null
@@ -100,37 +102,51 @@ function nodeStageLabel(node) {
 function plantStyle(index, node) {
   const position = plantPosition(index, visibleNodes.value.length)
   const stage = nodeStage(node)
-  const density = Math.min(1, 15 / Math.max(visibleNodes.value.length, 1))
-  const size = Math.max(0.28, position.size * density * [0.28, 0.38, 0.64, 1.02, 1.5][stage])
-  return { '--x': position.x, '--row': position.row, '--size': size }
-}
-
-function plantPosition(index, total) {
-  const columns = columnCountFor(total)
-  const rows = Math.ceil(total / columns)
-  const rowIndex = Math.floor(index / columns)
-  const columnIndex = index % columns
-  const nodesInRow = Math.min(columns, total - rowIndex * columns)
-  // Keep every row centered on the same rhythm so large trees do not collide.
-  const x = 10 + ((columnIndex + 0.5) / nodesInRow * 80)
-  const row = rows <= 1 ? 0 : rows - 1 - rowIndex
+  const depthScale = 0.7 + ((100 - position.y) / 100) * 0.3
+  const size = Math.max(0.2, position.size * depthScale * [0.24, 0.31, 0.46, 0.64, 0.82][stage])
   return {
-    x,
-    row,
-    size: sizeOffsets[index % sizeOffsets.length],
-    label: row > 0 ? 'above' : 'below',
+    '--x': position.x,
+    '--y': position.y,
+    '--size': size,
+    '--tilt': `${position.tilt}deg`,
   }
 }
 
-function columnCountFor(total) {
-  if (total <= 0) return 2
-  return Math.min(4, Math.max(2, Math.ceil(Math.sqrt(total * 1.05))))
+function plantPosition(index, total) {
+  const point = FIELD_POINTS[index]
+  if (point) return point
+
+  // Keep long paths organic without letting later chapters stack on top of one another.
+  const x = 9 + ((index * 37) % 82)
+  const y = 13 + ((index * 23) % 52)
+  return {
+    x,
+    y,
+    size: sizeOffsets[index % sizeOffsets.length] * 0.92,
+    tilt: index % 2 ? 1.2 : -0.9,
+    label: y < 57 ? 'above' : 'below',
+  }
 }
 
 function treeVariant(node, offset) {
   const id = Number(node?.id) || offset
   return ['round', 'pine', 'willow'][Math.abs(id + offset) % 3]
 }
+
+const FIELD_POINTS = [
+  { x: 13, y: 16, size: 0.8, tilt: -1.1, label: 'above' },
+  { x: 35, y: 21, size: 0.9, tilt: 1.3, label: 'above' },
+  { x: 59, y: 15, size: 0.76, tilt: -0.8, label: 'above' },
+  { x: 84, y: 24, size: 0.86, tilt: 1.1, label: 'above' },
+  { x: 22, y: 37, size: 0.7, tilt: 0.8, label: 'above' },
+  { x: 46, y: 33, size: 0.82, tilt: -1.4, label: 'above' },
+  { x: 70, y: 40, size: 0.7, tilt: 1.2, label: 'above' },
+  { x: 92, y: 35, size: 0.76, tilt: -0.7, label: 'above' },
+  { x: 11, y: 57, size: 0.62, tilt: 1.2, label: 'above' },
+  { x: 34, y: 53, size: 0.7, tilt: -1.1, label: 'above' },
+  { x: 61, y: 59, size: 0.62, tilt: 0.9, label: 'above' },
+  { x: 81, y: 52, size: 0.68, tilt: -1.3, label: 'above' },
+]
 </script>
 
 <style scoped>
@@ -144,27 +160,30 @@ function treeVariant(node, offset) {
 .forest-review__count strong { color: var(--accent-deep); font-size: 28px; line-height: 1; }
 .forest-review__count span { margin-left: 3px; }
 
-.garden-scene { position: relative; min-height: max(560px, calc(350px + var(--garden-rows) * 112px)); overflow: hidden; isolation: isolate; border: 1px solid #d8e3d5; border-radius: 7px; background: #edf4e9; }
-.garden-scene::before { position: absolute; z-index: -4; inset: 0; background-image: linear-gradient(#ffffff55 1px, transparent 1px), linear-gradient(90deg, #ffffff55 1px, transparent 1px); background-size: 28px 28px; content: ''; opacity: .36; }
-.garden-scene__sun { position: absolute; z-index: -3; top: 36px; right: 10%; width: 72px; height: 72px; border-radius: 50%; background: #f1d78b; opacity: .64; }
+.garden-scene { position: relative; min-height: max(560px, calc(350px + var(--garden-rows) * 112px)); overflow: hidden; isolation: isolate; border: 1px solid #d8e3d5; border-radius: 7px; background: linear-gradient(180deg, #eef4eb 0%, #e8f0e4 42%, #dbe8d6 100%); }
+.garden-scene::before { position: absolute; z-index: -4; inset: 0; background: radial-gradient(circle at 73% 12%, rgba(255,255,255,.42), transparent 25%), linear-gradient(165deg, transparent 44%, rgba(255,255,255,.24) 44.2%, transparent 44.6%); content: ''; opacity: .8; }
+.garden-scene__sun { position: absolute; z-index: -3; top: 38px; right: 11%; width: 58px; height: 58px; border-radius: 50%; background: #efd992; box-shadow: 0 0 0 12px rgba(239,217,146,.12), 0 0 30px rgba(239,217,146,.16); opacity: .7; }
 .garden-scene__cloud { position: absolute; z-index: -3; width: 86px; height: 19px; border-radius: 50%; background: #fff; opacity: .6; }
 .garden-scene__cloud::before,.garden-scene__cloud::after { position: absolute; bottom: 0; border-radius: 50%; background: inherit; content: ''; }
 .garden-scene__cloud::before { left: 16px; width: 32px; height: 32px; }.garden-scene__cloud::after { right: 13px; width: 42px; height: 26px; }
 .garden-scene__cloud--one { top: 72px; left: 11%; }.garden-scene__cloud--two { top: 128px; right: 28%; transform: scale(.6); }
-.garden-scene__hill { position: absolute; z-index: -2; right: -8%; bottom: 19%; left: -8%; height: 46%; border-radius: 50% 50% 0 0; }
-.garden-scene__hill--back { background: #c8dfc1; transform: rotate(-3deg); }.garden-scene__hill--front { bottom: -20%; height: 56%; background: #a8cb9f; transform: rotate(2deg); }
-.garden-scene__path { position: absolute; z-index: -1; bottom: -18%; left: 44%; width: 22%; height: 63%; border: 2px solid #cbad7d; border-radius: 50% 50% 0 0; background: #ddc391; transform: rotate(9deg); opacity: .55; }
+.garden-scene__hill { position: absolute; z-index: -3; right: -8%; bottom: 28%; left: -8%; height: 29%; border-radius: 50% 50% 0 0; }
+.garden-scene__hill--back { background: #c5dbbd; transform: rotate(-3deg); }.garden-scene__hill--front { bottom: 17%; height: 22%; background: #b3d0a9; transform: rotate(2deg); }
+.garden-scene__field { position: absolute; z-index: -2; right: -12%; bottom: -18%; left: -12%; height: 68%; border-radius: 54% 46% 0 0 / 16% 13% 0 0; background-color: #9fbe91; background-image: radial-gradient(ellipse at 18% 38%, rgba(232,242,218,.22), transparent 36%), repeating-linear-gradient(166deg, transparent 0 34px, rgba(81,123,72,.075) 35px 37px, transparent 38px 72px); box-shadow: inset 0 18px 0 rgba(224,236,211,.25); transform: rotate(-1.2deg); }
+.garden-scene__furrow { position: absolute; z-index: -1; width: 74%; height: 24%; border-top: 1px solid rgba(75,112,68,.22); border-radius: 50%; opacity: .6; pointer-events: none; }
+.garden-scene__furrow--one { right: -5%; bottom: 15%; transform: rotate(-4deg); }.garden-scene__furrow--two { bottom: 2%; left: -7%; transform: rotate(3deg); }
+.garden-scene__path { position: absolute; z-index: -1; bottom: -23%; left: 48%; width: 15%; height: 65%; border: 1px solid rgba(176,139,92,.55); border-radius: 50% 47% 0 0; background: linear-gradient(105deg, rgba(188,148,98,.62), rgba(218,191,145,.78) 48%, rgba(186,143,94,.52)); box-shadow: inset 5px 0 0 rgba(250,235,192,.18); transform: rotate(8deg); opacity: .74; }
 
-.garden-plant { position: absolute; z-index: 1; bottom: calc(7% + var(--row) * 15%); left: calc(var(--x) * 1%); display: block; width: clamp(32px, calc(28px + var(--size) * 78px), 154px); aspect-ratio: 180 / 235; padding: 0; border: 0; background: transparent; color: var(--ink); cursor: pointer; transform: translateX(-50%); transition: transform 180ms ease, filter 180ms ease; }
-.garden-plant :deep(.forest-tree) { height: 100%; }.garden-plant:hover:not(:disabled) { z-index: 3; filter: saturate(1.12); transform: translateX(-50%) translateY(-7px) scale(1.04); }.garden-plant:focus-visible { z-index: 4; outline: 2px solid var(--accent-deep); outline-offset: 4px; }
+.garden-plant { position: absolute; z-index: 1; bottom: calc(5% + var(--y) * .78%); left: calc(var(--x) * 1%); display: block; width: clamp(58px, calc(42px + var(--size) * 92px), 124px); aspect-ratio: 180 / 220; padding: 0; border: 0; background: transparent; color: var(--ink); cursor: pointer; touch-action: manipulation; transform: translateX(-50%) rotate(var(--tilt)); transform-origin: 50% 100%; transition: transform 180ms ease, filter 180ms ease; }
+.garden-plant :deep(.forest-tree) { height: 100%; }.garden-plant:hover:not(:disabled) { z-index: 3; filter: saturate(1.12); transform: translateX(-50%) translateY(-7px) rotate(var(--tilt)) scale(1.04); }.garden-plant:focus-visible { z-index: 4; outline: 2px solid var(--accent-deep); outline-offset: 4px; }
 .garden-plant.is-active { z-index: 3; filter: saturate(1.12); }.garden-plant.is-active::before { position: absolute; z-index: -1; right: 6%; bottom: 4%; left: 6%; height: 22%; border: 1px dashed #507950; border-radius: 50%; background: #d4e5c9; content: ''; animation: garden-ground-pulse 1.8s ease-out infinite; }
-.garden-plant:disabled { cursor: default; opacity: .66; }.garden-plant__label { position: absolute; z-index: 4; right: 50%; bottom: -33px; display: grid; width: max-content; max-width: 142px; gap: 1px; overflow: hidden; color: #355438; font-size: 10px; font-weight: 800; line-height: 1.3; text-align: center; text-overflow: ellipsis; transform: translateX(50%); white-space: nowrap; }.garden-plant__label i { color: #6d8d65; font-size: 8px; font-style: normal; font-weight: 700; }.garden-plant:hover:not(:disabled) .garden-plant__label,.garden-plant.is-active .garden-plant__label { color: #1f5638; }.garden-plant.has-label-above .garden-plant__label { bottom: calc(100% + 7px); }
-.garden-plant__lock { position: absolute; top: 43%; right: 50%; color: #7d857d; font-size: 13px; letter-spacing: 2px; transform: translateX(50%); }
+.garden-plant:disabled { cursor: default; opacity: .66; }.garden-plant__label { position: absolute; z-index: 4; right: 50%; bottom: -33px; display: grid; width: max-content; max-width: 142px; gap: 1px; overflow: hidden; color: #355438; font-size: 10px; font-weight: 800; line-height: 1.3; pointer-events: none; text-align: center; text-overflow: ellipsis; transform: translateX(50%); white-space: nowrap; }.garden-plant__label i { color: #6d8d65; font-size: 8px; font-style: normal; font-weight: 700; }.garden-plant:hover:not(:disabled) .garden-plant__label,.garden-plant.is-active .garden-plant__label { color: #1f5638; }.garden-plant.has-label-above .garden-plant__label { bottom: calc(100% + 7px); }
+.garden-plant__lock { position: absolute; top: 43%; right: 50%; color: #7d857d; font-size: 13px; letter-spacing: 2px; pointer-events: none; transform: translateX(50%); }
 .garden-scene__hint { position: absolute; right: 17px; bottom: 13px; margin: 0; color: #537451; font-size: 10px; }.garden-scene__more { position: absolute; top: 14px; right: 15px; margin: 0; color: #5f7e5f; font-size: 11px; font-weight: 800; }
 
 .garden-empty { display: grid; min-height: 300px; grid-template-columns: 180px minmax(0, 1fr); align-items: center; gap: 20px; border: 1px solid #d8e3d5; border-radius: 7px; background: #edf4e9; padding: 15px 28px; }.garden-empty :deep(.forest-tree) { height: 210px; }.garden-empty p { max-width: 270px; color: var(--muted); font-size: 12px; line-height: 1.6; }
-@media (max-width: 720px) { .forest-review { padding: 17px; }.forest-review__header { gap: 11px; flex-wrap: wrap; }.forest-review__status { order: 3; flex-basis: 100%; margin-left: 0; text-align: left; }.garden-scene { min-height: max(500px, calc(320px + var(--garden-rows) * 105px)); }.garden-plant { width: clamp(42px, calc(30px + var(--size) * 58px), 108px); }.garden-scene__hint { display: none; }.garden-empty { grid-template-columns: 1fr; gap: 0; padding: 10px 18px 18px; text-align: center; }.garden-empty :deep(.forest-tree) { height: 175px; }.garden-empty p { margin: 0 auto; } }
-@media (max-width: 430px) { .garden-scene { min-height: 370px; }.garden-plant { width: clamp(44px, calc(30px + var(--size) * 46px), 82px); }.garden-scene__sun { top: 26px; width: 52px; height: 52px; }.garden-scene__cloud { display: none; } }
+@media (max-width: 720px) { .forest-review { padding: 17px; }.forest-review__header { gap: 11px; flex-wrap: wrap; }.forest-review__status { order: 3; flex-basis: 100%; margin-left: 0; text-align: left; }.garden-scene { min-height: max(500px, calc(320px + var(--garden-rows) * 105px)); }.garden-plant { width: clamp(52px, calc(30px + var(--size) * 66px), 100px); }.garden-scene__hint { display: none; }.garden-empty { grid-template-columns: 1fr; gap: 0; padding: 10px 18px 18px; text-align: center; }.garden-empty :deep(.forest-tree) { height: 175px; }.garden-empty p { margin: 0 auto; } }
+@media (max-width: 430px) { .garden-scene { min-height: max(370px, calc(280px + var(--garden-rows) * 88px)); }.garden-plant { width: clamp(46px, calc(28px + var(--size) * 56px), 82px); }.garden-scene__sun { top: 26px; width: 46px; height: 46px; }.garden-scene__cloud { display: none; } }
 @keyframes garden-ground-pulse { 0%,100% { opacity: .45; transform: scale(.88); } 50% { opacity: .9; transform: scale(1.08); } }
 @media (prefers-reduced-motion: reduce) { .garden-plant.is-active::before { animation: none; } }
 </style>

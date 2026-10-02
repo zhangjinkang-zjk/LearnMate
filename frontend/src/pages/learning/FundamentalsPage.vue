@@ -111,7 +111,8 @@
                 @click="openFoundationResource(group.node, resource)"
               >
                 <span class="resource-card__cover">
-                  <img :src="resourceCoverUrl(resource)" :alt="`${resource.title || resource.topic || '学习资源'}封面`" @error="handleCoverError($event, resource)" />
+                  <img v-if="resourceCoverUrl(resource)" :src="resourceCoverUrl(resource)" :alt="`${resource.title || resource.topic || '学习资源'}封面`" referrerpolicy="no-referrer" @error="handleCoverError($event, resource)" />
+                  <span v-else class="resource-card__cover-empty">暂无真实封面</span>
                   <span class="resource-card__cover-overlay">
                     <span class="resource-card__type">{{ resourceTypeLabel(resource.resource_type) }}</span>
                     <PlayCircle v-if="resource.resource_type === 'external_video' || resource.resource_type === 'video'" :size="22" />
@@ -503,7 +504,7 @@ import { readPortrait } from '@/shared/api/portraitApi'
 import { applyWorkflowEvent, applyWorkflowProgress, finishWorkflow, resetWorkflow } from '@/entities/agent/agentWorkflowState'
 import { clearCurrentPage, setCurrentPage } from '@/entities/learning/currentPageContext'
 import { resourceApi } from '@/shared/api/resourceApi'
-import { generatedResourceCover, resourceCoverUrl } from '@/utils/resourceCover'
+import { generatedResourceCover, isVideoResource, resourceCoverUrl } from '@/utils/resourceCover'
 
 const route = useRoute()
 const router = useRouter()
@@ -747,6 +748,7 @@ function parseExternalVideo(resource) {
     ...resource,
     ...payload,
     resource_id: resource?.resource_id || resource?.id,
+    resource_type: resource?.resource_type || payload.resource_type || 'external_video',
     title: payload.title || resource?.topic || '拓展资源',
     source_label: payload.source_label || payload.source || '拓展资源',
     page_url: payload.page_url || resource?.file_url || resource?.url || '',
@@ -931,6 +933,11 @@ function clearExternalVideoSearch() {
 
 function handleCoverError(event, resource) {
   const image = event.currentTarget
+  if (isVideoResource(resource)) {
+    image.hidden = true
+    image.parentElement?.classList.add('is-cover-missing')
+    return
+  }
   const fallback = generatedResourceCover(resource)
   if (!image || image.src === fallback) return
   image.onerror = null
@@ -2014,6 +2021,7 @@ onBeforeUnmount(() => {
 .resource-card:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
 .resource-card__cover { position: relative; display: block; min-width: 0; overflow: hidden; background: #183d34; }
 .resource-card__cover img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .35s ease; }
+.resource-card__cover-empty { display: grid; width: 100%; height: 100%; place-items: center; color: rgba(255,255,255,.8); font-size: 11px; letter-spacing: .04em; }
 .resource-card:hover .resource-card__cover img { transform: scale(1.04); }
 .resource-card__cover-overlay { position: absolute; inset: 0; display: flex; align-items: flex-end; justify-content: space-between; padding: 8px 10px; background: linear-gradient(180deg, transparent 42%, rgba(15, 31, 25, .48)); color: #fff; }
 .resource-card__type { overflow: hidden; max-width: 78%; font-size: 9px; font-weight: 800; letter-spacing: .08em; text-overflow: ellipsis; white-space: nowrap; }

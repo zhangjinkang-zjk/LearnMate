@@ -671,7 +671,7 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
    是 40px 的路线，56 让它上下各留 8px，仍然是"一行一条路径"的疏密。 */
 /* `--data-table-pad: 0`：表没有外框了（见 `DataTable.vue`），内容要和上面的区块标题
    对齐到同一条左边线，再留 28px 内边距就会整张表缩进去一截。 */
-.overview-page { --data-table-row-height: 56px; --data-table-pad: 0px; display: grid; align-content: start; gap: clamp(10px, 1.4vh, 16px); width: 100%; max-width: 1760px; height: 100%; margin: 0 auto; overflow: hidden; }
+.overview-page { --ink: #46504a; --data-table-row-height: 56px; --data-table-pad: 0px; display: grid; align-content: start; gap: clamp(10px, 1.4vh, 16px); width: 100%; max-width: 1760px; height: 100%; margin: 0 auto; overflow: hidden; }
 
 /* 主卡 + 走势图。**这一行是整页唯一一处不等宽的排布**，也是它存在的理由：两块通栏大矩形
    摞起来会读成"两个盒子"，拆成一宽一窄就把主次说清楚了 —— 左边是"现在做什么"（主），
@@ -685,7 +685,7 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
 .context { display: flex; align-items: baseline; gap: 8px; margin: 0; color: var(--ink); font-size: 14px; white-space: nowrap; }
 .context__kicker { color: var(--muted); font-size: 12px; }
 .context__sep { color: var(--line); }
-.context b { overflow: hidden; font-weight: 700; text-overflow: ellipsis; }
+.context b { overflow: hidden; font-weight: 500; text-overflow: ellipsis; }
 /* 这一行右端原来挂着一颗「点击查看学习画像」。删掉有两个理由：一是它的去处现在由页脚
    那块「个人画像」承担，同一页上不该有两个入口通向同一页；二是它挂不住 —— 这行是
    `white-space: nowrap` 的一句长话（方向 + 目标），目标写得长时那颗链接会被挤到
@@ -711,10 +711,10 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
    面上喊，读起来发酸还分不出主次。 */
 .focus { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 28px; border-radius: 10px; background: #1e3c34; padding: clamp(14px, 1.5vh, 20px) clamp(24px, 2.2vw, 40px); }
 .focus__head { display: grid; gap: 4px; min-width: 0; }
-.focus__lead { margin: 0; color: #a9bdb0; font-size: 12px; font-weight: 700; letter-spacing: .06em; }
+.focus__lead { margin: 0; color: #a9bdb0; font-size: 12px; font-weight: 600; letter-spacing: .06em; }
 /* 40 是这一页字号阶梯里的 display 那一档。原来是 clamp(38px, 2.7vw, 60px) —— 在 2.5K 屏上
    顶上 60px，那已经是官网首屏的号，不是工作台的。 */
-.focus__title { margin: 0; color: #f2f7ec; font-size: 32px; font-weight: 700; letter-spacing: -.01em; line-height: 1.12; }
+.focus__title { margin: 0; color: #f2f7ec; font-size: 32px; font-weight: 600; letter-spacing: -.01em; line-height: 1.12; }
 .focus__where { margin: 0; color: #a9bdb0; font-size: 14px; }
 /* 「为什么是它」比 `where` 低一档：它是对上面那句话的补充说明，不是又一条标题。
    同一块面上靠字号拉开层次，不再多引进一种颜色。 */
@@ -723,33 +723,33 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
 /* 这一章讲什么 —— 卡片上唯一的"内容"，其余全是状态。 */
 .focus__topics { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 0; grid-column: 1 / -1; }
 .focus__topics-lead { color: #a9bdb0; font-size: 12px; }
-.focus__topics-list { color: #f2f7ec; font-size: 14px; font-weight: 600; }
+.focus__topics-list { color: #f2f7ec; font-size: 14px; font-weight: 500; }
 
 /* 最后一行：测验（左）· 复习入口（右）。一条发丝线把它和上面分开 ——
    上面答"这一章是什么"，这一行答"你做到哪了"。 */
 .focus__do { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 24px; grid-column: 1 / -1; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, .16); }
 .focus__quiz { display: flex; align-items: baseline; gap: 10px; margin: 0; }
 .focus__quiz-label { color: #a9bdb0; font-size: 14px; }
-.focus__quiz-value { color: #f2f7ec; font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.focus__cta { grid-column: 2; grid-row: 1; min-height: 42px; padding: 0 28px; font-size: 14px; text-decoration: none; white-space: nowrap; }
+.focus__quiz-value { color: #f2f7ec; font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.focus__cta { grid-column: 2; grid-row: 1; min-height: 42px; padding: 0 28px; color: #334139; font-size: 14px; font-weight: 600; text-decoration: none; white-space: nowrap; }
 /* 复习入口推到右端，和左端的测验值分列两头。它是次要入口，用下划线表明可点、不抢柠檬绿。 */
-.focus__aside { margin-left: auto; color: #a9bdb0; font-size: 14px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.focus__aside { margin-left: auto; color: #a9bdb0; font-size: 14px; font-weight: 500; text-decoration: underline; text-underline-offset: 3px; }
 .focus__aside:hover { color: #f2f7ec; }
 
 /* ── 学习方向表 ── */
 .paths { display: grid; gap: 10px; }
 .paths__head { display: flex; align-items: baseline; gap: 14px; }
-.paths__title { margin: 0; color: var(--ink); font-size: 20px; font-weight: 700; }
+.paths__title { margin: 0; color: var(--ink); font-size: 20px; font-weight: 600; }
 /* 总账一行：跨路径的节点数、已学完数、总体正确率。用间距分组，不用中圆点 ——
    中圆点把三个不相干的数连成一句，读起来像元信息栏。 */
 .paths__note { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 20px; margin: 0; color: var(--muted); font-size: 14px; }
-.paths__note-lead { color: var(--ink); font-weight: 600; }
+.paths__note-lead { color: var(--ink); font-weight: 500; }
 .paths :deep(.data-table__head) { font-size: 12px; }
 .paths :deep(.data-table__head span) { padding: 8px 0; }
 
 /* 列宽走 --data-table-columns（在模板里由 pathColumnTemplate 绑定），表头和表体读同一个值。 */
 .row__no { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
-.row__name { overflow: hidden; color: var(--ink); font-size: 16px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.row__name { overflow: hidden; color: var(--ink); font-size: 16px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 /* 这里原来有一条 `.row.is-current .row__name { color: var(--accent-deep) }`，从来没生效过：
    `DataTable` 给当前行加的是 `data-table__row--current`，不是 `row is-current`。
    删掉而不是改对 —— 当前行已经有左侧 4px 色条 + 整行浅绿底纹（组件自带），
@@ -789,12 +789,12 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
    和"可开始"该有的"空心"读起来不是一回事。 */
 .row__track i.is-available { background: #f4f8ef; box-shadow: inset 0 0 0 1.5px var(--accent); }
 
-.row__pct { color: var(--ink); font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.row__pct { color: var(--ink); font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .row__now { overflow: hidden; color: var(--muted); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 /* 「上次学习」写成相对日（今天 / 3 天前）。它答的是"这条路径我多久没碰了"，
    绝对日期还得让人自己减一遍。 */
 .row__when { color: var(--muted); font-size: 14px; white-space: nowrap; }
-.row__count { color: var(--ink); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.row__count { color: var(--ink); font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
 .paths__empty { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
 
 /* ── 页脚：进阶学习 ＋ 资料库 ＋ 本周，共用一条带 ── */
@@ -812,8 +812,8 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
 /* 第二块左侧也要留：那道竖线画在它的 `padding-left` 左边，不留就贴着上一块的字。 */
 .entry + .entry { padding-left: 28px; border-left: 1px solid var(--line); }
 .entry__head { display: flex; align-items: center; gap: 10px; min-height: 30px; }
-.entry__title { margin: 0; color: var(--ink); font-size: 16px; font-weight: 700; letter-spacing: 0; }
-.entry__tag { padding: 3px 11px; border: 1px solid #cfdcbb; border-radius: 99px; color: var(--accent-deep); font-size: 12px; font-weight: 700; line-height: 1.6; }
+.entry__title { margin: 0; color: var(--ink); font-size: 16px; font-weight: 600; letter-spacing: 0; }
+.entry__tag { padding: 3px 11px; border: 1px solid #cfdcbb; border-radius: 99px; color: var(--accent-deep); font-size: 12px; font-weight: 500; line-height: 1.6; }
 /* 标题里的链接**长得不像链接**（不换色、不加下划线）：它的可点区域是整块，
    把四个字染成绿的反而在说"只有这四个字能点"。可点的信号交给整块的 hover 底色。 */
 .entry__link { color: inherit; text-decoration: none; }
@@ -829,7 +829,7 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
 /* 那句"什么时候会有任务"是这一块唯一一条**规则**（不是形容词），所以它加粗 ——
    其余两句是说明。整段都用灰字的话，"学完 10 个节点就有了"这条最关键的信息会沉下去。 */
 .entry__body { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
-.entry__body b { color: var(--ink); font-weight: 600; }
+.entry__body b { color: var(--ink); font-weight: 500; }
 
 /* 第三块：**本周**。竖线和内边距代替网格间距 —— 线画在 `padding-left` 的左边，
    没有这段空隙线会贴着左边的字。
@@ -863,7 +863,7 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
 /* `min-height: 36px` + 居中**不是为了这排字好看，是为了和左边两块对齐**：
    `.entry__head` 是 36px 高的居中对齐盒，里面的标题因此往下偏了 5.5px；这一块现在没有
    那个盒子了（标题独占一行），把同样的 36px 直接给标题，三块的标题才落在同一条水平线上。 */
-.week__title { display: flex; align-items: center; min-height: 30px; margin: 0; color: var(--ink); font-size: 16px; font-weight: 700; letter-spacing: 0; white-space: nowrap; }
+.week__title { display: flex; align-items: center; min-height: 30px; margin: 0; color: var(--ink); font-size: 16px; font-weight: 600; letter-spacing: 0; white-space: nowrap; }
 
 /* 七格。**一格一天，包括没来的那些** —— 灰色的格子就是这一项要说的信息。
    活跃的整颗填实，没来的只剩一个浅环；今天那一格的星期字加重，不用再加一圈框。 */
@@ -872,7 +872,7 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
 .week__dot { width: 12px; height: 12px; border: 1px solid #cfd9cb; border-radius: 50%; background: var(--paper); }
 .week__day.is-active .week__dot { border-color: var(--accent-deep); background: var(--accent-deep); }
 .week__label { color: var(--muted); font-size: 12px; line-height: 1; }
-.week__day.is-today .week__label { color: var(--ink); font-weight: 700; }
+.week__day.is-today .week__label { color: var(--ink); font-weight: 600; }
 
 /* 本周一次都没来时的那句"上次是 X 天前"。别的时候不出现 —— 来了几天，上面那排格子看得见。 */
 .week__quiet { margin: 0; color: var(--muted); font-size: 14px; }
@@ -899,7 +899,7 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
    grid 才能把这唯一一行在 30px 里居中，再用 `align-items: baseline` 让 14px 的总量
    贴住 18px 标题的基线，而不是两者的中心对齐（那样小字会浮在中间）。 */
 .trend__head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; align-content: center; gap: 16px; min-height: 30px; }
-.trend__title { margin: 0; color: var(--ink); font-size: 16px; font-weight: 700; letter-spacing: 0; }
+.trend__title { margin: 0; color: var(--ink); font-size: 16px; font-weight: 600; letter-spacing: 0; }
 /* 标题可以折行（窄屏那一栏只有 300px 出头），总量不行 —— 它是个短数字，折了就更短，
    看起来像被截断。 */
 .trend__total { margin: 0; color: var(--muted); font-size: 14px; white-space: nowrap; }
@@ -908,7 +908,8 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
 .trend__quiet { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.7; }
 
 .notice { color: var(--muted); font-size: 14px; line-height: 1.7; }
-.notice__title { margin: 0 0 6px; color: var(--ink); font-size: 18px; font-weight: 800; }
+.notice__title { margin: 0 0 6px; color: var(--ink); font-size: 18px; font-weight: 600; }
+.trend :deep(.bars__value.is-current), .trend :deep(.bars__label.is-current) { font-weight: 600; }
 .notice .button { margin-top: 12px; }
 
 /* 装得下就没有滚动条，装不下就老老实实滚 —— 不能 overflow: hidden 把内容裁掉。 */

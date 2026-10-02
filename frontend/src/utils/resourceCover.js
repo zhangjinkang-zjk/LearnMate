@@ -1,3 +1,5 @@
+import { formatResourcePreview } from './resourcePreview'
+
 const API_ORIGIN = String(import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:2221').replace(/\/$/, '')
 
 const TYPE_LABELS = {
@@ -17,6 +19,7 @@ const TYPE_LABELS = {
 function asHttpUrl(value) {
   const text = String(value || '').trim()
   if (!text) return ''
+  if (text.startsWith('//')) return `https:${text}`
   if (/^https?:\/\//i.test(text)) return text
   if (/^\/(?:assets|src|@fs)\//.test(text)) return text
   if (text.startsWith('/')) return `${API_ORIGIN}${text}`
@@ -34,7 +37,7 @@ function escapeXml(value) {
 }
 
 function contentLines(resource, limit = 3) {
-  const raw = String(resource.content || resource.preview || resource.description || '')
+  const raw = formatResourcePreview(resource)
     .replace(/<!--[^>]*-->/g, '')
     .replace(/[#*`>|_]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -45,10 +48,12 @@ function contentLines(resource, limit = 3) {
 
 function parseMindmapTopics(resource) {
   const fallback = contentLines(resource, 4)
-  const text = String(resource.content || resource.preview || '').trim()
-  if (!text) return fallback
+  const value = resource.content ?? resource.preview
+  if (!value) return fallback
   try {
-    const parsed = JSON.parse(text.replace(/^```(?:json|markdown|md)?\s*/i, '').replace(/```$/i, '').trim())
+    const parsed = typeof value === 'string'
+      ? JSON.parse(value.replace(/^```(?:json|markdown|md)?\s*/i, '').replace(/```$/i, '').trim())
+      : value
     const topics = []
     const collect = (node) => {
       if (!node || topics.length >= 5) return
@@ -124,5 +129,15 @@ export function resourceCoverUrl(resource = {}) {
   const youtubeId = extractYouTubeId(pageUrl)
   if (youtubeId) return `https://i.ytimg.com/vi/${youtubeId}/hqdefault.jpg`
 
+  // 视频封面必须来自后端或视频平台。没有真实封面时留空，不能用生成式占位图冒充真实视频画面。
+  if (isVideoResource(resource)) return ''
+
   return generatedResourceCover(resource)
+}
+
+export function isVideoResource(resource = {}) {
+  const type = String(resource.resource_type || resource.file_type || resource.type || '').toLowerCase()
+  if (type === 'video' || type === 'external_video') return true
+  const pageUrl = String(resource.page_url || resource.file_url || resource.url || '').toLowerCase()
+  return /(?:bilibili\.com\/video\/|player\.bilibili\.com|(?:youtube\.com|youtu\.be)\/)/i.test(pageUrl)
 }

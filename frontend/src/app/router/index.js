@@ -12,6 +12,7 @@ import FoundationTestPage from '@/pages/learning/FoundationTestPage.vue'
 import FoundationQuizPage from '@/pages/learning/FoundationQuizPage.vue'
 import AdvancedLearningPage from '@/pages/learning/AdvancedLearningPage.vue'
 import ResourceLibraryPage from '@/pages/resources/ResourceLibraryPage.vue'
+import MyResourcesPage from '@/pages/resources/MyResourcesPage.vue'
 import KnowledgeImportPage from '@/pages/resources/KnowledgeImportPage.vue'
 import SettingsPage from '@/pages/settings/SettingsPage.vue'
 import ProfilePage from '@/pages/profile/ProfilePage.vue'
@@ -50,6 +51,7 @@ const router = createRouter({
     { path: '/learning/navigation', name: 'learningNavigation', redirect: '/learning/overview' },
     { path: '/learning/workspace', name: 'learningWorkspace', redirect: (to) => ({ path: '/learning/advanced', query: to.query }) },
     { path: '/resources', name: 'resourceLibrary', component: ResourceLibraryPage, meta: { requiresAuth: true } },
+    { path: '/resources/mine', name: 'myResources', component: MyResourcesPage, meta: { requiresAuth: true } },
     { path: '/resources/knowledge', name: 'knowledgeImport', component: KnowledgeImportPage, meta: { requiresAuth: true } },
     { path: '/settings', name: 'settings', component: SettingsPage, meta: { requiresAuth: true } },
     { path: '/profile', name: 'profile', component: ProfilePage, meta: { requiresAuth: true } },

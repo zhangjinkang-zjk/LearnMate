@@ -30,6 +30,7 @@
       <span>掌握度</span>
       <strong>{{ masteryLabel }}</strong>
       <i><b :style="{ width: `${masteryValue}%` }"></b></i>
+      <small>{{ masteryEvidence }}</small>
     </div>
     <div class="tree-review__data tree-review__data--weakness">
       <span>错误知识点</span>
@@ -45,14 +46,15 @@
     <div class="tree-review__actions">
       <button v-if="canStartTest" type="button" @click="$emit('quiz')"><SquareCheck :size="17" /><span>题目测试</span></button>
       <button v-if="canStartTest" type="button" @click="$emit('feynman')"><MessageCircle :size="17" /><span>费曼复讲</span></button>
-      <button v-else type="button" @click="$emit('learn')"><BookOpenText :size="17" /><span>先完成本章学习</span></button>
+      <button type="button" @click="$emit('learn')"><BookOpenText :size="17" /><span>继续学习</span></button>
+      <button type="button" @click="$emit('advanced')"><ArrowUpRight :size="17" /><span>进阶训练</span></button>
     </div>
   </section>
 </template>
 
 <script setup>
 import { computed } from 'vue'
-import { ArrowLeft, BookOpenText, MessageCircle, SquareCheck } from 'lucide-vue-next'
+import { ArrowLeft, ArrowUpRight, BookOpenText, MessageCircle, SquareCheck } from 'lucide-vue-next'
 import ForestTree from '@/features/fundamentals/ForestTree.vue'
 
 const props = defineProps({
@@ -61,13 +63,14 @@ const props = defineProps({
   answerSummary: { type: String, default: '' },
   masteryLabel: { type: String, default: '--' },
   masteryValue: { type: Number, default: 0 },
+  masteryEvidence: { type: String, default: '' },
   weakPoints: { type: Array, default: () => [] },
   nextSuggestionTitle: { type: String, default: '' },
   nextSuggestionReason: { type: String, default: '' },
   canStartTest: { type: Boolean, default: false },
 })
 
-defineEmits(['back', 'quiz', 'feynman', 'learn'])
+defineEmits(['back', 'quiz', 'feynman', 'learn', 'advanced'])
 
 const stage = computed(() => {
   if (props.node.status === 'completed') return 4
@@ -93,7 +96,7 @@ const weakPointLabel = computed(() => props.weakPoints.length ? props.weakPoints
 .tree-review__heading { position: absolute; top: 65px; left: 7%; max-width: min(360px, 36%); }.tree-review__heading .eyebrow { margin: 0 0 7px; color: #638062; font-size: 10px; }.tree-review__heading h2 { margin: 0; color: #244238; font-size: 22px; line-height: 1.32; }.tree-review__heading p:last-child { margin: 7px 0 0; color: #607b6b; font-size: 11px; line-height: 1.65; }
 .tree-review__tree { position: absolute; bottom: 3%; left: 50%; width: 255px; height: 330px; transform: translateX(-50%); }.tree-review__tree :deep(.forest-tree) { height: 100%; }
 .tree-review__data { position: absolute; display: grid; gap: 4px; max-width: 175px; padding-left: 11px; border-left: 2px solid #80a866; }.tree-review__data > span { color: #547250; font-size: 10px; font-weight: 800; }.tree-review__data strong { overflow: hidden; color: #244238; font-size: 25px; line-height: 1.1; text-overflow: ellipsis; white-space: nowrap; }.tree-review__data small { overflow: hidden; color: #607b6b; font-size: 10px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }.tree-review__data--score { top: 275px; left: 8%; }.tree-review__data--mastery { top: 86px; right: 7%; }.tree-review__data--weakness { right: 8%; bottom: 155px; }.tree-review__data--next { right: 8%; bottom: 72px; max-width: 220px; }.tree-review__data--next strong { font-size: 13px; }.tree-review__data--mastery i { display: block; width: 145px; height: 5px; overflow: hidden; border-radius: 999px; background: #dce8d7; }.tree-review__data--mastery b { display: block; height: 100%; border-radius: inherit; background: #8eaf57; transition: width 400ms ease; }
-.tree-review__actions { position: absolute; z-index: 2; bottom: 27px; left: 50%; display: flex; gap: 13px; transform: translateX(-50%); }.tree-review__actions button { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 8px; border: 0; border-bottom: 2px solid #6c995d; background: transparent; color: #31543a; cursor: pointer; font-size: 12px; font-weight: 800; white-space: nowrap; }.tree-review__actions button:hover { border-color: #31543a; color: #173c2c; transform: translateY(-2px); }
+.tree-review__actions { position: absolute; z-index: 2; bottom: 27px; left: 50%; display: flex; flex-wrap: wrap; justify-content: center; gap: 13px; max-width: calc(100% - 32px); transform: translateX(-50%); }.tree-review__actions button { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 8px; border: 0; border-bottom: 2px solid #6c995d; background: transparent; color: #31543a; cursor: pointer; font-size: 12px; font-weight: 800; white-space: nowrap; }.tree-review__actions button:hover { border-color: #31543a; color: #173c2c; transform: translateY(-2px); }
 @media (max-width: 760px) { .tree-review { min-height: 740px; }.tree-review__heading { max-width: 62%; }.tree-review__tree { bottom: 155px; width: 220px; height: 290px; }.tree-review__data--score { top: 245px; left: 7%; }.tree-review__data--mastery { top: 98px; right: 6%; }.tree-review__data--weakness { right: 7%; bottom: 96px; }.tree-review__data--next { bottom: 23px; left: 7%; right: auto; max-width: 45%; }.tree-review__actions { bottom: 148px; }.tree-review__sun { width: 62px; height: 62px; } }
 @media (max-width: 500px) { .tree-review { min-height: 790px; }.tree-review__heading { top: 58px; left: 18px; max-width: calc(100% - 36px); }.tree-review__heading h2 { font-size: 19px; }.tree-review__tree { bottom: 216px; width: 205px; height: 270px; }.tree-review__data { max-width: 43%; }.tree-review__data--score { top: 225px; left: 18px; }.tree-review__data--mastery { top: 225px; right: 18px; }.tree-review__data--weakness { right: 18px; bottom: 106px; }.tree-review__data--next { bottom: 30px; left: 18px; max-width: 48%; }.tree-review__actions { bottom: 180px; gap: 8px; }.tree-review__actions button { font-size: 11px; }.tree-review__cloud { display: none; } }
 </style>

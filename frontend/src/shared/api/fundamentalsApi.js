@@ -102,6 +102,10 @@ export const fundamentalsApi = {
     return unwrap(await httpClient.get(`/exam/session/${sessionId}`))
   },
 
+  async getMastery() {
+    return unwrap(await httpClient.get('/exam/mastery'))
+  },
+
   async completeNode(nodeId, sessionId, answers) {
     return unwrap(await httpClient.post(`/learning_path/nodes/${nodeId}/complete`, {
       session_id: sessionId,

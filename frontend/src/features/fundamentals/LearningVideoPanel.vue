@@ -69,8 +69,9 @@
           type="button"
           @click="$emit('select', video)"
         >
-          <span class="learning-video-card__cover">
-            <img :src="resourceCoverUrl(video)" :alt="`${video.title || '拓展资源'}封面`" @error="handleCoverError($event, video)" />
+          <span class="learning-video-card__cover" :class="{ 'is-cover-missing': !resourceCoverUrl(video) }">
+            <img v-if="resourceCoverUrl(video)" :src="resourceCoverUrl(video)" :alt="`${video.title || '拓展资源'}封面`" referrerpolicy="no-referrer" @error="handleCoverError($event, video)" />
+            <span v-else class="learning-video-card__cover-empty">暂无真实封面</span>
             <span class="learning-video-card__play"><PlayCircle :size="22" /></span>
             <span v-if="video.duration_text" class="learning-video-card__duration">{{ video.duration_text }}</span>
           </span>
@@ -88,7 +89,7 @@
 <script setup>
 import { CircleAlert, ExternalLink, LoaderCircle, PlayCircle, RotateCw } from 'lucide-vue-next'
 import VideoLessonFrame from '@/features/fundamentals/VideoLessonFrame.vue'
-import { generatedResourceCover, resourceCoverUrl } from '@/utils/resourceCover'
+import { generatedResourceCover, isVideoResource, resourceCoverUrl } from '@/utils/resourceCover'
 
 const props = defineProps({
   videos: { type: Array, default: () => [] },
@@ -110,6 +111,11 @@ function videoMeta(video) {
 
 function handleCoverError(event, video) {
   const image = event.currentTarget
+  if (isVideoResource(video)) {
+    image.hidden = true
+    image.parentElement?.classList.add('is-cover-missing')
+    return
+  }
   const fallback = generatedResourceCover(video)
   if (!image || image.src === fallback) return
   image.onerror = null
@@ -135,6 +141,7 @@ function handleCoverError(event, video) {
 .learning-video-card:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
 .learning-video-card__cover { position: relative; display: block; aspect-ratio: 16 / 9; overflow: hidden; background: #183d34; }
 .learning-video-card__cover img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .25s ease; }
+.learning-video-card__cover-empty { display: grid; width: 100%; height: 100%; place-items: center; color: rgba(255,255,255,.8); font-size: 11px; letter-spacing: .04em; }
 .learning-video-card:hover img, .learning-video-card.is-selected img { transform: scale(1.04); }
 .learning-video-card__play { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(15, 31, 25, .28); color: #fff; }
 .learning-video-card__duration { position: absolute; right: 7px; bottom: 7px; padding: 3px 5px; border-radius: 3px; background: rgba(11, 25, 19, .82); color: #fff; font-size: 10px; }

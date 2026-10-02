@@ -65,8 +65,8 @@
       </section>
 
       <section class="portrait-traits surface" aria-labelledby="traits-title">
-        <div class="section-heading"><div><p class="eyebrow">学习特征</p><h2 id="traits-title">学习特征</h2></div><span class="radar-updated">{{ displayTraitItems.length }} 项记录</span></div>
-        <div v-if="displayTraitItems.length" class="trait-grid"><article v-for="item in displayTraitItems" :key="item.key" class="trait-item"><div class="trait-item-heading"><span class="trait-label">{{ item.label }}</span><span v-if="item.confidence" class="trait-confidence">{{ item.confidence }}%</span></div><p>{{ item.value }}</p><div v-if="item.confidence" class="trait-confidence-track"><span :style="{ width: `${item.confidence}%` }"></span></div></article></div>
+        <div class="section-heading"><div><p class="eyebrow">学习特征</p><h2 id="traits-title">学习特征</h2><p class="traits-help">卡片底部的条形图表示系统对这条判断的可信度，越长代表依据越充分；它不是学习完成进度。</p></div><span class="radar-updated">{{ displayTraitItems.length }} 项记录</span></div>
+        <div v-if="displayTraitItems.length" class="trait-grid"><article v-for="item in displayTraitItems" :key="item.key" class="trait-item"><div class="trait-item-heading"><span class="trait-label">{{ item.label }}</span><span v-if="item.confidence" class="trait-confidence">可信度 {{ item.confidence }}%</span></div><p>{{ item.value }}</p><div v-if="item.confidence" class="trait-confidence-track" role="progressbar" :aria-label="`${item.label}判断可信度`" :aria-valuenow="item.confidence" aria-valuemin="0" aria-valuemax="100"><span :style="{ width: `${item.confidence}%` }"></span></div></article></div>
         <div v-else class="profile-empty"><UserRound :size="20" /> 完成画像访谈后，这里会显示你的学习特征。</div>
       </section>
     </div>

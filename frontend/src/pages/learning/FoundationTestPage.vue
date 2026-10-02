@@ -49,6 +49,7 @@
         :answer-summary="answerSummary"
         :mastery-label="masteryLabel"
         :mastery-value="masteryValue"
+        :mastery-evidence="masteryEvidence"
         :weak-points="testInsights.weakPoints"
         :next-suggestion-title="nextSuggestionTitle"
         :next-suggestion-reason="nextSuggestionReason"
@@ -57,6 +58,7 @@
         @quiz="openQuiz"
         @feynman="activeTab = 'feynman'"
         @learn="leaveTest"
+        @advanced="openAdvanced"
       />
 
       <section v-if="isReviewOpen && nodeError" class="surface surface-pad foundation-state foundation-state--error">
@@ -111,6 +113,7 @@ const documentResource = ref(null)
 const chapterContent = ref('')
 const activeTab = ref('')
 const testInsights = ref(createEmptyInsights())
+const masteryRecords = ref([])
 
 const testableNodes = computed(() => (learningPath.value?.nodes || []).filter((node) => node.status !== 'locked'))
 
@@ -157,8 +160,30 @@ const answerSummary = computed(() => {
   if (totalAnswered) return `${totalCorrect} / ${totalAnswered} 题正确`
   return totalQuestions ? `本章已有 ${totalQuestions} 道待完成题目` : '本章尚未生成题目'
 })
-const masteryValue = computed(() => Math.max(0, Math.min(100, Number(latestScore.value || 0))))
-const masteryLabel = computed(() => latestScore.value === null || latestScore.value === undefined ? '--' : `${Math.round(Number(latestScore.value))}%`)
+const chapterMastery = computed(() => {
+  const tags = new Set(
+    (Array.isArray(activeNode.value?.knowledge_tags) ? activeNode.value.knowledge_tags : [])
+      .filter((tag) => typeof tag === 'string' && tag.trim())
+      .map((tag) => tag.trim()),
+  )
+  if (!tags.size) return null
+
+  let totalAttempts = 0
+  let correctCount = 0
+  masteryRecords.value.forEach((record) => {
+    if (!tags.has(String(record?.knowledge_tag || '').trim())) return
+    const attempts = Number(record.total_attempts)
+    const correct = Number(record.correct_count)
+    if (!Number.isFinite(attempts) || attempts <= 0 || !Number.isFinite(correct)) return
+    totalAttempts += attempts
+    correctCount += Math.max(0, Math.min(correct, attempts))
+  })
+  if (!totalAttempts) return null
+  return { score: Math.round(correctCount / totalAttempts * 100), totalAttempts }
+})
+const masteryValue = computed(() => chapterMastery.value?.score ?? 0)
+const masteryLabel = computed(() => chapterMastery.value ? `${chapterMastery.value.score}%` : '--')
+const masteryEvidence = computed(() => chapterMastery.value ? `累计 ${chapterMastery.value.totalAttempts} 次作答` : '暂无已判分作答')
 const nextSuggestionTitle = computed(() => testInsights.value.recommendation?.action || '完成本章题目测试')
 const nextSuggestionReason = computed(() => testInsights.value.recommendation?.reason || '本章还没有已提交的答题记录。')
 
@@ -207,6 +232,16 @@ async function loadNodeInsights(sessionId) {
     applyNodeSession(await fundamentalsApi.getQuizSession(sessionId))
   } catch (error) {
     if (error.response?.status !== 404) throw error
+  }
+}
+
+async function loadMastery() {
+  try {
+    const records = await fundamentalsApi.getMastery()
+    masteryRecords.value = Array.isArray(records) ? records : []
+  } catch {
+    // Mastery history complements the review; a transient failure must not hide the chapter.
+    masteryRecords.value = []
   }
 }
 
@@ -267,7 +302,7 @@ async function loadPage() {
     }] : []
     if (learningPath.value) {
       chooseNode(learningPath.value)
-      await loadNode()
+      await Promise.all([loadNode(), loadMastery()])
       if (route.query.autoStart === '1' && canStartTest.value && activeNode.value) {
         await router.replace({
           name: 'foundationQuiz',
@@ -329,6 +364,14 @@ async function closeReview() {
 
 function leaveTest() {
   router.push({ path: '/learning/fundamentals', query: { pathId: learningPath.value?.path_id, node: activeNode.value?.id } })
+}
+
+function openAdvanced() {
+  if (!learningPath.value) return
+  router.push({
+    name: 'advancedLearning',
+    query: { pathId: learningPath.value.path_id, node: activeNode.value?.id },
+  })
 }
 
 function openQuiz() {
