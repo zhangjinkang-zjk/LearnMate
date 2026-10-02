@@ -20,7 +20,6 @@ from backend.src.ai_core.tools.skill import (
 )
 from backend.src.ai_core.tools.resource import generate_learning_resource
 from backend.src.ai_core.tools.search import read_web_page, web_search
-from backend.src.ai_core.tools.mcp_external import load_external_mcp_tools
 from backend.src.ai_core.tools.image import generate_image
 from backend.src.ai_core.tools.exam import generate_exam_questions
 from backend.src.ai_core.tools.path import (
@@ -434,7 +433,7 @@ class Brain:
             self._agent_memory_text = ""
         self._agent_config_loaded = True
 
-    def _build_agent(self, action_tools: list, mcp_tools: list):
+    def _build_agent(self, action_tools: list):
         now = datetime.now(ZoneInfo("Asia/Shanghai"))
         tz_name = "Asia/Shanghai"
         date_str = now.strftime("%Y-%m-%d")
@@ -490,7 +489,6 @@ class Brain:
                 tools.append(factory(uid, gid))
 
         tools.extend(_inject_user_id(t, uid) for t in action_tools)
-        tools.extend(mcp_tools)
 
         # 工具报错不该把学生这条流打断。LangChain 的默认是**抛出去**：参数校验不过
         # （模型把数组参数写成 JSON 字符串是常事）时异常一路穿过 AgentExecutor，
@@ -498,8 +496,9 @@ class Brain:
         # 于是下一轮把同一个参数原样再发一遍。`handle_validation_error` 把校验错误
         # 变成一条工具返回，模型读到就能自己改。
         for tool in tools:
-            # 只给真正的 BaseTool 设：`mcp_tools` 是适配器给的，形状不由我们定 ——
-            # 在这里对不上一个属性就往赋值上抛，整条 agent 都建不起来，代价太大。
+            # isinstance 现在拦住的东西比过去少了（原来清单里还混着 MCP 适配器给的工具，
+            # 形状不由我们定）。留着是当保险：哪天有人往这份清单里塞一个非 BaseTool 的
+            # 东西，少了这道判断会在赋值上抛，整条 agent 都建不起来，代价太大。
             if isinstance(tool, BaseTool):
                 tool.handle_validation_error = _report_tool_error
                 tool.handle_tool_error = _report_tool_error
@@ -538,12 +537,7 @@ class Brain:
         except Exception:
             logging.getLogger(__name__).exception("加载 action tools 失败")
             action_tools = []
-        try:
-            mcp_tools = await load_external_mcp_tools()
-        except Exception:
-            logging.getLogger(__name__).exception('Failed to load MCP tools')
-            mcp_tools = []
-        self._build_agent(action_tools, mcp_tools)
+        self._build_agent(action_tools)
         self._action_tools_loaded = True
 
     async def chat(self, message: str, resource_context: str = "", path_context: str = "", portrait_context: str = "", memory_context: str = "") -> str:

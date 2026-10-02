@@ -145,7 +145,33 @@ async def test_the_old_threshold_no_longer_locks_the_page(monkeypatch):
 
     assert result["status"] != "locked"
     assert result["tasks"], "已完成节点够生成依据了，就该照常发任务"
-    assert generated == [1], "3 个已完成的里程碑是 1"
+    # 0 就是第一个十节点批次。这条以前写的是 1，因为 get_current 把 0 抬成了 1 ——
+    # 那个抬升会和 10～19 撞键，见下面那条用例。
+    assert generated == [0], "3 个已完成属于第一批（0～9）"
+
+
+@pytest.mark.asyncio
+async def test_a_short_path_does_not_get_stuck_on_the_same_task_set(monkeypatch):
+    """0～9 和 10～19 必须是两批任务，不能挤在同一个快照键上。
+
+    这里原来有一句 `if milestone == 0: milestone = 1`，把"第一个十节点批次"抬成了 1；
+    而 10～19 本来就返回 1 —— 于是 0～19 全落进同一个键。学生从第 1 个节点做到第 19 个
+    节点，库里的行始终是同一行，拿到的始终是同一批题。四条真实路径长度是 11/12/16/21，
+    其中三条连 20 都到不了，也就是这些学生**永远等不到第二次生成**。
+
+    量的位置很关键：从 `get_current` 外面量（拿到的是真正去查库的那个键），而不是直接调
+    `advanced_milestone`。折的是调用方 —— 那个函数一直老老实实返回 0，它自己的用例也一直
+    是绿的（见 test_advanced_learning_service.py 的 mapping 用例），只有从这里才看得见。
+    """
+    at_five = _stub(monkeypatch, _path(completed=5, total=12))
+    await service.AdvancedLearningService.get_current(7)
+
+    at_twelve = _stub(monkeypatch, _path(completed=12, total=12))
+    await service.AdvancedLearningService.get_current(7)
+
+    assert at_five == [0], "0～9 个已完成属于第一批"
+    assert at_twelve == [1], "同一个学生学到 10～19 个已完成时必须换一批任务"
+    assert at_five != at_twelve, "两段进度必须落在不同的快照键上，否则学生拿不到新任务"
 
 
 @pytest.mark.asyncio

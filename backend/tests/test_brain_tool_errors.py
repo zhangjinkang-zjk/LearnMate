@@ -13,13 +13,13 @@ from backend.src.ai_core.brain import Brain, _report_tool_error
 
 
 def _brain(tool_names: set[str]) -> Brain:
-    """和 `classroom_chat` 里一样地建一个教练 agent，只是不读库、不连 MCP。"""
+    """和 `classroom_chat` 里一样地建一个教练 agent，只是不读库、不装 action tools。"""
     brain = Brain(user_id=0, chat_group_id=0, agent_id=None)
     brain._agent_persona = "你是一个教练。"
     brain._agent_tool_names = tool_names
     brain._agent_memory_text = ""
     brain._agent_config_loaded = True
-    brain._build_agent(action_tools=[], mcp_tools=[])
+    brain._build_agent(action_tools=[])
     return brain
 
 

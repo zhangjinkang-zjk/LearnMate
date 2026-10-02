@@ -93,6 +93,13 @@ PATH = {
     "diagnosis": {"weak_points": []},
 }
 
+# 同一个学生，在快照生成**之后**又学完了一个节点（已完成 2 → 3）。
+# 任务照的是"生成那一刻的已完成节点"出的题，进度一动手上这份就滞后了。
+PROGRESSED_PATH = {
+    **PATH,
+    "nodes": PATH["nodes"] + [{"id": 4, "title": "工具调用", "status": "completed", "knowledge_tags": ["工具调用"]}],
+}
+
 
 class _Jobs:
     """假作业注册表：记录谁被起过、并且可以假装"有个作业正在跑"。"""
@@ -137,8 +144,8 @@ def _seed(**kwargs):
     return row
 
 
-async def _load():
-    return await service._get_or_create_snapshot(1, 68, 1, PROFILE, PATH, [])
+async def _load(path=None):
+    return await service._get_or_create_snapshot(1, 68, 1, PROFILE, path if path is not None else PATH, [])
 
 
 # ── 首次访问：立刻返回，生成放后台 ────────────────────
@@ -216,6 +223,93 @@ async def test_stale_fallback_is_retried_instead_of_staying_frozen(snapshots, mo
 
     assert result["source"] == "fallback", "重试期间先给用户看现有内容"
     assert jobs.started == [(1, 68, 1)]
+
+
+# ── 进度变了：agent 的结果也会过期 ────────────────────
+
+@pytest.mark.asyncio
+async def test_progress_moves_the_agent_snapshot_forward(snapshots, monkeypatch):
+    """学生又学完一个节点，手上那份任务就得跟着重算。
+
+    这条以前是不成立的：`agent` 分支无条件 `serve`，任务只在**跨过里程碑边界**（10 的
+    整数倍）时才重算。0～19 又因为 `get_current` 里那句 `milestone == 0 → 1` 挤在同一个
+    键上，所以实际上学生从第 1 个节点做到第 19 个节点，题目一次都不变。真实路径长度是
+    11/12/16/21，三条连 20 都到不了 —— 永远等不到第二次生成。
+    """
+    _seed(source="agent", updated_at=datetime.now(timezone.utc) - timedelta(seconds=600))
+    jobs = _Jobs().install(monkeypatch)
+
+    result = await _load(PROGRESSED_PATH)
+
+    assert result["tasks"] == [{"id": "t", "kind": "case"}], "重算期间先端出已有的任务，不能让页面空一下"
+    assert result["source"] == "pending", "状态要如实说'正在生成'，否则前端不会轮询到新结果"
+    assert jobs.started == [(1, 68, 1)]
+    assert snapshots.created == [], "同一行上原地重算，不换键也不新建行"
+
+
+@pytest.mark.asyncio
+async def test_a_running_refresh_keeps_reporting_pending_so_the_page_keeps_polling(snapshots, monkeypatch):
+    """重算跑着的时候必须**一直**报 pending。
+
+    前端 `schedulePoll` 在 `task_source !== 'pending'` 时不轮询 —— 只在起作业的那一次报
+    pending 的话，轮询在第二跳就断了，新任务要等学生下一次手动刷页面才出现，等于这个修复
+    没生效。这条也是 `_mark_refresh_in_flight` 在 "serve" 那条早返回路径上的用例。
+    """
+    _seed(source="agent", updated_at=datetime.now(timezone.utc) - timedelta(seconds=600))
+    jobs = _Jobs(running=True).install(monkeypatch)
+
+    result = await _load(PROGRESSED_PATH)
+
+    assert result["source"] == "pending"
+    assert jobs.started == [], "已经在跑了，不该再起一个"
+
+
+@pytest.mark.asyncio
+async def test_a_just_refreshed_snapshot_is_not_refreshed_again(snapshots, monkeypatch):
+    """刚算过的（或者刚算失败的）不该马上再算一遍。
+
+    这不是保守，是必需的：重算失败时 `_run_agent_generation` 会保住原有的 agent 结果，
+    `completed_nodes` 仍然对不上进度，"进度变了"这个条件会一直为真 —— 而重算在跑的那段
+    时间前端每 3 秒轮询一次。没有冷却，一次失败就变成每 3 秒一发、永远不停。
+    """
+    _seed(source="agent", updated_at=datetime.now(timezone.utc) - timedelta(seconds=5))
+    jobs = _Jobs().install(monkeypatch)
+
+    result = await _load(PROGRESSED_PATH)
+
+    assert jobs.started == [], "冷却期内不重算"
+    # 被冷却挡下来的时候**不能**报 pending：什么都没在生成，而那个徽标不会自己消失。
+    assert result["source"] == "agent"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_refresh_does_not_become_a_request_amplifier(snapshots, monkeypatch):
+    """失败的重算也必须把冷却重新起算 —— 靠的是作业体把 `updated_at` 推到现在。
+
+    上面那条量的是"刚生成完"，这条走完整条失败链路：起作业 → 作业失败 → 再进页面。
+    要求第二次进来是 `serve`。`_run_agent_generation` 里那个显式的 `updated_at` 就是
+    为这件事写的（`QuerySet.update()` 不触发 `auto_now`，不写的话年龄永远不涨）。
+    """
+    row = _seed(source="agent", updated_at=datetime.now(timezone.utc) - timedelta(seconds=600))
+    jobs = _Jobs().install(monkeypatch)
+
+    await _load(PROGRESSED_PATH)
+    assert jobs.started == [(1, 68, 1)]
+
+    async def fake_generate(*args, **kwargs):
+        return {"tasks": [{"id": "fallback"}], "summary": "临时入口", "source": "fallback", "error": "智能体暂时不可用"}
+
+    monkeypatch.setattr(service, "generate_agent_task_set", fake_generate)
+    await jobs.producers[0]()
+
+    assert row.source == "agent", "失败不该把已有的 agent 结果换成兜底"
+    assert row.completed_nodes == 2, "失败了就没写回进度，条件仍然成立 —— 正因如此才需要冷却"
+
+    jobs.started.clear()
+    result = await _load(PROGRESSED_PATH)
+
+    assert result["source"] == "agent"
+    assert jobs.started == [], "失败之后紧接着的轮询必须被冷却挡住"
 
 
 # ── 后台作业体 ────────────────────────────────────────

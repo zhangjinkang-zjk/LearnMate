@@ -8,7 +8,7 @@
     curriculum.service.sync_direction_subjects    方向 → 科目
     PathService.generate_subject_paths            科目 → 路径（Leader 图）
 
-只固定一样东西：**假学生的底子**（`STUDENT_PROFILE`）。其余全是生产实现。
+只固定一样东西：**假学生的底子**（`STUDENT_PROFILES`）。其余全是生产实现。
 
 ## 为什么必须有一个"假学生"，而不是写死几句回答
 
@@ -16,14 +16,32 @@
 「回答正确且解释充分时提高场景复杂度；回答含糊时换一种更基础、更具体的问法」。
 写死的答案接不住上一轮，问出来的会是一套没学生会遇到的对话，拿它审生成质量不作数。
 
+## 为什么是**两个**假学生
+
+因为这份记录要能回答一个问题：**判分到底有没有区分度？** 只跑一个人答不出这个问题 ——
+他全判答对，你分不清是"判官好"还是"这个人本来就会"。跑过的那两份记录就长这样：
+一篇 3 问全答对，另一篇 2 对 1 错，而那个错判在**难度 hard** 的那问上。
+
+两个学生的底子**刻意拉开**，只有一个变量：
+
+    doc-only   看过文档、没亲手写过。会讲清楚流程，也会明说"我没实际验证过"。
+    shaky      听说过名词，分不清工具调用和函数的区别，多数时候答不出具体做法。
+
+两个人**问到的题不一样**（诊断是自适应的，底子不同就会走到不同的分支），所以这**不是
+对照实验**，是把判分放到两个水平点上各量一次。真正能下结论的是那种一眼假阳性的情况：
+一个明说"我不太清楚"的回答被判了答对。
+
 ## 这份记录用来**审质量**，不是回归门槛
 
-假学生由同一个模型扮演，靠 `STUDENT_PROFILE` 把它压到"看过文档没写过"这个水平。
-两处天生的短板，读的时候要记着：
+假学生由同一个模型扮演（和判官、和被测都是同一个 `llm_config.llm`），靠底子那段提示词
+把它压到对应的水平。三处天生的短板，读的时候要记着：
 
 - **它可能答得比真人好。** 模型本来就会 LangGraph，让它"装作没写过"，它仍可能漏出真本事
   —— 于是诊断看起来"问得挺准"，而真人初学者会在这儿卡住。所以这份记录看得出"生成得
-  合不合理"，看不出"对真人准不准"。
+  合不合理"，看不出"对真人准不准"。`shaky` 那个也是同一个道理的反向版本：真初学者会
+  答得更散、更短。
+- **判官也是同一个模型**（`pool="eval"` 只是并发键），所以"答对率"里有多少是判官的宽容、
+  多少是学生真的答对了，这份记录分不出来 —— 它只能把问答原文摊开给人看。
 - **每轮回答都是采样出来的**，同一天跑两次得到两套题。要可比的分数看 `persona_eval.py`。
 
 ## 产出
@@ -31,6 +49,7 @@
 `eval/results/<时间戳>-journey.md`：诊断每一问（连服务端那份参考回答一起）、假学生的回答、
 判分反馈、落库的画像、拆出来的科目、每条路径的每个节点。
 """
+import argparse
 import asyncio
 import json
 import logging
@@ -59,7 +78,12 @@ GOAL = "能独立做出一个带工具调用的问答应用，并说清每个设
 MAX_STEPS = 3
 
 # 假学生的底子。**这是整份评估唯一被固定的输入** —— 诊断问什么、路径生成什么，全看它。
-STUDENT_PROFILE = """你在扮演一个正在学「智能体开发」的学生，底子是这样的：
+#
+# 两个底子刻意拉开档次，好让"判分有没有区分度"变成可量的事：同一个判官、同一套流程，
+# 一个能讲清流程、一个连名词都分不清。两个人**问到的题不一样**（诊断是自适应的），
+# 所以这不是对照实验，是把判分放到两个水平点上各量一次。理由见文件开头那段。
+STUDENT_PROFILES = {
+    "doc-only": """你在扮演一个正在学「智能体开发」的学生，底子是这样的：
 
 - 会 Python，写过一些小脚本和课程作业，但没做过完整的工程项目。
 - LangGraph、MCP、工具调用（function calling）这些，你**看过文档、看过教程视频，
@@ -72,18 +96,38 @@ STUDENT_PROFILE = """你在扮演一个正在学「智能体开发」的学生�
 - 说具体一点（记得文档里哪种说法、卡在哪一步），但**不要装作比实际会得多**，
   也别故意装不会。
 - 2 到 4 句，像平时说话。不要写条目，不要用"首先/其次/综上"。
-"""
+""",
+    "shaky": """你在扮演一个刚开始学「智能体开发」的学生，底子是这样的：
+
+- 会一点 Python，能看懂简单代码，但函数、参数这些经常用混。
+- LangGraph、MCP、工具调用这些词**听说过**，但说不清各自是干什么的；分不清"工具调用"
+  和"调用函数"有什么区别，也说不清一个请求从进来到出去中间经过哪几步。
+- 被问到"具体怎么做"，你多半答不出，会含混地绕过去，或者把两个不同的东西混在一起说。
+- 有时候你会按字面猜一个听起来合理的说法，但猜错。
+
+回答导师提问时的规矩：
+- 照这个底子答。不知道就说不知道，**不要硬编一套完整流程** —— 这个底子的人答不出那么
+  完整的东西。
+- 可以用"我不太清楚""好像是……""感觉应该……"这类不确定的说法。
+- 2 到 4 句，像平时说话。不要写条目，不要用"首先/其次/综上"。
+""",
+}
+DEFAULT_STUDENTS = "all"
 
 
 # ═══════════════════════════════════════
 #  假学生
 # ═══════════════════════════════════════
 
-async def _student_answer(question: str, history: list[dict]) -> str:
+async def _student_answer(question: str, history: list[dict], student_key: str) -> str:
     """让假学生回答这一问。
 
     把前几轮的原话一并给它 —— 诊断的下一问是接着上一轮答的，假学生要是忘了自己刚说过
     什么，就会答出前后矛盾的东西，而这种矛盾会被判分当成"理解不牢"记下来。
+
+    **它答的每一句都是真模型答的**（和导师、判官共用 `llm_config.llm`），底子那段提示词
+    只是把它压到对应的水平。这里没有任何"假装"的输入 —— 要审的是判分，那么学生答什么是
+    被审对象的一部分，不能写死。
     """
     from backend.src.ai_core.llm_config import llm
 
@@ -94,7 +138,7 @@ async def _student_answer(question: str, history: list[dict]) -> str:
             lines += [f"导师问：{item['content']}", f"你答：{item['answer']}", ""]
     lines += ["导师现在问你：", question, "", "用你自己的话回答（2 到 4 句）。"]
 
-    reply = await llm.ainvoke(STUDENT_PROFILE + "\n\n" + "\n".join(lines), pool="eval")
+    reply = await llm.ainvoke(STUDENT_PROFILES[student_key] + "\n\n" + "\n".join(lines), pool="eval")
     return str(getattr(reply, "content", reply) or "").strip()
 
 
@@ -127,7 +171,7 @@ async def _question_detail(question_id: int) -> dict:
     return {"reference_answer": row.answer, "analysis": row.analysis, "tags": _json(row.knowledge_tags)}
 
 
-async def _diagnosis_turns(user_id: int) -> tuple[list[dict], dict | None]:
+async def _diagnosis_turns(user_id: int, student_key: str) -> tuple[list[dict], dict | None]:
     session = await diagnosis.start(user_id, IDENTITY, DIRECTION, GOAL, MAX_STEPS)
     session_id = session["session_id"]
     question = session["question"]
@@ -135,7 +179,7 @@ async def _diagnosis_turns(user_id: int) -> tuple[list[dict], dict | None]:
     result = None
 
     for _ in range(MAX_STEPS):
-        answer_text = await _student_answer(question["content"], turns)
+        answer_text = await _student_answer(question["content"], turns, student_key)
         result = await diagnosis.answer(user_id, session_id, question["question_id"], answer_text)
         feedback = result.get("feedback") or {}
         turns.append({
@@ -207,18 +251,20 @@ async def _resources(user_id: int) -> list[dict]:
     } for row in rows]
 
 
-async def run(stamp: str) -> dict:
+async def run(stamp: str, student_key: str) -> dict:
+    """跑一个假学生的一整程。**每个学生自己一个合成用户**，跑完就清掉。"""
     user = await subject_module.ensure_user()
     spawned = _capture_background()
     try:
-        turns, result = await _diagnosis_turns(user.id)
+        turns, result = await _diagnosis_turns(user.id, student_key)
         # 诊断答满时挂出去的那条路径生成任务（见 `_capture_background`）
         for coro in spawned:
             await coro
         exam_records = await ExamRecord.filter(user_id=user.id).count()
         artifact = {
+            "student": student_key,
             "identity": IDENTITY, "direction": DIRECTION, "goal": GOAL,
-            "turns": turns, "result": result,
+            "turns": turns, "result": result, "tally": _verdict_tally(turns),
             "exam_records": exam_records,
             "portrait": await _portrait(user.id),
             "paths": await _paths(user.id),
@@ -238,16 +284,25 @@ async def run(stamp: str) -> dict:
 # ═══════════════════════════════════════
 
 def _render(artifact: dict) -> str:
+    tally = artifact.get("tally") or _verdict_tally(artifact.get("turns") or [])
+    by_level = "、".join(
+        f"{level} {item['correct']}/{item['judged']}"
+        for level, item in tally["by_difficulty"].items()
+    ) or "（没有题）"
     lines = [
         "# 入学一程：画像诊断 → 学习路径生成",
         "",
+        f"- 假学生：`{artifact.get('student')}`",
         f"- 身份：{artifact['identity']}",
         f"- 方向：{artifact['direction']}",
         f"- 目标：{artifact['goal']}",
         f"- 诊断落库的答题记录：{artifact['exam_records']} 条",
+        f"- **判分：答对 {tally['correct']}/{tally['total']}**（按难度：{by_level}）"
+        + (f"；另有 {tally['unjudged']} 问判官没给出结论" if tally.get("unjudged") else ""),
         "",
-        "> 假学生的底子见 `eval/journey.py` 的 `STUDENT_PROFILE`：会 Python、",
-        "> LangGraph 这些**看过文档没亲手写过**。回答由模型扮演，是采样出来的。",
+        f"> 底子见 `eval/journey.py` 的 `STUDENT_PROFILES[\"{artifact.get('student')}\"]`。",
+        "> 回答由**模型**扮演、采样出来的；判官也是同一个模型（`pool=\"eval\"` 只是并发键）。",
+        "> 所以这一份看得出「判分判得对不对」，看不出「对真人准不准」—— 要判断得读每一问的原文。",
         "",
         "## 一、诊断问答",
         "",
@@ -313,14 +368,84 @@ def _render(artifact: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _verdict_tally(turns: list[dict]) -> dict:
+    """答对 / 答错各几问，**并按难度分开记一份**。
+
+    单独按难度记，是因为判别力几乎都落在 hard 上：跑过的那两轮里唯一一次答错就出在
+    难度 hard 那问上（学生明说"我真没在日志里排查过这种死循环"），而同一份底子在 medium
+    上是全对的。只报一个总答对率会把这件事抹平。
+    """
+    tally = {"correct": 0, "wrong": 0, "unjudged": 0, "total": 0, "by_difficulty": {}}
+    for turn in turns:
+        verdict = turn.get("verdict")
+        # **"没判"不能算成答错。** 判官没给出结论时 `is_correct` 是 None，把它并进答错，
+        # 报告上就成了一次"判分很严"，而实际上什么都没判 —— 同 `summarize` 里产出率
+        # 那条规矩（一条都没跑是 None，不是 0.0）。
+        if verdict is None:
+            tally["unjudged"] += 1
+        else:
+            tally["correct" if verdict else "wrong"] += 1
+        tally["total"] += 1
+        level = str(turn.get("difficulty") or "?")
+        bucket = tally["by_difficulty"].setdefault(level, {"correct": 0, "judged": 0})
+        bucket["judged"] += 1
+        bucket["correct"] += 1 if verdict else 0
+    return tally
+
+
+def _compare_table(artifacts: list[dict]) -> str:
+    """几个假学生的答对率并排。**这是这份评估里唯一能回答"判分有没有区分度"的东西。**"""
+    lines = ["| 假学生 | 答对 | 按难度 |", "|---|---|---|"]
+    for artifact in artifacts:
+        tally = artifact.get("tally") or _verdict_tally(artifact.get("turns") or [])
+        by_level = "、".join(
+            f"{level} {item['correct']}/{item['judged']}"
+            for level, item in tally["by_difficulty"].items()
+        ) or "（没有题）"
+        unjudged = f"，另有 {tally['unjudged']} 问没判" if tally.get("unjudged") else ""
+        lines.append(f"| {artifact.get('student') or '?'} | "
+                     f"{tally['correct']}/{tally['total']}{unjudged} | {by_level} |")
+    return "\n".join(lines)
+
+
 def _write_report(artifact: dict, stamp: str) -> Path:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out = RESULTS_DIR / f"{stamp}-journey.md"
+    out = RESULTS_DIR / f"{stamp}-journey-{artifact.get('student') or 'student'}.md"
     out.write_text(_render(artifact), encoding="utf-8")
     return out
 
 
+def _write_compare(artifacts: list[dict], stamp: str) -> Path:
+    lines = [
+        "# 入学一程 · 假学生对照（判分区分度）",
+        "",
+        f"- 底子：{'、'.join(a.get('student') or '?' for a in artifacts)}",
+        f"- 详细记录：{'、'.join(Path(a['report']).name for a in artifacts if a.get('report'))}",
+        "",
+        "> 两个人**问到的题不一样**（诊断是自适应的，底子不同就会走到不同分支），所以这不是"
+        "对照实验 —— 是把判分放到两个水平点上各量一次。真正能下结论的是一眼假阳性的情况："
+        "一个明说「我不太清楚」的回答被判了答对。",
+        "",
+        _compare_table(artifacts),
+        "",
+        "> 判官和被测是同一个模型（`pool=\"eval\"` 只是并发键），所以这里的答对率里有多少是"
+        "判官的宽容、多少是学生真的答对了，这张表分不出来 —— 要判断得回去读每一问的原文。",
+        "",
+    ]
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    out = RESULTS_DIR / f"{stamp}-journey-compare.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    return out
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description="入学一程：画像诊断 → 学习路径生成")
+    parser.add_argument("--student", default=DEFAULT_STUDENTS,
+                        choices=sorted(STUDENT_PROFILES) + ["all"],
+                        help="用哪个假学生（默认 all，两个都跑）")
+    args = parser.parse_args()
+    students = sorted(STUDENT_PROFILES) if args.student == "all" else [args.student]
+
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(encoding="utf-8", errors="replace")
     # 应用那层的 logger 没配 handler，只剩 lastResort 的 WARNING 能到 stderr ——
@@ -335,17 +460,23 @@ def main() -> int:
     # **报告先落盘、再清理**（`run` 里那个 finally 负责清理）。反过来写过一次：
     # 2026-10-02 那轮走到清理之后卡在 close_db 上四分钟，报告还没写 —— 数据已经删了，
     # 整轮的生成结果只剩内存里那一份，进程要是死在那儿就全丢了。
+    # 所以每个学生**跑完当场落盘**（在 `run` 里，清理之前），对照表才是最后才写的。
     stamp = time.strftime("%Y%m%d-%H%M%S")
 
     async def _drive():
         await init_db()
         try:
-            return await run(stamp)
+            # 一个学生一个合成用户，跑完就清；**一个个来，不并发** ——
+            # 这条链路上有路径生成和资源预生成，并发既压不动，日志也读不清。
+            return [await run(stamp, key) for key in students]
         finally:
             await close_db()
 
-    artifact = asyncio.run(_drive())
-    print(f"写好了：{artifact['report']}")
+    artifacts = asyncio.run(_drive())
+    for artifact in artifacts:
+        print(f"写好了：{artifact['report']}")
+    if len(artifacts) > 1:
+        print(f"对照：{_write_compare(artifacts, stamp)}")
     return 0
 
 

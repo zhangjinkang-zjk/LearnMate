@@ -655,7 +655,13 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
      14 = label   （表头、行号、kicker、章节标签）
      12 = label-sm（药丸）
    **新加字号前先看它落在哪一档**，不要引入第七档。（两个媒体查询里的 32/26 是窄屏下
-   display 那一档的覆盖值，不属于正文阶梯。） */
+   display 那一档的覆盖值，不属于正文阶梯。）
+
+   这六档现在真的变成了变量（`--fs-12` … `--fs-40`，定义见 `.overview-page`），
+   写 `font-size` 时用变量、不要退回写死的 px —— 写死的那一处不会跟着大屏放大，
+   正是这次要修的病。有一处对不上：上面这张清单写的是 22 那一档，而代码里实际用的是
+   **20**（`.paths__title`）。这次按代码里的实际值建变量，没有顺手把 20 改成 22 ——
+   那是改设计，不是修自适应。 */
 
 /* 一屏一版：高度由 .page-container 那一格给定（父级是 grid 的 minmax(0,1fr)）。
    字号按 2.5K 的观看距离整体放大了一档 —— 1080p 的 14px 拿到 2560 宽上太小。
@@ -671,7 +677,39 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
    是 40px 的路线，56 让它上下各留 8px，仍然是"一行一条路径"的疏密。 */
 /* `--data-table-pad: 0`：表没有外框了（见 `DataTable.vue`），内容要和上面的区块标题
    对齐到同一条左边线，再留 28px 内边距就会整张表缩进去一截。 */
-.overview-page { --ink: #46504a; --data-table-row-height: clamp(52px, 5vh, 72px); --data-table-pad: 0px; --data-table-gap: clamp(8px, 1vw, 20px); display: grid; align-content: start; gap: clamp(10px, 1.4vh, 16px); width: 100%; max-width: min(100%, 1920px); height: 100%; margin: 0 auto; overflow: hidden; }
+/* ── 大屏缩放（--s）──
+   这一页原先的问题不是"没做响应式"，是**只做了下探**：五个断点全是 max-width，
+   1421px 以上只有一套版式；而字号是 36 处绝对 px，于是屏越大、字占的比例越小，
+   最宽处还封在 1920，超过就变两侧留白。
+
+   `--s` 是"1px 在这块屏上该放大多少倍"，它本身是一个**长度**：在基准视口 1600×920
+   上正好等于 1px，屏更大就更大。全页字号写成 calc(N * var(--s))，于是跟着视口等比长大。
+
+   基准为什么是 1600×920 而不是 1920×1080：**这一页的内容在 s=1 时只占屏幕高度的 74%**
+   （实测：1950×1130 的视口上内容 836px）。把基准定在 1920 上，等于承认那 26% 的空白
+   是设计的一部分 —— 屏再大也还是空着。定在内容自然高度的附近，放大才真的把版式顶到边。
+
+   三处刻意的取舍：
+   1. 取 min(宽比, 高比) 而不是只看宽度 —— 这一页是**高度受限**的（一屏一版 +
+      overflow: hidden）。超宽屏（3440×1440）按高度给比例，多出来的宽度变留白，
+      而不是把版式拉高到装不下被裁掉。
+   2. **下限钉在 1px**：小屏上整页渲染与改造前逐像素相同，下面那五个断点一个都不废。
+      也就是说对 1600×920 及以下的屏，这次改动是**空操作**。
+   3. 上限 1.5：再大就不是"看得清"而是"字大得傻"了，也顺手守住阶梯 1.5 倍的无障碍上限。
+
+   **不会纵向溢出**：内容高 ≈ 823px（s=1 实测）。高度受限时 s = Vh/920，内容 =
+   823/920·Vh = 0.895·Vh < Vh；宽度受限时 s 更小。上限 1.5 要到 Vh > 1380 才生效，
+   那时内容 1235 < 1380，同样安全。
+
+   只改**字号和内容封顶**；纵向剩下的余量交给 `align-content`（见下）。
+
+   `align-content: space-between` 而不是原来的 `start`：原来四行都堆在顶上，屏幕多高
+   余量就全留在底部（实测空掉 26%）。space-between 把余量摊进行与行之间，**行一定顶到
+   容器底边**，页脚因此贴在页面底部。它还有个好处是**自带退化**：内容比容器高时，
+   行间那点余量归零，间距回到 `gap` 的正常值，不会比改之前更挤。
+   窄屏那两处媒体查询仍写着 `align-content: start` —— 那里是纵向滚动，不需要填。
+   放大只解决"看得清"，填满靠这一条；两者合起来才是"撑满"。 */
+.overview-page { --ink: #46504a; --s: clamp(1px, min(100vw / 1600, 100vh / 920), 1.5px); --fs-12: calc(12 * var(--s)); --fs-14: calc(14 * var(--s)); --fs-16: calc(16 * var(--s)); --fs-18: calc(18 * var(--s)); --fs-20: calc(20 * var(--s)); --fs-40: calc(40 * var(--s)); --data-table-row-height: clamp(52px, 5vh, calc(72 * var(--s))); --data-table-pad: 0px; --data-table-gap: clamp(8px, 1vw, 20px); display: grid; align-content: space-between; gap: clamp(10px, 1.4vh, 16px); width: 100%; max-width: min(100%, calc(1920 * var(--s))); height: 100%; margin: 0 auto; overflow: hidden; }
 
 /* 主卡 + 走势图。**这一行是整页唯一一处不等宽的排布**，也是它存在的理由：两块通栏大矩形
    摞起来会读成"两个盒子"，拆成一宽一窄就把主次说清楚了 —— 左边是"现在做什么"（主），
@@ -682,8 +720,8 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
    阈值 1420 也不是随手写的：再窄下去主卡里的标题 + 按钮就放不到一行了。 */
 .top { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .75fr); gap: 0 clamp(20px, 2.2vw, 40px); align-items: center; }
 
-.context { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin: 0; color: var(--ink); font-size: 14px; line-height: 1.5; }
-.context__kicker { color: var(--muted); font-size: 12px; }
+.context { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin: 0; color: var(--ink); font-size: var(--fs-14); line-height: 1.5; }
+.context__kicker { color: var(--muted); font-size: var(--fs-12); }
 .context__sep { color: var(--line); }
 .context b { min-width: 0; overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 /* 这一行右端原来挂着一颗「点击查看学习画像」。删掉有两个理由：一是它的去处现在由页脚
@@ -711,45 +749,45 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
    面上喊，读起来发酸还分不出主次。 */
 .focus { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 28px; border-radius: 10px; background: #1e3c34; padding: clamp(14px, 1.5vh, 20px) clamp(24px, 2.2vw, 40px); }
 .focus__head { display: grid; gap: 4px; min-width: 0; }
-.focus__lead { margin: 0; color: #a9bdb0; font-size: 12px; font-weight: 600; letter-spacing: .06em; }
+.focus__lead { margin: 0; color: #a9bdb0; font-size: var(--fs-12); font-weight: 600; letter-spacing: .06em; }
 /* 40 是这一页字号阶梯里的 display 那一档。原来是 clamp(38px, 2.7vw, 60px) —— 在 2.5K 屏上
    顶上 60px，那已经是官网首屏的号，不是工作台的。 */
-.focus__title { margin: 0; color: #f2f7ec; font-size: clamp(24px, 2.2vw, 40px); font-weight: 600; letter-spacing: -.01em; line-height: 1.12; }
-.focus__where { margin: 0; color: #a9bdb0; font-size: 14px; }
+.focus__title { margin: 0; color: #f2f7ec; font-size: clamp(24px, 2.2vw, var(--fs-40)); font-weight: 600; letter-spacing: -.01em; line-height: 1.12; }
+.focus__where { margin: 0; color: #a9bdb0; font-size: var(--fs-14); }
 /* 「为什么是它」比 `where` 低一档：它是对上面那句话的补充说明，不是又一条标题。
    同一块面上靠字号拉开层次，不再多引进一种颜色。 */
-.focus__reason { margin: 2px 0 0; max-width: 92ch; color: #a9bdb0; font-size: 12px; line-height: 1.5; }
+.focus__reason { margin: 2px 0 0; max-width: 92ch; color: #a9bdb0; font-size: var(--fs-12); line-height: 1.5; }
 
 /* 这一章讲什么 —— 卡片上唯一的"内容"，其余全是状态。 */
 .focus__topics { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 0; grid-column: 1 / -1; }
-.focus__topics-lead { color: #a9bdb0; font-size: 12px; }
-.focus__topics-list { color: #f2f7ec; font-size: 14px; font-weight: 500; }
+.focus__topics-lead { color: #a9bdb0; font-size: var(--fs-12); }
+.focus__topics-list { color: #f2f7ec; font-size: var(--fs-14); font-weight: 500; }
 
 /* 最后一行：测验（左）· 复习入口（右）。一条发丝线把它和上面分开 ——
    上面答"这一章是什么"，这一行答"你做到哪了"。 */
 .focus__do { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 24px; grid-column: 1 / -1; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, .16); }
 .focus__quiz { display: flex; align-items: baseline; gap: 10px; margin: 0; }
-.focus__quiz-label { color: #a9bdb0; font-size: 14px; }
-.focus__quiz-value { color: #f2f7ec; font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.focus__cta { grid-column: 2; grid-row: 1; min-height: 42px; padding: 0 28px; color: #334139; font-size: 14px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.focus__quiz-label { color: #a9bdb0; font-size: var(--fs-14); }
+.focus__quiz-value { color: #f2f7ec; font-size: var(--fs-16); font-weight: 600; font-variant-numeric: tabular-nums; }
+.focus__cta { grid-column: 2; grid-row: 1; min-height: 42px; padding: 0 28px; color: #334139; font-size: var(--fs-14); font-weight: 600; text-decoration: none; white-space: nowrap; }
 /* 复习入口推到右端，和左端的测验值分列两头。它是次要入口，用下划线表明可点、不抢柠檬绿。 */
-.focus__aside { margin-left: auto; color: #a9bdb0; font-size: 14px; font-weight: 500; text-decoration: underline; text-underline-offset: 3px; }
+.focus__aside { margin-left: auto; color: #a9bdb0; font-size: var(--fs-14); font-weight: 500; text-decoration: underline; text-underline-offset: 3px; }
 .focus__aside:hover { color: #f2f7ec; }
 
 /* ── 学习方向表 ── */
 .paths { display: grid; gap: 10px; }
 .paths__head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px clamp(12px, 1.2vw, 20px); }
-.paths__title { margin: 0; color: var(--ink); font-size: 20px; font-weight: 600; }
+.paths__title { margin: 0; color: var(--ink); font-size: var(--fs-20); font-weight: 600; }
 /* 总账一行：跨路径的节点数、已学完数、总体正确率。用间距分组，不用中圆点 ——
    中圆点把三个不相干的数连成一句，读起来像元信息栏。 */
-.paths__note { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 20px; margin: 0; color: var(--muted); font-size: 14px; }
+.paths__note { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 20px; margin: 0; color: var(--muted); font-size: var(--fs-14); }
 .paths__note-lead { color: var(--ink); font-weight: 500; }
-.paths :deep(.data-table__head) { font-size: 12px; }
+.paths :deep(.data-table__head) { font-size: var(--fs-12); }
 .paths :deep(.data-table__head span) { padding: 8px 0; }
 
 /* 列宽走 --data-table-columns（在模板里由 pathColumnTemplate 绑定），表头和表体读同一个值。 */
-.row__no { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
-.row__name { min-width: 0; overflow: hidden; color: var(--ink); font-size: clamp(14px, 1vw, 16px); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.row__no { color: var(--muted); font-size: var(--fs-14); font-variant-numeric: tabular-nums; }
+.row__name { min-width: 0; overflow: hidden; color: var(--ink); font-size: clamp(14px, 1vw, var(--fs-16)); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 /* 这里原来有一条 `.row.is-current .row__name { color: var(--accent-deep) }`，从来没生效过：
    `DataTable` 给当前行加的是 `data-table__row--current`，不是 `row is-current`。
    删掉而不是改对 —— 当前行已经有左侧 4px 色条 + 整行浅绿底纹（组件自带），
@@ -789,13 +827,13 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
    和"可开始"该有的"空心"读起来不是一回事。 */
 .row__track i.is-available { background: #f4f8ef; box-shadow: inset 0 0 0 1.5px var(--accent); }
 
-.row__pct { color: var(--ink); font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.row__now { overflow: hidden; color: var(--muted); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.row__pct { color: var(--ink); font-size: var(--fs-16); font-weight: 600; font-variant-numeric: tabular-nums; }
+.row__now { overflow: hidden; color: var(--muted); font-size: var(--fs-14); text-overflow: ellipsis; white-space: nowrap; }
 /* 「上次学习」写成相对日（今天 / 3 天前）。它答的是"这条路径我多久没碰了"，
    绝对日期还得让人自己减一遍。 */
-.row__when { color: var(--muted); font-size: 14px; white-space: nowrap; }
-.row__count { color: var(--ink); font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
-.paths__empty { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.row__when { color: var(--muted); font-size: var(--fs-14); white-space: nowrap; }
+.row__count { color: var(--ink); font-size: var(--fs-14); font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
+.paths__empty { margin: 0; color: var(--muted); font-size: var(--fs-14); line-height: 1.6; }
 
 /* ── 页脚：进阶学习 ＋ 资料库 ＋ 本周，共用一条带 ── */
 /* 三块都是"小内容"，各自占一条全宽行的话光行距就要 150px 上下。并排之后一条带装下。
@@ -812,8 +850,8 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
 /* 第二块左侧也要留：那道竖线画在它的 `padding-left` 左边，不留就贴着上一块的字。 */
 .entry + .entry { padding-left: 28px; border-left: 1px solid var(--line); }
 .entry__head { display: flex; align-items: center; gap: 10px; min-height: 30px; }
-.entry__title { margin: 0; color: var(--ink); font-size: 16px; font-weight: 600; letter-spacing: 0; }
-.entry__tag { padding: 3px 11px; border: 1px solid #cfdcbb; border-radius: 99px; color: var(--accent-deep); font-size: 12px; font-weight: 500; line-height: 1.6; }
+.entry__title { margin: 0; color: var(--ink); font-size: var(--fs-16); font-weight: 600; letter-spacing: 0; }
+.entry__tag { padding: 3px 11px; border: 1px solid #cfdcbb; border-radius: 99px; color: var(--accent-deep); font-size: var(--fs-12); font-weight: 500; line-height: 1.6; }
 /* 标题里的链接**长得不像链接**（不换色、不加下划线）：它的可点区域是整块，
    把四个字染成绿的反而在说"只有这四个字能点"。可点的信号交给整块的 hover 底色。 */
 .entry__link { color: inherit; text-decoration: none; }
@@ -828,7 +866,7 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
 .entry__link:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 3px; border-radius: 4px; }
 /* 那句"什么时候会有任务"是这一块唯一一条**规则**（不是形容词），所以它加粗 ——
    其余两句是说明。整段都用灰字的话，"学完 10 个节点就有了"这条最关键的信息会沉下去。 */
-.entry__body { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.entry__body { margin: 0; color: var(--muted); font-size: var(--fs-14); line-height: 1.55; }
 .entry__body b { color: var(--ink); font-weight: 500; }
 
 /* 第三块：**本周**。竖线和内边距代替网格间距 —— 线画在 `padding-left` 的左边，
@@ -863,7 +901,7 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
 /* `min-height: 36px` + 居中**不是为了这排字好看，是为了和左边两块对齐**：
    `.entry__head` 是 36px 高的居中对齐盒，里面的标题因此往下偏了 5.5px；这一块现在没有
    那个盒子了（标题独占一行），把同样的 36px 直接给标题，三块的标题才落在同一条水平线上。 */
-.week__title { display: flex; align-items: center; min-height: 30px; margin: 0; color: var(--ink); font-size: 16px; font-weight: 600; letter-spacing: 0; white-space: nowrap; }
+.week__title { display: flex; align-items: center; min-height: 30px; margin: 0; color: var(--ink); font-size: var(--fs-16); font-weight: 600; letter-spacing: 0; white-space: nowrap; }
 
 /* 七格。**一格一天，包括没来的那些** —— 灰色的格子就是这一项要说的信息。
    活跃的整颗填实，没来的只剩一个浅环；今天那一格的星期字加重，不用再加一圈框。 */
@@ -871,14 +909,14 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
 .week__day { display: grid; justify-items: center; gap: 4px; width: 26px; }
 .week__dot { width: 12px; height: 12px; border: 1px solid #cfd9cb; border-radius: 50%; background: var(--paper); }
 .week__day.is-active .week__dot { border-color: var(--accent-deep); background: var(--accent-deep); }
-.week__label { color: var(--muted); font-size: 12px; line-height: 1; }
+.week__label { color: var(--muted); font-size: var(--fs-12); line-height: 1; }
 .week__day.is-today .week__label { color: var(--ink); font-weight: 600; }
 
 /* 本周一次都没来时的那句"上次是 X 天前"。别的时候不出现 —— 来了几天，上面那排格子看得见。 */
-.week__quiet { margin: 0; color: var(--muted); font-size: 14px; }
+.week__quiet { margin: 0; color: var(--muted); font-size: var(--fs-14); }
 
 /* 一件事一行，不是一整句：每条独立成立、单位自带。 */
-.week__facts { display: flex; flex-wrap: wrap; gap: 5px 16px; margin: 0; color: var(--muted); font-size: 14px; }
+.week__facts { display: flex; flex-wrap: wrap; gap: 5px 16px; margin: 0; color: var(--muted); font-size: var(--fs-14); }
 
 /* 铺满整块的那一层，和 `.entry__link` 是同一套写法。**可见文字只有「本周」** ——
    块里不出现任何像按钮的东西，三块因此长得一样；去处由后面那句 `sr-only`
@@ -899,16 +937,16 @@ onBeforeUnmount(() => narrowQuery?.removeEventListener('change', syncNarrow))
    grid 才能把这唯一一行在 30px 里居中，再用 `align-items: baseline` 让 14px 的总量
    贴住 18px 标题的基线，而不是两者的中心对齐（那样小字会浮在中间）。 */
 .trend__head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; align-content: center; gap: 16px; min-height: 30px; }
-.trend__title { margin: 0; color: var(--ink); font-size: 16px; font-weight: 600; letter-spacing: 0; }
+.trend__title { margin: 0; color: var(--ink); font-size: var(--fs-16); font-weight: 600; letter-spacing: 0; }
 /* 标题可以折行（窄屏那一栏只有 300px 出头），总量不行 —— 它是个短数字，折了就更短，
    看起来像被截断。 */
-.trend__total { margin: 0; color: var(--muted); font-size: 14px; white-space: nowrap; }
+.trend__total { margin: 0; color: var(--muted); font-size: var(--fs-14); white-space: nowrap; }
 /* 一组测验都没做过时这里只有一句话。和 `.week__quiet` 一样是**替换**而不是占位 ——
    空图配一个坐标轴会让人以为数据加载失败。 */
-.trend__quiet { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.7; }
+.trend__quiet { margin: 0; color: var(--muted); font-size: var(--fs-14); line-height: 1.7; }
 
-.notice { color: var(--muted); font-size: 14px; line-height: 1.7; }
-.notice__title { margin: 0 0 6px; color: var(--ink); font-size: 18px; font-weight: 600; }
+.notice { color: var(--muted); font-size: var(--fs-14); line-height: 1.7; }
+.notice__title { margin: 0 0 6px; color: var(--ink); font-size: var(--fs-18); font-weight: 600; }
 .trend :deep(.bars__value.is-current), .trend :deep(.bars__label.is-current) { font-weight: 600; }
 .notice .button { margin-top: 12px; }
 

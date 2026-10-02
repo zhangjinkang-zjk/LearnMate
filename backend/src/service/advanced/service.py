@@ -19,6 +19,11 @@ ADVANCED_UNLOCK_NODES = 10
 ADVANCED_AGENT_TIMEOUT_SECONDS = 120
 # 兜底快照多久之后允许重试。太低会把页面变成"每次进来都打一发可能失败的生成"。
 ADVANCED_FALLBACK_RETRY_SECONDS = 120
+# 进度变了之后多久允许重算。**它必须有**：重算失败时行里的 `completed_nodes` 不会更新
+# （`_run_agent_generation` 会保住原有结果），"进度变了"这个条件会一直为真；而重算在跑的
+# 那段时间对外报 `pending`（见 `_mark_refresh_in_flight`），前端据此**每 3 秒轮询一次** ——
+# 没有冷却，失败之后每次轮询都会再起一个生成作业。
+ADVANCED_PROGRESS_REFRESH_SECONDS = 120
 
 # 智能体还没返回时页面上显示的那句话。它必须说清两件事：这份任务是临时的、以及它
 # 也建立在已完成节点上 —— 否则用户只会看到一段模板文案，以为页面是写死的。
@@ -846,7 +851,13 @@ def _snapshot_age_seconds(snapshot: Any) -> float:
     return max(0.0, (datetime.now(timezone.utc) - stamp).total_seconds())
 
 
-def _snapshot_action(source: str | None, job_running: bool, age_seconds: float, force: bool = False) -> str:
+def _snapshot_action(
+    source: str | None,
+    job_running: bool,
+    age_seconds: float,
+    force: bool = False,
+    progress_changed: bool = False,
+) -> str:
     """这次请求该怎么处理快照：直接用（serve），还是顺带起一个生成作业（generate）。
 
     抽成纯函数是因为分支全是"状态 + 时间"的组合，而这几个组合正好是最容易写错的地方：
@@ -857,13 +868,26 @@ def _snapshot_action(source: str | None, job_running: bool, age_seconds: float, 
     按钮其实是空转的**：库里是一行刚写下的 `fallback` 时，冷却期内的每次请求都返回
     `serve`，按钮点一百次也拿回同一份兜底 —— 而它旁边的文案写的却是"重新生成"。
     自动轮询**不能**带 force，否则每 3 秒打一发生成。
+
+    `progress_changed`：`agent` 的结果**也是会过期的**。它照的是"生成那一刻已完成的
+    节点"出的题，学生之后再学完几个节点，手上还是那批旧任务 —— 而 `agent` 分支以前
+    无条件 `serve`，意味着**只有跨过里程碑边界（10 的整数倍）才会重算**，学生从第 1 个
+    节点做到第 9 个节点，题目一次都不变（四条真实路径的长度是 11/12/16/21，其中三条
+    连 20 都到不了，也就是永远等不到第二次生成）。所以进度一变就该重算。
+
+    **但重算必须吃冷却**。重算在跑的那段时间，对外报的是 `pending`
+    （见 `_mark_refresh_in_flight`），前端据此每 3 秒轮询一次；而重算失败时
+    `_run_agent_generation` 保住原有结果、不写回 `completed_nodes`，于是"进度变了"
+    这个条件一直为真。没有冷却，一次失败的重算会变成每 3 秒一发、永远不停。
     """
     if job_running:
         return "serve"  # 已经在生成了，等它 —— force 也不该起第二个
     if force:
         return "generate"  # 用户明确要求重来一次：不受冷却和 source 限制
     if source == "agent":
-        return "serve"
+        if not progress_changed:
+            return "serve"
+        return "generate" if age_seconds >= ADVANCED_PROGRESS_REFRESH_SECONDS else "serve"
     if source == "fallback":
         return "generate" if age_seconds >= ADVANCED_FALLBACK_RETRY_SECONDS else "serve"
     # pending 且没人跑 = 陈旧（进程重启过），接手重跑；没有快照时同理
@@ -972,6 +996,23 @@ async def _create_pending_snapshot(
     return _read_snapshot(snapshot)
 
 
+def _mark_refresh_in_flight(snapshot: dict | None, refreshing: bool) -> dict | None:
+    """重算在跑的那段时间，对外把 source 报成 `pending`。
+
+    内容还是上一版（新的那份在后台生成），但状态得如实说"正在生成" —— 因为前端只认这个
+    值：`AdvancedLearningPage.schedulePoll` 在 `task_source !== 'pending'` 时**直接返回、
+    不轮询**，`TaskBar` 也只在 pending 时显示"正在生成"。不报的话，这份重算结果要等学生
+    **再手动刷一次页面**才看得见 —— 而学生看到的就是"任务没跟着节点走"，恰好让这个修复
+    看起来没生效。
+
+    **只在确实有生成在跑时报**（起作业的这一次，或者作业还在跑）。被冷却挡下来的那次也
+    报 pending 的话，"正在生成"会变成一个永远不会消失的徽标，而它什么都没在生成。
+    """
+    if snapshot is None or not refreshing:
+        return snapshot
+    return {**snapshot, "source": "pending"}
+
+
 async def _get_or_create_snapshot(
     user_id: int,
     path_id: int,
@@ -996,15 +1037,37 @@ async def _get_or_create_snapshot(
     row = await AdvancedTaskSnapshot.filter(user_id=user_id, path_id=path_id, milestone=milestone).first()
     existing = _read_snapshot(row)
     job_running = is_generating(user_id, path_id, milestone)
-    action = _snapshot_action(existing.get("source") if existing else None, job_running, _snapshot_age_seconds(row), force)
+    try:
+        recorded_nodes = int(getattr(row, "completed_nodes", None))
+    except (TypeError, ValueError):
+        recorded_nodes = None
+    completed, _ = completed_node_count(path)
+    # 库里记的是"生成那一刻已完成几个节点"。对不上 = 学生又学完了新的节点，手上这份
+    # 任务已经跟不上进度了（为什么该重算、为什么必须带冷却：见 `_snapshot_action`）。
+    progress_changed = recorded_nodes is not None and recorded_nodes != completed
+    action = _snapshot_action(
+        existing.get("source") if existing else None,
+        job_running,
+        _snapshot_age_seconds(row),
+        force=force,
+        progress_changed=progress_changed,
+    )
+    # 换掉一份已经生成的 agent 任务集时也要报 pending：内容还是旧的，但状态在变。
+    # 兜底 / 首次生成各自有自己的 source，不走这条。
+    refresh_in_flight = (
+        existing is not None
+        and existing["source"] == "agent"
+        and progress_changed
+        and (job_running or action == "generate")
+    )
     if existing and action == "serve":
-        return existing
+        return _mark_refresh_in_flight(existing, refresh_in_flight)
 
     fallback_tasks = build_advanced_tasks(profile, path, mastery_records)
     if not existing:
         existing = await _create_pending_snapshot(user_id, path_id, milestone, fallback_tasks, path)
     await _ensure_generation(user_id, path_id, milestone, profile, path, mastery_records, fallback_tasks)
-    return existing or {
+    return _mark_refresh_in_flight(existing, refresh_in_flight) or {
         "tasks": fallback_tasks,
         "summary": _PENDING_SUMMARY,
         "source": "pending",
@@ -1044,9 +1107,31 @@ class AdvancedLearningService:
         # 节点数不足默认门槛的路径按实际长度解锁，否则其用户永远进不了进阶学习。
         unlock_nodes = effective_unlock_nodes(total)
         milestone = advanced_milestone(completed)
-        # 短路径全部完成时 advanced_milestone 仍返回 0，归入第一个里程碑。
-        if milestone == 0:
-            milestone = 1
+        # 0 就是"第一个十节点批次"，**不往上抬成 1**。
+        #
+        # 这里原来有一句 `if milestone == 0: milestone = 1`，注释写的是"短路径全部完成时
+        # 归入第一个里程碑"。代价是 0～19 全挤进同一个键：0～9 被抬成 1，而 10～19 本来
+        # 就返回 1，两段合成了一批 —— 学生从第 1 个节点做到第 19 个节点，快照键一次都
+        # 没变过，中间拿不到任何新任务。四条真实路径的长度是 11/12/16/21，其中三条连 20
+        # 都到不了，也就是**这些学生永远等不到第二次生成**。
+        #
+        # 顺带修掉一个数字：下面的 `next` 用 (milestone+1)*SIZE 算，抬成 1 之后，一个
+        # 5/12 的学生算出来是 20 —— 超过他这条路径的总长度，是个不可能的数。今天前端
+        # 一个 milestone 字段都没读，所以这不算"用户看得见的 bug"；但错就是错，哪天有人
+        # 拿它去显示进度，这就是现成的坑。
+        #
+        # 表自己的字段说明就是"每完成 10 个基础节点递增"（`AdvancedTaskSnapshot.milestone`），
+        # 0 是合法序号。副作用只有一次：改建键之后，0～9 的学生第一次进页面时会拿到一个新
+        # 键，`_create_pending_snapshot` 顺势删掉旧键的行并重算一次 —— 那正是这次想做的事。
+        #
+        # **换掉一批任务是有代价的**，记在这里免得下次当成免费的：任务 id 带着锚点节点
+        # （`path-48-node-659-project`），换一批新 id 之后，学生和教练关于旧任务的那段对话
+        # 就挂不回任何一张卡了（`PracticeDialogue` 是按 task.id 找会话的）。后端留的兜底是
+        # `_attach_practice_status` 把认领不上的会话单独返回成 `practice_history`，**但前端
+        # 没有任何地方读它**（`frontend/src` 里 grep `practice_history` 是空的），所以从学生
+        # 那边看，那段对话就是不见了。这不是这次引入的 —— 跨里程碑时本来就会发生 —— 但
+        # "每次进度变化都重算"会把它从每 10 个节点一次变成每个节点一次。要收口的话最直接的
+        # 一步是把 `practice_history` 渲染出来（后端已经准备好了）。
         path_payload = {
             "id": current_path.get("path_id"),
             "stage": current_path.get("stage"),
