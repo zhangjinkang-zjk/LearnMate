@@ -103,6 +103,11 @@ _smoke_*.py
 _verify_*.py
 _tmp_*.py
 
+# === 临时目录（覆盖率、截图、探针、回滚脚本等，都不参与构建）===
+# 注意：gitignore 只对**未跟踪**的文件生效。tmp/ 下若有文件在加这条之前
+# 就已经被跟踪了，得先 `git rm --cached <file>` 才真的不再进提交。
+tmp/
+
 # === 其他 ===
 .codebuddy/
 backend/mcp_servers.json
