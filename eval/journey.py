@@ -68,6 +68,7 @@ from backend.src.models.resource_model import GeneratedResource  # noqa: E402
 from backend.src.service.diagnosis import service as diagnosis  # noqa: E402
 from backend.src.utils.database import close_db, init_db  # noqa: E402
 from eval import subject as subject_module  # noqa: E402
+from eval.result_paths import cn, next_stem  # noqa: E402
 
 RESULTS_DIR = REPO_ROOT / "eval" / "results"
 
@@ -251,7 +252,7 @@ async def _resources(user_id: int) -> list[dict]:
     } for row in rows]
 
 
-async def run(stamp: str, student_key: str) -> dict:
+async def run(student_key: str) -> dict:
     """跑一个假学生的一整程。**每个学生自己一个合成用户**，跑完就清掉。"""
     user = await subject_module.ensure_user()
     spawned = _capture_background()
@@ -272,7 +273,7 @@ async def run(stamp: str, student_key: str) -> dict:
             "report": "",
         }
         # 落盘在下面那句清理**之前**（见 main 里那段注释）
-        artifact["report"] = str(_write_report(artifact, stamp))
+        artifact["report"] = str(_write_report(artifact))
         return artifact
     finally:
         deleted = await subject_module.purge_by_id(user.id)
@@ -408,14 +409,15 @@ def _compare_table(artifacts: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _write_report(artifact: dict, stamp: str) -> Path:
+def _write_report(artifact: dict) -> Path:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out = RESULTS_DIR / f"{stamp}-journey-{artifact.get('student') or 'student'}.md"
+    # 名字按内容取：是哪个假学生跑的这一份。同一个学生跑第二次时序号 +1。
+    out = RESULTS_DIR / f"{next_stem('入学一程', cn(artifact.get('student') or 'student'))}.md"
     out.write_text(_render(artifact), encoding="utf-8")
     return out
 
 
-def _write_compare(artifacts: list[dict], stamp: str) -> Path:
+def _write_compare(artifacts: list[dict]) -> Path:
     lines = [
         "# 入学一程 · 假学生对照（判分区分度）",
         "",
@@ -433,7 +435,8 @@ def _write_compare(artifacts: list[dict], stamp: str) -> Path:
         "",
     ]
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out = RESULTS_DIR / f"{stamp}-journey-compare.md"
+    students = "+".join(cn(a.get("student") or "?") for a in artifacts)
+    out = RESULTS_DIR / f"{next_stem('入学一程对照', students)}.md"
     out.write_text("\n".join(lines), encoding="utf-8")
     return out
 
@@ -461,14 +464,12 @@ def main() -> int:
     # 2026-10-02 那轮走到清理之后卡在 close_db 上四分钟，报告还没写 —— 数据已经删了，
     # 整轮的生成结果只剩内存里那一份，进程要是死在那儿就全丢了。
     # 所以每个学生**跑完当场落盘**（在 `run` 里，清理之前），对照表才是最后才写的。
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-
     async def _drive():
         await init_db()
         try:
             # 一个学生一个合成用户，跑完就清；**一个个来，不并发** ——
             # 这条链路上有路径生成和资源预生成，并发既压不动，日志也读不清。
-            return [await run(stamp, key) for key in students]
+            return [await run(key) for key in students]
         finally:
             await close_db()
 
@@ -476,7 +477,7 @@ def main() -> int:
     for artifact in artifacts:
         print(f"写好了：{artifact['report']}")
     if len(artifacts) > 1:
-        print(f"对照：{_write_compare(artifacts, stamp)}")
+        print(f"对照：{_write_compare(artifacts)}")
     return 0
 
 

@@ -39,6 +39,11 @@ import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+try:  # 以脚本方式运行：eval/ 就是 sys.path[0]
+    from result_paths import next_stem  # noqa: E402
+except ImportError:  # 被 import 时（backend/tests/test_review_audit.py 就属于这种）
+    from eval.result_paths import next_stem  # noqa: E402
+
 RESULTS_DIR = REPO_ROOT / "eval" / "results"
 LOG_GLOB = "eval/_*.log"
 
@@ -295,7 +300,9 @@ def main(argv: list[str] | None = None) -> int:
     print(text)
     if not args.to_stdout:
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        out = RESULTS_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}-review-audit.md"
+        # 名字按内容取：审了哪几份日志。同一批日志再审一次时序号 +1。
+        stem = next_stem("审核执行审计", "-".join(p.stem.lstrip("_") for p in logs))
+        out = RESULTS_DIR / f"{stem}.md"
         out.write_text(text, encoding="utf-8")
         print(f"写好了：{out}", file=sys.stderr)
     return 0

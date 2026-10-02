@@ -48,6 +48,10 @@ from deepeval.metrics import ConversationalGEval  # noqa: E402
 from deepeval.models import LocalModel  # noqa: E402
 from deepeval.test_case import ConversationalTestCase, MultiTurnParams, Turn  # noqa: E402
 
+try:  # 以脚本方式运行：eval/ 就是 sys.path[0]
+    from result_paths import cn, kind_glob, next_stem  # noqa: E402
+except ImportError:  # 被 import 时（backend/tests 会收集 eval/*.py）
+    from eval.result_paths import cn, kind_glob, next_stem  # noqa: E402
 from scenarios import SCENARIOS  # noqa: E402  （同目录，脚本方式运行时 eval/ 就在 sys.path[0]）
 
 ZHIBAN_PYTHON = Path(r"F:\anaconda3\envs\zhiban\python.exe")
@@ -539,21 +543,26 @@ def _transcript_text(scenario: dict, turns: list[dict], run_index: int) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _save_transcripts(picked: list[dict], runs_by_scenario: dict, stamp: str) -> None:
+def _save_transcripts(picked: list[dict], runs_by_scenario: dict, stem: str) -> None:
     """把这次跑出来的**每一段对话**都落盘。"""
     blocks = [
         _transcript_text(scenario, run["turns"], index)
         for scenario in picked
         for index, run in enumerate(runs_by_scenario[scenario["id"]], 1)
     ]
-    (RESULTS_DIR / f"{stamp}-transcripts.md").write_text(
+    (RESULTS_DIR / f"{stem}-对话原文.md").write_text(
         "\n---\n\n".join(blocks), encoding="utf-8")
 
 
-def _save_and_diff(current: dict, stamp: str) -> None:
+def _save_and_diff(current: dict, stem: str) -> None:
     """存这一次的结果，并和上一次比**通过率的变化**。"""
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    past = sorted(RESULTS_DIR.glob("*.json"))
+    # 只比**同一类**产物，且按 mtime 排序 —— 原来是 `sorted(glob("*.json"))[-1]`：
+    # 时间戳下字典序恰好等于时间序，换成内容名后不再成立（`-10` 会排到 `-2` 前）；
+    # 而且 `*.json` 会顺手捞到 resource-eval 那批，比出来的结论是假的。
+    # 这次的文件还没写，所以最后那个就是上一次。
+    past = sorted(RESULTS_DIR.glob(kind_glob("教练场景评估", ".json")),
+                  key=lambda p: p.stat().st_mtime)
     if past:
         try:
             prev = json.loads(past[-1].read_text(encoding="utf-8"))
@@ -572,7 +581,7 @@ def _save_and_diff(current: dict, stamp: str) -> None:
                     if abs(now - was) >= 0.01:
                         moves.append(f"  {sid} / {name}: {was:.0%} → {now:.0%}")
             print("\n".join(moves) if moves else "  通过率没有变化。")
-    (RESULTS_DIR / f"{stamp}.json").write_text(
+    (RESULTS_DIR / f"{stem}.json").write_text(
         json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -595,13 +604,15 @@ async def _main() -> int:
         runs_by_scenario[scenario["id"]].append(data)
 
     # 先把每一段对话落盘，再打汇总。--raw 那条路也要存 —— 它存在的意义就是"只看对话"。
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    _save_transcripts(picked, runs_by_scenario, stamp)
+    # 名字按内容取：这一次跑了哪几个场景。同一组合跑第二次时序号 +1（json 和
+    # transcripts 用**同一个 stem**，这样两份文件配得上对）。
+    stem = next_stem("教练场景评估", "+".join(cn(s["id"]) for s in picked))
+    _save_transcripts(picked, runs_by_scenario, stem)
 
     if raw_only:
         for scenario in picked:
             _print_transcript(scenario, runs_by_scenario[scenario["id"]][0]["turns"])
-        print(f"\n对话原文（全部 {len(planned)} 段）：{RESULTS_DIR / f'{stamp}-transcripts.md'}")
+        print(f"\n对话原文（全部 {len(planned)} 段）：{RESULTS_DIR / f'{stem}-对话原文.md'}")
         return 0
 
     print(f"\n跑 {len(picked)} 个场景 × {runs} 轮"
@@ -630,8 +641,8 @@ async def _main() -> int:
     if not unreliable and not unmeasured:
         print("所有判据的通过率都在门槛之上。")
 
-    _save_and_diff(results, stamp)
-    print(f"\n对话原文（全部 {len(planned)} 段）：{RESULTS_DIR / f'{stamp}-transcripts.md'}")
+    _save_and_diff(results, stem)
+    print(f"\n对话原文（全部 {len(planned)} 段）：{RESULTS_DIR / f'{stem}-对话原文.md'}")
     return 1 if (unreliable or unmeasured) else 0
 
 

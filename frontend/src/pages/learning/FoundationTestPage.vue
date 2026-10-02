@@ -1,6 +1,11 @@
 <template>
-  <div class="foundation-test-page">
+  <div class="foundation-test-page" :class="{ 'is-garden': isGardenView }">
+    <!-- **看树林那一屏不挂页面标题。** 花园已经占满整屏、自己带了一个 h1
+         「学习树林」，再压一个「学习复盘」上去就是两个主语在打架 ——
+         取舍是让花园赢（见 StudyGarden 里的说明）。门按钮跟着标题一起搬进花园的头部，
+         只是换了位置，没有消失。 -->
     <PageTitle
+      v-if="!isGardenView"
       eyebrow="FOUNDATION TEST"
       title="学习复盘"
       description="用题目测试和费曼反讲确认本章掌握情况，结果会同步到学习概览。"
@@ -9,13 +14,13 @@
            （「完成阅读，进入检查」）就跳到这里。而这里原来唯一的按钮是「回到基础学习」——
            一个指向**后面**的动作，两个阶段共用。于是整条路径都学完的学生站在这里，
            找不到去做实战任务的路，只能自己回到侧边栏猜第三个图标是干什么的。
-           现在按路径的实际状态分岔：学完 → 进阶学习；没学完 → 回去继续下一章。 -->
+           现在按路径的实际状态分岔：学完 → 进阶学习；没学完 → 回去继续下一章。
+           （去哪个目标只算一次，见脚本里的 `forwardDoor`。） -->
       <template #actions>
-        <RouterLink v-if="pathCompleted" class="button button--primary" to="/learning/advanced">
-          去做实战任务
-          <ArrowRight :size="15" />
+        <RouterLink :class="['button', forwardDoor.primary ? 'button--primary' : 'button--quiet']" :to="forwardDoor.to">
+          {{ forwardDoor.label }}
+          <ArrowRight v-if="forwardDoor.primary" :size="15" />
         </RouterLink>
-        <RouterLink v-else class="button button--quiet" to="/learning/fundamentals">继续基础学习</RouterLink>
       </template>
     </PageTitle>
 
@@ -38,9 +43,19 @@
       <StudyGarden
         v-if="!isReviewOpen"
         :nodes="learningPath.nodes || []"
-        :active-node-id="null"
+        :active-node-id="learningPath.current_node_id"
+        :path-id="learningPath.path_id"
+        :weak-points="learningPath.diagnosis?.weak_points || []"
         @select="selectNode"
-      />
+      >
+        <!-- 门按钮在花园那一屏的落点：浮在场景右上角（页面的标题让位了，它没有）。 -->
+        <template #door>
+          <RouterLink :class="['button', forwardDoor.primary ? 'button--primary' : 'button--quiet']" :to="forwardDoor.to">
+            {{ forwardDoor.label }}
+            <ArrowRight v-if="forwardDoor.primary" :size="15" />
+          </RouterLink>
+        </template>
+      </StudyGarden>
 
       <TreeReviewScene
         v-else-if="activeNode"
@@ -115,6 +130,12 @@ const activeTab = ref('')
 const testInsights = ref(createEmptyInsights())
 const masteryRecords = ref([])
 
+/**
+ * 是不是"看树林"那一屏。只有这一屏走一屏一版（`.is-garden`）——
+ * 复盘场景和费曼面板是纵向长内容，硬塞进一屏会把它们裁掉。
+ */
+const isGardenView = computed(() => Boolean(learningPath.value) && !isReviewOpen.value)
+
 const testableNodes = computed(() => (learningPath.value?.nodes || []).filter((node) => node.status !== 'locked'))
 
 // 整条路径学完没有 —— 决定头部那个按钮指向"继续基础学习"还是"去做实战任务"。
@@ -125,6 +146,14 @@ const pathCompleted = computed(() => {
   const nodes = learningPath.value?.nodes || []
   return nodes.length > 0 && nodes.every((node) => node.status === 'completed')
 })
+
+/**
+ * 「该往前走了」那一扇门去哪儿。**只在这里算一次** —— 同一个按钮在花园头部和
+ * 复盘页标题里各出现一次，两处渲染同一份结果，就不会有一天只改了一边。
+ */
+const forwardDoor = computed(() => (pathCompleted.value
+  ? { to: '/learning/advanced', label: '去做实战任务', primary: true }
+  : { to: '/learning/fundamentals', label: '继续基础学习', primary: false }))
 
 // 复盘要复的是「用户最近所在的那一章」，不是「第一个没锁的章节」。
 //
@@ -383,7 +412,33 @@ onMounted(loadPage)
 </script>
 
 <style scoped>
-.foundation-test-page { min-width: 0; }.foundation-test-page :deep(.page-heading) { margin-bottom: 22px; }.foundation-test-page :deep(.page-heading h1) { max-width: 620px; }.foundation-test-page :deep(.page-heading p) { max-width: 620px; font-size: 13px; }.foundation-test-page :deep(.path-picker) { margin-bottom: 16px; padding-bottom: 16px; }.foundation-test-page :deep(.path-picker__heading) { align-items: center; margin-bottom: 10px; }.foundation-test-page :deep(.path-picker__heading h2) { font-size: 16px; }.foundation-test-page :deep(.path-picker__heading p:last-child) { max-width: 560px; }.foundation-test-page :deep(.path-picker__list) { padding-bottom: 3px; }
+/*
+  「一屏一版」沿用学习概览那套（机制、基准为什么是 1600×920、以及三处取舍，
+  见 `OverviewPage.vue` 顶部那段长注释）。要点：`--s` 在基准视口上恰好等于 1px，
+  全页尺寸一律写成 `calc(N * var(--s))`，于是随视口等比缩放；下限 1px 让 1600×920
+  及以下的屏和改造前**逐像素相同**，那五个断点一个都不废。
+
+  比概览页简单的地方：花园这块**高度本来就是弹性的**（场景吃剩余空间），所以不需要
+  `align-content: space-between` 去分配余量，只要把高度链条打通就能撑满。
+*/
+.foundation-test-page { --s: clamp(1px, min(100vw / 1600, 100vh / 920), 1.5px); min-width: 0; }
+
+/* 高度链条：page-container(100dvh-56px) → .foundation-test-page → 花园(1fr)。
+   中间任何一环写成 auto，flex 就分不到高度，场景会塌成 0。
+
+   `min-height: 100%`（不是 `height`）：装得下时它撑满容器、场景吃掉余量；装不下时
+   它跟着内容长高、把容器顶出滚动条。**不用写断点** —— 这两种情况是同一条规则的两个分支，
+   断点只会多出一处要维护、还会在阈值附近跳变。 */
+.foundation-test-page.is-garden { display: flex; flex-direction: column; min-height: 100%; }
+.foundation-test-page.is-garden > :deep(.forest-review) { flex: 1 1 auto; min-height: 0; }
+/* 花园那一屏**通栏**：`page-container` 默认那条 `clamp(14px,2.5vh,26px) 42px …` 的内边距
+   会把绿地框成一幅挂画，左右各留一条 42px 的灰边 —— 而这一页要的是"绿地就是这一页"。
+   复盘那一屏（根节点上没有 `.is-garden`）保留内边距，它是常规的纵向文档页。
+
+   装得下就没有滚动条，装不下就老老实实滚 —— 不能用 `overflow: hidden` 把内容裁掉
+   （场景自己有 420px 下限，矮屏上一定会超）。 */
+:global(.page-container:has(.is-garden)) { box-sizing: border-box; height: 100%; padding: 0; overflow-y: auto; }
+.foundation-test-page :deep(.page-heading) { margin-bottom: 22px; }.foundation-test-page :deep(.page-heading h1) { max-width: 620px; }.foundation-test-page :deep(.page-heading p) { max-width: 620px; font-size: 13px; }.foundation-test-page :deep(.path-picker) { margin-bottom: 16px; padding-bottom: 16px; }.foundation-test-page :deep(.path-picker__heading) { align-items: center; margin-bottom: 10px; }.foundation-test-page :deep(.path-picker__heading h2) { font-size: 16px; }.foundation-test-page :deep(.path-picker__heading p:last-child) { max-width: 560px; }.foundation-test-page :deep(.path-picker__list) { padding-bottom: 3px; }
 .foundation-state { display: flex; align-items: center; gap: 13px; min-height: 104px; color: var(--accent-deep); }.foundation-state > div { flex: 1; min-width: 0; }.foundation-state strong { color: var(--ink); }.foundation-state p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }.foundation-state--error { color: #a66442; }.spin { animation: spin .8s linear infinite; }
 .test-context { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 30%); align-items: center; gap: 22px; margin-bottom: 12px; padding: 17px 20px; background: #fbfcfa; }.test-context h2 { margin: 0; font-size: 20px; line-height: 1.3; }.test-context p:last-child { max-width: 680px; margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.65; }.chapter-picker { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }.chapter-picker select { width: 100%; min-height: 39px; padding: 0 11px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); color: var(--ink); outline: none; }.chapter-picker select:focus { border-color: var(--accent-deep); }
 .test-gate { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 12px; color: var(--accent-deep); background: #f7faf3; }.test-gate > svg { flex: 0 0 auto; margin-top: 2px; }.test-gate > div { flex: 1; min-width: 0; }.test-gate .eyebrow { margin: 0 0 6px; }.test-gate h2 { margin: 0; font-size: 18px; color: var(--ink); }.test-gate p:last-child { max-width: 760px; margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }.test-gate .button { flex: 0 0 auto; margin-top: 1px; }
@@ -453,5 +508,5 @@ onMounted(loadPage)
 .test-tabs { display: none; }
 @media (max-width: 900px) { .test-controls { grid-template-columns: 1fr 1fr; }.test-path-summary { grid-column: 1 / -1; }.test-context { align-items: flex-start; flex-direction: column; gap: 10px; }.test-chapter-status { align-self: flex-start; } }
 @media (max-width: 900px) { .test-insights { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 680px) { :global(.page-container:has(.foundation-test-page)) { padding: 22px 18px 42px; }.test-controls { grid-template-columns: 1fr; gap: 13px; padding: 15px; }.test-path-summary { grid-column: auto; }.test-context h2 { font-size: 20px; }.test-gate { align-items: flex-start; padding: 15px; }.test-gate .button { width: 100%; }.test-insights, .test-entries { grid-template-columns: 1fr; }.insight-card { min-height: 100px; }.entry-copy small { white-space: normal; } }
+@media (max-width: 680px) { :global(.page-container:has(.foundation-test-page):not(:has(.is-garden))) { padding: 22px 18px 42px; }.test-controls { grid-template-columns: 1fr; gap: 13px; padding: 15px; }.test-path-summary { grid-column: auto; }.test-context h2 { font-size: 20px; }.test-gate { align-items: flex-start; padding: 15px; }.test-gate .button { width: 100%; }.test-insights, .test-entries { grid-template-columns: 1fr; }.insight-card { min-height: 100px; }.entry-copy small { white-space: normal; } }
 </style>

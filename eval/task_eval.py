@@ -112,6 +112,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from eval.result_paths import cn, next_stem  # noqa: E402
+
 RESULTS_DIR = REPO_ROOT / "eval" / "results"
 
 ROUNDS = 3
@@ -1120,10 +1122,12 @@ async def main_async(args) -> int:
 
     summary = summarise(records)
     labels = _learner_labels(records)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
+    # 名字按内容取：跑了哪几个学习者、每个几轮。同一组合跑第二次时序号 +1。
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    json_path = RESULTS_DIR / f"{stamp}-task-eval.json"
-    md_path = RESULTS_DIR / f"{stamp}-task-eval.md"
+    stem = next_stem("进阶任务评估", "+".join(cn(k) for k in learner_keys) or "学习者",
+                     f"{args.rounds}轮")
+    json_path = RESULTS_DIR / f"{stem}.json"
+    md_path = RESULTS_DIR / f"{stem}.md"
     json_path.write_text(
         json.dumps({"summary": summary, "records": records}, ensure_ascii=False, indent=2),
         encoding="utf-8",

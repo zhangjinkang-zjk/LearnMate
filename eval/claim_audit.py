@@ -42,6 +42,7 @@ if str(REPO_ROOT) not in sys.path:
 import yaml  # noqa: E402
 
 from backend.src.utils.json_parser import parse_llm_json  # noqa: E402
+from eval.result_paths import kind_glob, next_stem  # noqa: E402
 
 RESULTS_DIR = REPO_ROOT / "eval" / "results"
 REFERENCE_DIR = REPO_ROOT / "eval" / "reference"
@@ -297,16 +298,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.artifact:
         json_path = Path(args.artifact)
     else:
-        candidates = sorted(RESULTS_DIR.glob("*-resource-eval.json"),
+        # 按**前缀**找，不是 `*-resource-eval.json` —— 内容命名之后序号在最后，
+        # 名字不再以 `-resource-eval.json` 结尾。排序照旧靠 mtime（时间戳没了，字典序
+        # 不再等于时间序，`-10` 会排到 `-2` 前面）。
+        candidates = sorted(RESULTS_DIR.glob(kind_glob("资料生成评估", ".json")),
                             key=lambda p: p.stat().st_mtime, reverse=True)
         if not candidates:
-            print("没有找到 *-resource-eval.json，先跑 eval/resource_eval.py", file=sys.stderr)
+            print("没有找到资料生成评估-*.json，先跑 eval/resource_eval.py", file=sys.stderr)
             return 1
         json_path = candidates[0]
 
     audits, summary, claims = asyncio.run(run(json_path))
     text = render(summary, audits, claims, json_path.name)
-    out = RESULTS_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}-claim-audit.md"
+    # 名字按内容取：这次审出了几条断言。审的是哪一份 resource-eval 写在正文抬头里
+    # （那里有 json 文件名）—— 塞进文件名会变成 `...-1-1` 两个连着的序号，读不出来。
+    stem = next_stem("材料真实性审计", f"{len(claims)}条断言")
+    out = RESULTS_DIR / f"{stem}.md"
     out.write_text(text, encoding="utf-8")
     print(text)
     print(f"写好了：{out}", file=sys.stderr)

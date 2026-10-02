@@ -53,6 +53,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from backend.src.utils.database import close_db, init_db  # noqa: E402
 from eval import subject as subject_module  # noqa: E402
+from eval.result_paths import cn, next_stem  # noqa: E402
 
 RESULTS_DIR = REPO_ROOT / "eval" / "results"
 
@@ -313,14 +314,15 @@ async def run(rounds: int) -> tuple[list[dict], str]:
     finally:
         deleted = await subject_module.purge_by_id(user.id)
         print(f"[resource-eval] 已清理合成学生的数据：{deleted}", file=sys.stderr)
-    return records, time.strftime("%Y%m%d-%H%M%S")
+    # 名字按内容取：主题固定，区分点是资源类型组合；撞名（同组合跑第二次）时序号 +1。
+    return records, next_stem("资料生成评估", "+".join(cn(t) for t in RESOURCE_TYPES))
 
 
-def _write(records: list[dict], stamp: str) -> tuple[Path, Path]:
+def _write(records: list[dict], stem: str) -> tuple[Path, Path]:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     summary = summarize(records)
-    json_path = RESULTS_DIR / f"{stamp}-resource-eval.json"
-    md_path = RESULTS_DIR / f"{stamp}-resource-eval.md"
+    json_path = RESULTS_DIR / f"{stem}.json"
+    md_path = RESULTS_DIR / f"{stem}.md"
     # 正文和事件一起落盘：**判词要能对证**，而判定那一步要重跑时不能再花一次生成的钱。
     json_path.write_text(
         json.dumps({"topic": FIXED_TOPIC, "types": list(RESOURCE_TYPES),
@@ -349,8 +351,8 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             await close_db()
 
-    records, stamp = asyncio.run(_drive())
-    md_path, json_path = _write(records, stamp)
+    records, stem = asyncio.run(_drive())
+    md_path, json_path = _write(records, stem)
     print(render(summarize(records), records, json_path.name))
     print(f"写好了：{md_path}", file=sys.stderr)
     return 0

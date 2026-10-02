@@ -107,6 +107,11 @@ class _FakeQuery:
     def prefetch_related(self, *args, **kwargs):
         return self
 
+    def order_by(self, *fields):
+        # `PortraitRadarHistory.filter(...).order_by("-snapshot_at").first()` 会走到这里。
+        # 假数据只有一行或空，排序没有意义 —— 原样返回即可。
+        return self
+
     async def all(self):
         return list(self._rows)
 
@@ -125,6 +130,16 @@ class _FakeModel:
     def filter(self, **kwargs):
         self.filter_calls.append(kwargs)
         return _FakeQuery(self.rows)
+
+    async def create(self, **kwargs):
+        # `PortraitRadarHistory.create(...)` 走的是"快照变了就落一条"那条（service.py:1310）。
+        # 假实现只需要不炸，并把新行记下来 —— 这样"这一轮到底写没写快照"是可断言的。
+        import types
+        # `_format` 会读 `previous.snapshot_at` 和六个维度值。六个维度由调用方给，
+        # `snapshot_at` 得我们补 —— 否则 `_format` 一取就 AttributeError。
+        row = types.SimpleNamespace(snapshot_at=datetime.now(timezone.utc), **kwargs)
+        self.rows.append(row)
+        return row
 
 
 class _FakeUser:
@@ -156,6 +171,7 @@ class _FakeExamRecord:
 def _patch_or_models(monkeypatch, exam_records, event_times):
     """把 _compute_locked 依赖的 ORM 全部换成假实现"""
     import backend.src.models.exam_model as exam_model
+    import backend.src.models.portrait_radar_history_model as radar_history_model
     import backend.src.models.portrait_radar_model as radar_model
 
     learning_event = _FakeModel([type("E", (), {"created_at": t})() for t in event_times])
@@ -164,6 +180,12 @@ def _patch_or_models(monkeypatch, exam_records, event_times):
     monkeypatch.setattr(exam_model, "ExamRecord", _FakeModel(exam_records))
     monkeypatch.setattr(exam_model, "KnowledgeMastery", _FakeModel([]))
     monkeypatch.setattr(radar_model, "PortraitRadar", _FakeModel([_FakeRadar()]))
+    # `PortraitRadarHistory` 是**在函数内部**导入的（见 service.py 里那几处
+    # `from ...portrait_radar_history_model import PortraitRadarHistory`），所以
+    # patch `service` 模块上的属性没用 —— 得 patch 它的**源模块**，让那次 import
+    # 拿到假实现。不补这一条，`compute()` 会去连真库，抛
+    # `default_connection for PortraitRadarHistory cannot be None`。
+    monkeypatch.setattr(radar_history_model, "PortraitRadarHistory", _FakeModel([]))
     return learning_event
 
 
