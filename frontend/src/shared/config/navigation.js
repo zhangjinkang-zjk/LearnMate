@@ -31,7 +31,6 @@ export const learningNavigationGroups = [
 
 export const secondaryNavigation = [
   { label: '资料库', to: '/resources', icon: Library },
-  { label: '学习任务', to: '/learning/assignments', icon: SquareCheck },
 ]
 
 export const utilityNavigation = [{ label: '设置', to: '/settings', icon: Settings }]

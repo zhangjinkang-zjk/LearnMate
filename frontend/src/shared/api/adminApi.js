@@ -25,9 +25,3 @@ export const adminApi = {
   deleteUser: (id) => request('delete', `/admin/users/${id}`, { data: { confirm: true } }),
   push: (data) => request('post', '/admin/resource-pushes', { data }),
 }
-
-export const assignmentApi = {
-  list: () => request('get', '/study/assignments'),
-  resource: (id) => request('get', `/resource/${id}`),
-  complete: (id) => request('post', `/study/assignments/${id}/complete`),
-}

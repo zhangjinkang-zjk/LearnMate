@@ -1,6 +1,6 @@
 <template>
   <div>
-    <PageTitle eyebrow="通知" title="不会错过重要进展" description="这里会显示学习任务、路径和系统提醒。" />
+    <PageTitle eyebrow="通知" title="不会错过重要进展" description="这里会显示资源推荐、学习路径和系统提醒。" />
     <section class="notification-panel surface">
       <header class="notification-toolbar">
         <span>{{ unreadLabel }}</span>
@@ -32,15 +32,59 @@
         </button>
       </template>
     </section>
+    <ActionDialog v-if="isResourceOpen" :title="resource?.topic || '推荐资源'" @close="closeResource">
+      <p v-if="isResourceLoading" role="status">正在读取资源…</p>
+      <p v-else-if="resourceError" role="alert">{{ resourceError }} <button class="notification-action" type="button" @click="loadLinkedResource">重试</button></p>
+      <ResourceContent v-else-if="resource" :resource="resource" />
+    </ActionDialog>
   </div>
 </template>
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import PageTitle from '@/shared/ui/PageTitle.vue'
 import { notificationApi } from '@/shared/api/notificationApi'
+import { resourceApi } from '@/shared/api/resourceApi'
+import ActionDialog from '@/shared/ui/ActionDialog.vue'
+import ResourceContent from '@/features/resources/ResourceContent.vue'
 
 const router = useRouter()
+const route = useRoute()
+const resource = ref(null)
+const isResourceOpen = ref(false)
+const isResourceLoading = ref(false)
+const resourceError = ref('')
+let resourceRequest = 0
+
+async function loadLinkedResource() {
+  const id = Number(route.query.resource)
+  if (!Number.isSafeInteger(id) || id <= 0) return
+  const request = ++resourceRequest
+  isResourceOpen.value = true
+  isResourceLoading.value = true
+  resourceError.value = ''
+  resource.value = null
+  try {
+    const result = await resourceApi.get(id)
+    if (request === resourceRequest) resource.value = result
+  } catch (error) {
+    if (request === resourceRequest) resourceError.value = error.response?.data?.detail || error.message || '资源已下架或暂时无法查看'
+  } finally {
+    if (request === resourceRequest) isResourceLoading.value = false
+  }
+}
+
+async function closeResource() {
+  resourceRequest++
+  isResourceOpen.value = false
+  const { resource: resourceId, ...query } = route.query
+  await router.replace({ query })
+}
+watch(() => route.query.resource, async () => {
+  resourceRequest++
+  isResourceOpen.value = false
+  await loadLinkedResource()
+}, { immediate: true })
 const notifications = ref([])
 const unreadCount = ref(0)
 const isLoading = ref(true)
