@@ -109,6 +109,7 @@ function plantStyle(index, node) {
     '--y': position.y,
     '--size': size,
     '--tilt': `${position.tilt}deg`,
+    '--depth-order': Math.round(100 - position.y),
   }
 }
 
@@ -174,9 +175,9 @@ const FIELD_POINTS = [
 .garden-scene__furrow--one { right: -5%; bottom: 15%; transform: rotate(-4deg); }.garden-scene__furrow--two { bottom: 2%; left: -7%; transform: rotate(3deg); }
 .garden-scene__path { position: absolute; z-index: -1; bottom: -23%; left: 48%; width: 15%; height: 65%; border: 1px solid rgba(176,139,92,.55); border-radius: 50% 47% 0 0; background: linear-gradient(105deg, rgba(188,148,98,.62), rgba(218,191,145,.78) 48%, rgba(186,143,94,.52)); box-shadow: inset 5px 0 0 rgba(250,235,192,.18); transform: rotate(8deg); opacity: .74; }
 
-.garden-plant { position: absolute; z-index: 1; bottom: calc(5% + var(--y) * .78%); left: calc(var(--x) * 1%); display: block; width: clamp(58px, calc(42px + var(--size) * 92px), 124px); aspect-ratio: 180 / 220; padding: 0; border: 0; background: transparent; color: var(--ink); cursor: pointer; touch-action: manipulation; transform: translateX(-50%) rotate(var(--tilt)); transform-origin: 50% 100%; transition: transform 180ms ease, filter 180ms ease; }
-.garden-plant :deep(.forest-tree) { height: 100%; }.garden-plant:hover:not(:disabled) { z-index: 3; filter: saturate(1.12); transform: translateX(-50%) translateY(-7px) rotate(var(--tilt)) scale(1.04); }.garden-plant:focus-visible { z-index: 4; outline: 2px solid var(--accent-deep); outline-offset: 4px; }
-.garden-plant.is-active { z-index: 3; filter: saturate(1.12); }.garden-plant.is-active::before { position: absolute; z-index: -1; right: 6%; bottom: 4%; left: 6%; height: 22%; border: 1px dashed #507950; border-radius: 50%; background: #d4e5c9; content: ''; animation: garden-ground-pulse 1.8s ease-out infinite; }
+.garden-plant { position: absolute; z-index: calc(1 + var(--depth-order)); bottom: calc(5% + var(--y) * .78%); left: calc(var(--x) * 1%); display: block; width: clamp(58px, calc(42px + var(--size) * 92px), 124px); aspect-ratio: 180 / 220; padding: 0; border: 0; background: transparent; color: var(--ink); cursor: pointer; touch-action: manipulation; transform: translateX(-50%) rotate(var(--tilt)); transform-origin: 50% 100%; transition: transform 180ms ease, filter 180ms ease; }
+.garden-plant :deep(.forest-tree) { height: 100%; pointer-events: none; }.garden-plant:hover:not(:disabled) { z-index: 120; filter: saturate(1.12); transform: translateX(-50%) translateY(-7px) rotate(var(--tilt)) scale(1.04); }.garden-plant:focus-visible { z-index: 121; outline: 2px solid var(--accent-deep); outline-offset: 4px; }
+.garden-plant.is-active { z-index: 122; filter: saturate(1.12); }.garden-plant.is-active::before { position: absolute; z-index: -1; right: 6%; bottom: 4%; left: 6%; height: 22%; border: 1px dashed #507950; border-radius: 50%; background: #d4e5c9; content: ''; animation: garden-ground-pulse 1.8s ease-out infinite; }
 .garden-plant:disabled { cursor: default; opacity: .66; }.garden-plant__label { position: absolute; z-index: 4; right: 50%; bottom: -33px; display: grid; width: max-content; max-width: 142px; gap: 1px; overflow: hidden; color: #355438; font-size: 10px; font-weight: 800; line-height: 1.3; pointer-events: none; text-align: center; text-overflow: ellipsis; transform: translateX(50%); white-space: nowrap; }.garden-plant__label i { color: #6d8d65; font-size: 8px; font-style: normal; font-weight: 700; }.garden-plant:hover:not(:disabled) .garden-plant__label,.garden-plant.is-active .garden-plant__label { color: #1f5638; }.garden-plant.has-label-above .garden-plant__label { bottom: calc(100% + 7px); }
 .garden-plant__lock { position: absolute; top: 43%; right: 50%; color: #7d857d; font-size: 13px; letter-spacing: 2px; pointer-events: none; transform: translateX(50%); }
 .garden-scene__hint { position: absolute; right: 17px; bottom: 13px; margin: 0; color: #537451; font-size: 10px; }.garden-scene__more { position: absolute; top: 14px; right: 15px; margin: 0; color: #5f7e5f; font-size: 11px; font-weight: 800; }
