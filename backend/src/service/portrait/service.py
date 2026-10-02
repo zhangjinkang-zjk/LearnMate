@@ -1175,12 +1175,46 @@ def _persistence_score(timestamps, cutoff_date, window_days: int = 30) -> int:
 class PortraitRadarService:
 
     @staticmethod
-    async def compute(user_id: int) -> dict:
-        async with _radar_compute_lock(user_id):
-            return await PortraitRadarService._compute_locked(user_id)
+    async def capture_test_baseline(user_id: int) -> bool:
+        """在一次测试的首个有效作答前保存当前能力状态。
+
+        雷达分数是累计正确率，单次作答有时不会改变四舍五入后的整数分。若只在
+        分数变化时写历史，用户完成测试后既看不到更新，也没有可对比的“上次”。
+        这里由作答流程在写入答案前调用，确保“上次”始终表示本轮测试开始前的状态。
+        """
+        from backend.src.models.portrait_radar_history_model import PortraitRadarHistory
+        from backend.src.models.portrait_radar_model import PortraitRadar
+
+        radar = await PortraitRadar.filter(user_id=user_id).first()
+        if not radar:
+            return False
+
+        current_values = PortraitRadarService._dimension_values(radar)
+        latest = await PortraitRadarHistory.filter(user_id=user_id).order_by("-snapshot_at").first()
+        if latest and PortraitRadarService._dimension_values(latest) == current_values:
+            return False
+
+        await PortraitRadarHistory.create(user_id=user_id, **current_values)
+        return True
 
     @staticmethod
-    async def _compute_locked(user_id: int) -> dict:
+    def _dimension_values(radar) -> dict[str, int]:
+        return {
+            "memory": radar.memory,
+            "understanding": radar.understanding,
+            "application": radar.application,
+            "analysis": radar.analysis,
+            "breadth": radar.breadth,
+            "persistence": radar.persistence,
+        }
+
+    @staticmethod
+    async def compute(user_id: int, *, record_history: bool = True) -> dict:
+        async with _radar_compute_lock(user_id):
+            return await PortraitRadarService._compute_locked(user_id, record_history=record_history)
+
+    @staticmethod
+    async def _compute_locked(user_id: int, *, record_history: bool = True) -> dict:
         """从答题数据实时计算六维雷达分数并写入 PortraitRadar 表"""
         from datetime import datetime, timedelta
         from backend.src.models.exam_model import ExamRecord, ExamQuestion, KnowledgeMastery
@@ -1260,15 +1294,8 @@ class PortraitRadarService:
             if not radar:
                 raise RuntimeError(f"无法创建用户 {user_id} 的画像雷达记录")
 
-        if had_radar:
-            previous_values = {
-                "memory": radar.memory,
-                "understanding": radar.understanding,
-                "application": radar.application,
-                "analysis": radar.analysis,
-                "breadth": radar.breadth,
-                "persistence": radar.persistence,
-            }
+        if had_radar and record_history:
+            previous_values = PortraitRadarService._dimension_values(radar)
             current_values = {
                 "memory": memory,
                 "understanding": understanding,
@@ -1278,7 +1305,9 @@ class PortraitRadarService:
                 "persistence": persistence,
             }
             if previous_values != current_values:
-                await PortraitRadarHistory.create(user_id=user_id, **previous_values)
+                latest = await PortraitRadarHistory.filter(user_id=user_id).order_by("-snapshot_at").first()
+                if not latest or PortraitRadarService._dimension_values(latest) != previous_values:
+                    await PortraitRadarHistory.create(user_id=user_id, **previous_values)
 
         radar.memory = memory
         radar.understanding = understanding

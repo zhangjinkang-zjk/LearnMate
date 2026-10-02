@@ -597,6 +597,22 @@ class ExamService:
         existing = await ExamRecord.filter(
             user_id=user_id, session_id=sid, question_id=question_id
         ).order_by("-id").first()
+
+        # 第一题落库前保存测试基线。这样“上次能力画像”对应测试开始时的状态，
+        # 而不是碰巧发生整数分变化的某一题；重复提交已判分题不会重复建快照。
+        is_first_scored_answer = existing is None or existing.is_correct is None
+        if is_first_scored_answer:
+            session_has_scores = await ExamRecord.filter(
+                user_id=user_id,
+                session_id=sid,
+                is_correct__not_isnull=True,
+            ).exists()
+            if not session_has_scores:
+                try:
+                    await PortraitRadarService.capture_test_baseline(user_id)
+                except Exception:
+                    logger.exception("测试雷达基线保存失败 user_id=%s session_id=%s", user_id, sid)
+
         if existing:
             existing.user_answer = user_answer
             existing.is_correct = is_correct
@@ -649,7 +665,8 @@ class ExamService:
             logger.exception("答题后画像同步失败 user_id=%s", user_id)
 
         try:
-            await PortraitRadarService.compute(user_id)
+            # 本轮测试的基线已在首题前保存；逐题重算只更新当前雷达，不能用中间值覆盖基线。
+            await PortraitRadarService.compute(user_id, record_history=False)
             await PortraitRadarService.sync_to_portrait(user_id)
         except Exception:
             logger.exception("雷达即时刷新失败 user_id=%s", user_id)
