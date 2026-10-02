@@ -80,14 +80,14 @@ const curatedRecommendations = [
 ]
 const typeLabel = (type) => ({ document: '文档', reading: '阅读材料', video: '视频', external_video: '视频', code: '代码模板', template: '代码模板', exercise: '练习题', case: '案例' }[type] || '学习材料')
 const difficultyLabel = (resource) => resource.difficulty || resource.level || ''
-const normalize = (item) => {
+const normalize = (item, { requireId = true } = {}) => {
   const resourceId = item?.resource_id ?? item?.id
   const topic = String(item?.topic || item?.title || '').trim()
-  if (!resourceId || !topic) return null
-  return { ...item, resource_id: resourceId, topic, match_reason: item.match_reason || item.reason || '', source_label: item.source_label || item.source || '', is_read: Boolean(item.is_read), favorited: Boolean(item.favorited) }
+  if ((!resourceId && requireId) || !topic) return null
+  return { ...item, resource_id: resourceId || item.key || item.url || topic, topic, match_reason: item.match_reason || item.reason || '', source_label: item.source_label || item.source || '', is_read: Boolean(item.is_read), favorited: Boolean(item.favorited) }
 }
 const filteredResources = computed(() => resources.value.filter((item) => { const typeMatch = activeType.value === 'all' || item.resource_type === activeType.value || (activeType.value === 'video' && item.resource_type === 'external_video') || (activeType.value === 'code' && item.resource_type === 'template'); const needle = searchTerm.value.toLowerCase(); return typeMatch && (!needle || [item.topic, item.match_reason, item.source_label, typeLabel(item.resource_type)].join(' ').toLowerCase().includes(needle)) }))
-const recommendedResources = computed(() => publicResources.value.length ? publicResources.value.slice(0, 4) : curatedRecommendations)
+const recommendedResources = computed(() => publicResources.value.length ? publicResources.value : curatedRecommendations)
 const countByType = (type) => type === 'all' ? resources.value.length : resources.value.filter((item) => item.resource_type === type || (type === 'video' && item.resource_type === 'external_video') || (type === 'code' && item.resource_type === 'template')).length
 const unreadCount = computed(() => resources.value.filter((item) => !item.is_read).length); const favoriteCount = computed(() => resources.value.filter((item) => item.favorited).length)
 async function loadResources() {
@@ -98,7 +98,7 @@ async function loadResources() {
     const [resourceResult, overviewResult, publicResult] = await Promise.allSettled([resourceApi.list(), learningApi.getOverview(), resourceApi.list('public')])
     if (resourceResult.status === 'rejected') throw resourceResult.reason
     resources.value = (Array.isArray(resourceResult.value) ? resourceResult.value : []).map(normalize).filter(Boolean)
-    publicResources.value = publicResult.status === 'fulfilled' ? (Array.isArray(publicResult.value) ? publicResult.value : []).map(normalize).filter(Boolean) : []
+    publicResources.value = publicResult.status === 'fulfilled' ? (Array.isArray(publicResult.value) ? publicResult.value : []).map((item) => normalize(item, { requireId: false })).filter(Boolean) : []
     if (overviewResult.status === 'fulfilled') {
       const overview = unwrap(overviewResult.value) || {}
       Object.assign(profile, { direction: overview.profile?.direction || overview.subjects?.[0]?.name || '', goal: overview.profile?.goal || overview.goals?.[0]?.title || '', stage: overview.diagnosis?.stage || '' })

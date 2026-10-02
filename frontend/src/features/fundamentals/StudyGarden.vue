@@ -135,18 +135,19 @@ function treeVariant(node, offset) {
 }
 
 const FIELD_POINTS = [
-  { x: 13, y: 16, size: 0.8, tilt: -1.1, label: 'above' },
-  { x: 35, y: 21, size: 0.9, tilt: 1.3, label: 'above' },
-  { x: 59, y: 15, size: 0.76, tilt: -0.8, label: 'above' },
-  { x: 84, y: 24, size: 0.86, tilt: 1.1, label: 'above' },
-  { x: 22, y: 37, size: 0.7, tilt: 0.8, label: 'above' },
-  { x: 46, y: 33, size: 0.82, tilt: -1.4, label: 'above' },
-  { x: 70, y: 40, size: 0.7, tilt: 1.2, label: 'above' },
-  { x: 92, y: 35, size: 0.76, tilt: -0.7, label: 'above' },
-  { x: 11, y: 57, size: 0.62, tilt: 1.2, label: 'above' },
-  { x: 34, y: 53, size: 0.7, tilt: -1.1, label: 'above' },
-  { x: 61, y: 59, size: 0.62, tilt: 0.9, label: 'above' },
-  { x: 81, y: 52, size: 0.68, tilt: -1.3, label: 'above' },
+  // The chapter sequence travels from the distant ridge toward the foreground.
+  { x: 13, y: 57, size: 0.68, tilt: -1.1, label: 'above' },
+  { x: 36, y: 62, size: 0.76, tilt: 1.3, label: 'above' },
+  { x: 61, y: 55, size: 0.64, tilt: -0.8, label: 'above' },
+  { x: 85, y: 60, size: 0.72, tilt: 1.1, label: 'above' },
+  { x: 20, y: 40, size: 0.74, tilt: 0.8, label: 'above' },
+  { x: 45, y: 46, size: 0.82, tilt: -1.4, label: 'above' },
+  { x: 69, y: 38, size: 0.7, tilt: 1.2, label: 'above' },
+  { x: 91, y: 44, size: 0.76, tilt: -0.7, label: 'above' },
+  { x: 12, y: 24, size: 0.78, tilt: 1.2, label: 'above' },
+  { x: 37, y: 30, size: 0.86, tilt: -1.1, label: 'above' },
+  { x: 62, y: 22, size: 0.74, tilt: 0.9, label: 'above' },
+  { x: 84, y: 28, size: 0.82, tilt: -1.3, label: 'above' },
 ]
 </script>
 
