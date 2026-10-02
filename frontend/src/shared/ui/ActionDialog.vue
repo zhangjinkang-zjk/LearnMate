@@ -1,18 +1,28 @@
 <template>
   <Teleport to="body">
-    <dialog ref="dialog" class="action-dialog" :aria-label="title" @cancel="cancel" @close="emit('close')">
-      <header><h2>{{ title }}</h2><button type="button" :disabled="busy" aria-label="关闭对话框" @click="dialog.close()">×</button></header>
-      <slot />
+    <dialog ref="dialog" class="action-dialog" :aria-label="title" @cancel.prevent="requestClose" @close="emit('close')">
+      <header><h2>{{ title }}</h2><button type="button" :disabled="busy" aria-label="关闭对话框" @click="requestClose">×</button></header>
+      <div v-if="isConfirmingClose" class="discard-confirmation" role="alert">
+        <p>还有未保存的修改，确定放弃吗？</p>
+        <div><button class="button button--quiet" type="button" autofocus @click="isConfirmingClose = false">继续编辑</button><button class="button button--primary" type="button" @click="dialog.close()">放弃修改</button></div>
+      </div>
+      <slot v-else />
     </dialog>
   </Teleport>
 </template>
 <script setup>
 import { onMounted, onBeforeUnmount, ref } from 'vue'
-const props = defineProps({ title: { type: String, required: true }, busy: Boolean })
+const props = defineProps({ title: { type: String, required: true }, busy: Boolean, isDirty: Boolean })
 const emit = defineEmits(['close'])
 const dialog = ref(null)
+const isConfirmingClose = ref(false)
 const previousFocus = document.activeElement
-function cancel(event) { if (props.busy) event.preventDefault() }
+function requestClose() {
+  if (props.busy) return
+  if (props.isDirty) { isConfirmingClose.value = true; return }
+  dialog.value.close()
+}
+defineExpose({ requestClose })
 onMounted(() => dialog.value.showModal())
 onBeforeUnmount(() => previousFocus?.focus?.())
 </script>
@@ -24,5 +34,7 @@ h2 { margin:0; font-size:22px; overflow-wrap:anywhere; }
 header button { flex-shrink:0; border:0; background:var(--soft); color:var(--ink); border-radius:6px; width:32px; height:32px; font-size:24px; }
 button:focus-visible { outline:2px solid var(--accent-deep); outline-offset:3px; }
 button:disabled { opacity:.5; cursor:wait; }
+.discard-confirmation p { color:var(--muted); font-size:14px; line-height:1.8; }
+.discard-confirmation > div { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:12px; margin-top:24px; }
 @media(max-width:560px) { .action-dialog { padding:18px; } }
 </style>
