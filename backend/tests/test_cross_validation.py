@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.src.ai_core import agent_names, resource_graph
+from backend.src.ai_core import agent_names, resource_document, resource_graph
 
 TITLES = ("语义边界", "窗口重叠", "召回精度")
 
@@ -33,7 +33,7 @@ def _document(*sections: tuple[str, str]) -> str:
 
 
 def _two_sections() -> list[tuple[str, str]]:
-    return resource_graph.split_document_sections(_document(("甲", "A。"), ("乙", "B。")))
+    return resource_document.split_document_sections(_document(("甲", "A。"), ("乙", "B。")))
 
 
 class _FakeLlm:
@@ -82,13 +82,13 @@ def _install(monkeypatch, llm):
     async def no_kb(*_args, **_kwargs):
         return "暂无相关知识库资料"
 
-    monkeypatch.setattr(resource_graph, "llm", llm)
-    monkeypatch.setattr(resource_graph, "kb_search", no_kb)
+    monkeypatch.setattr(resource_document, "llm", llm)
+    monkeypatch.setattr(resource_document, "kb_search", no_kb)
 
 
 async def _generate(llm, monkeypatch, events=None, **kwargs):
     _install(monkeypatch, llm)
-    return await resource_graph.generate_document_parallel(
+    return await resource_document.generate_document_parallel(
         "文档切分",
         sections=list(TITLES),
         section_count=len(TITLES),
@@ -106,22 +106,22 @@ def _cross_events(events) -> list[dict]:
 
 def test_splits_real_document_into_sections():
     doc = _document(("语义边界", "按语义切。"), ("窗口重叠", "留重叠区。"), ("召回精度", "看召回。"))
-    sections = resource_graph.split_document_sections(doc)
+    sections = resource_document.split_document_sections(doc)
     assert [title for title, _ in sections] == ["语义边界", "窗口重叠", "召回精度"]
     assert sections[0][1] == "按语义切。"
 
 
 def test_single_section_and_empty_documents_have_nothing_to_cross_check():
-    assert resource_graph.split_document_sections("") == []
-    assert resource_graph.split_document_sections("   ") == []
+    assert resource_document.split_document_sections("") == []
+    assert resource_document.split_document_sections("   ") == []
     # 真实成稿只有一个小节时，H1 标题不该被当成第二个"章节"
-    assert resource_graph.split_document_sections("# 主题\n\n## 唯一小节\n正文。") == []
+    assert resource_document.split_document_sections("# 主题\n\n## 唯一小节\n正文。") == []
 
 
 def test_preamble_before_the_first_section_is_kept():
     """H1 标题后面若还跟着成段正文，那是一段没有小标题的前言，不能丢。"""
     doc = "# 标题\n\n" + ("前言正文。" * 30) + "\n\n## 第一节\n甲。\n\n## 第二节\n乙。\n"
-    sections = resource_graph.split_document_sections(doc)
+    sections = resource_document.split_document_sections(doc)
     assert sections[0][0] == "前言"
     assert [title for title, _ in sections[1:]] == ["第一节", "第二节"]
 
@@ -138,10 +138,10 @@ async def test_reports_cross_section_issues(monkeypatch):
         ],
     }
     fake = _FakeLlm(json.dumps(payload, ensure_ascii=False))
-    monkeypatch.setattr(resource_graph, "llm", fake)
+    monkeypatch.setattr(resource_document, "llm", fake)
 
-    issues = await resource_graph.review_cross_section_consistency(
-        resource_graph.split_document_sections(_document(("甲", "A。"), ("乙", "B。"), ("丙", "C。"))),
+    issues = await resource_document.review_cross_section_consistency(
+        resource_document.split_document_sections(_document(("甲", "A。"), ("乙", "B。"), ("丙", "C。"))),
         topic="文档切分",
         user_id=7,
     )
@@ -153,43 +153,43 @@ async def test_reports_cross_section_issues(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_clean_document_reports_no_issues(monkeypatch):
-    monkeypatch.setattr(resource_graph, "llm", _FakeLlm(CLEAN))
+    monkeypatch.setattr(resource_document, "llm", _FakeLlm(CLEAN))
 
-    assert await resource_graph.review_cross_section_consistency(_two_sections(), topic="t") == []
+    assert await resource_document.review_cross_section_consistency(_two_sections(), topic="t") == []
 
 
 @pytest.mark.asyncio
 async def test_model_failure_returns_none_instead_of_empty(monkeypatch):
     """None 和 [] 必须分得开：一次超时被当成"没问题"就等于静默漏检。"""
-    monkeypatch.setattr(resource_graph, "llm", _BoomLlm())
+    monkeypatch.setattr(resource_document, "llm", _BoomLlm())
 
-    assert await resource_graph.review_cross_section_consistency(_two_sections(), topic="t") is None
+    assert await resource_document.review_cross_section_consistency(_two_sections(), topic="t") is None
 
 
 @pytest.mark.asyncio
 async def test_non_json_response_is_a_failure_not_a_pass(monkeypatch):
     """模型回一段散文（没按格式给 JSON）时，同样不能当成"通过"。"""
-    monkeypatch.setattr(resource_graph, "llm", _FakeLlm("抱歉，我无法完成这个任务。"))
+    monkeypatch.setattr(resource_document, "llm", _FakeLlm("抱歉，我无法完成这个任务。"))
 
-    assert await resource_graph.review_cross_section_consistency(_two_sections(), topic="t") is None
+    assert await resource_document.review_cross_section_consistency(_two_sections(), topic="t") is None
 
 
 @pytest.mark.asyncio
 async def test_malformed_issues_payload_is_tolerated(monkeypatch):
-    monkeypatch.setattr(resource_graph, "llm", _FakeLlm('{"has_issues": true, "issues": "不是数组"}'))
+    monkeypatch.setattr(resource_document, "llm", _FakeLlm('{"has_issues": true, "issues": "不是数组"}'))
 
-    assert await resource_graph.review_cross_section_consistency(_two_sections(), topic="t") == []
+    assert await resource_document.review_cross_section_consistency(_two_sections(), topic="t") == []
 
 
 @pytest.mark.asyncio
 async def test_non_dict_issues_are_dropped(monkeypatch):
     """列表里混进字符串/数字时，过滤掉而不是让它们流到下游去拼反馈。"""
-    monkeypatch.setattr(resource_graph, "llm", _FakeLlm(json.dumps(
+    monkeypatch.setattr(resource_document, "llm", _FakeLlm(json.dumps(
         {"has_issues": True, "issues": ["问题一", {"type": "矛盾", "detail": "说法相反"}, 7]},
         ensure_ascii=False,
     )))
 
-    issues = await resource_graph.review_cross_section_consistency(_two_sections(), topic="t")
+    issues = await resource_document.review_cross_section_consistency(_two_sections(), topic="t")
 
     assert issues == [{"type": "矛盾", "detail": "说法相反"}]
 
@@ -197,9 +197,9 @@ async def test_non_dict_issues_are_dropped(monkeypatch):
 @pytest.mark.asyncio
 async def test_issue_list_is_capped(monkeypatch):
     payload = {"has_issues": True, "issues": [{"type": "重复", "detail": f"第{i}条"} for i in range(12)]}
-    monkeypatch.setattr(resource_graph, "llm", _FakeLlm(json.dumps(payload, ensure_ascii=False)))
+    monkeypatch.setattr(resource_document, "llm", _FakeLlm(json.dumps(payload, ensure_ascii=False)))
 
-    issues = await resource_graph.review_cross_section_consistency(_two_sections(), topic="t")
+    issues = await resource_document.review_cross_section_consistency(_two_sections(), topic="t")
 
     assert len(issues) == 5, "提示词要求最多 5 条，超出的要截掉"
 
@@ -208,15 +208,15 @@ async def test_issue_list_is_capped(monkeypatch):
 async def test_digest_is_truncated_so_a_huge_document_cannot_blow_up_the_prompt(monkeypatch):
     """成稿可能上万字，不能整篇塞进审查提示词。"""
     fake = _FakeLlm(CLEAN)
-    monkeypatch.setattr(resource_graph, "llm", fake)
+    monkeypatch.setattr(resource_document, "llm", fake)
 
     sections = [(f"第{i}节", "长" * 5000) for i in range(20)]
-    await resource_graph.review_cross_section_consistency(sections, topic="t")
+    await resource_document.review_cross_section_consistency(sections, topic="t")
 
     prompt = fake.prompts[0]
     # 每节只截前 N 字
-    assert "长" * resource_graph._CONSISTENCY_SECTION_CHARS in prompt
-    assert "长" * (resource_graph._CONSISTENCY_SECTION_CHARS + 1) not in prompt
+    assert "长" * resource_document._CONSISTENCY_SECTION_CHARS in prompt
+    assert "长" * (resource_document._CONSISTENCY_SECTION_CHARS + 1) not in prompt
     # 章节数封顶
     assert "第11节" in prompt
     assert "第12节" not in prompt, "超出上限的章节不该进提示词"
@@ -225,7 +225,7 @@ async def test_digest_is_truncated_so_a_huge_document_cannot_blow_up_the_prompt(
 
 
 def test_consistency_feedback_names_the_problem_and_the_sections():
-    feedback = resource_graph._consistency_feedback([
+    feedback = resource_document._consistency_feedback([
         {"type": "矛盾", "sections": "第1节和第3节", "detail": "对切分粒度说法相反"},
         {"sections": "第2节", "detail": "引用了未定义的符号"},
     ])
@@ -325,7 +325,7 @@ async def test_single_section_document_never_calls_the_cross_validator(monkeypat
     llm = _DocLlm(CLEAN)
     _install(monkeypatch, llm)
 
-    await resource_graph.generate_document_parallel(
+    await resource_document.generate_document_parallel(
         "文档切分", sections=["唯一小节"], section_count=1, user_id=1,
     )
 

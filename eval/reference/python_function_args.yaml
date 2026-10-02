@@ -1,0 +1,158 @@
+# 真实性判据的**预注册底本**：Python 函数参数传递。
+#
+# ## 这份底本是什么、不是什么
+#
+# 它**不是**一份 Python 教材摘要，也**不追求覆盖这个主题**。它是一小组
+# **预先写死、可机械核验**的断言 —— 学习资料只要在这几点上写反了，就是硬错，
+# 不需要任何模型来"觉得它错"。
+#
+# `probe` 里的每一段都在 **Python 3.13.13** 上真跑过，`expect` 是它跑出来的输出，
+# 不是我的记忆（`eval/resource_eval.py` 的注释里写了为什么：这台机器抓不到外网整页，
+# 而知识库语料是机器翻译的，两者都不足以当"权威出处"；能自己跑出来的事实最硬）。
+# 复核的人把 probe 复制进解释器就能自己重算一遍。
+#
+# ## 为什么要 `wrong` 这一栏
+#
+# 判"材料写错了"最怕变成模型的主观意见。这里把它变具体：**每一条都有一个常见的错法**，
+# 材料里的说法如果落在这个形状上，就是直接与实跑输出矛盾 —— 判词里要带上原句、
+# 探针和真实输出，人能对着看。
+#
+# ## 没写到的点怎么办
+#
+# 材料里**不涉及**这些断言的，一律记「未核验」，进分母，不假装核过。
+# 宁可报一个诚实的未核验率，也不拿记忆去给材料打分。
+
+topic: "Python 函数的参数传递与常见陷阱"
+verified_on: "Python 3.13.13"
+
+claims:
+  - id: mutable-default
+    claim: "可变默认值（如 `def f(x, bucket=[])`）在函数**定义时**求值一次，之后所有调用共用同一个对象，先前的修改会留下。"
+    wrong: "说成「每次调用都会拿到一个新的空列表」，或说默认值每次调用重新求值。"
+    probe: |
+      def add(item, bucket=[]):
+          bucket.append(item)
+          return bucket
+      add(1)
+      add(2)
+    expect: "[1, 2]"
+
+  - id: mutable-default-fixed
+    claim: "用 `None` 哨兵（`bucket=None` 再在函数体里建新列表）可以让每次调用拿到新的可变对象。"
+    wrong: "说成哨兵写法没用、或者仍然会共用列表。"
+    probe: |
+      def add(item, bucket=None):
+          if bucket is None:
+              bucket = []
+          bucket.append(item)
+          return bucket
+      add(1)
+      add(2)
+    expect: "[2]"
+
+  - id: rebind-does-not-leak
+    claim: "在函数里给形参**重新赋值**（`x = 99`）只改本地名字的绑定，不影响调用方的变量。"
+    wrong: "说成「函数里给参数赋值会把外面的变量也改掉」（把 Python 当成引用传递/传址）。"
+    probe: |
+      def f(x):
+          x = 99
+          return x
+      outer = 1
+      f(outer)
+      outer
+    expect: "1"
+
+  - id: inplace-mutation-leaks
+    claim: "在函数里对传入的**可变对象做原地修改**（`items.append(...)`）会影响调用方看到的那份数据。"
+    wrong: "说成「函数里改什么都不可能影响外面」，或说 Python 把可变对象复制了一份传进去。"
+    probe: |
+      def f(items):
+          items.append("added")
+      outer = ["orig"]
+      f(outer)
+      outer
+    expect: "['orig', 'added']"
+
+  - id: args-is-tuple
+    claim: "`*args` 把多出来的位置参数收成一个 **tuple**。"
+    wrong: "说成收成 list。"
+    probe: |
+      def f(*args):
+          return type(args).__name__
+      f(1, 2, 3)
+    expect: "'tuple'"
+
+  - id: kwargs-is-dict
+    claim: "`**kwargs` 把多出来的关键字参数收成一个 **dict**。"
+    wrong: "说成收成 list 或 tuple。"
+    probe: |
+      def f(**kwargs):
+          return type(kwargs).__name__
+      f(a=1)
+    expect: "'dict'"
+
+  - id: keyword-order-free
+    claim: "关键字实参的书写顺序不影响调用结果（`f(b=2, a=1)` 与 `f(a=1, b=2)` 等价）。"
+    wrong: "说成关键字实参也必须按形参顺序写。"
+    probe: |
+      def f(a, b):
+          return (a, b)
+      f(b=2, a=1) == f(a=1, b=2)
+    expect: "True"
+
+  - id: positional-after-keyword
+    claim: "位置实参不能写在关键字实参后面：`f(a=1, 2)` 是**语法错误**。"
+    wrong: "说成能跑但结果不对、或说只是运行时报错（它是编译期的 SyntaxError）。"
+    probe: |
+      def check():
+          try:
+              compile("f(a=1, 2)", "<probe>", "exec")
+              return "compiled"
+          except SyntaxError:
+              return "SyntaxError"
+      check()
+    expect: "'SyntaxError'"
+
+  - id: print-returns-none
+    claim: "`print(...)` 的**返回值**是 `None` —— 它是把内容写出去，不是把内容返回。"
+    wrong: "说成 print 返回被打印的那段字符串，或用 `x = print('a')` 能拿到值。"
+    probe: |
+      import contextlib, io
+      def value():
+          buf = io.StringIO()
+          with contextlib.redirect_stdout(buf):
+              printed = print("")
+          return type(printed).__name__
+      value()
+    expect: "'NoneType'"
+
+  - id: no-explicit-return
+    claim: "函数体走完没有遇到 `return`（或 `return` 后不带值）时，返回 `None`。"
+    wrong: "说成返回空字符串 / 0 / 上一次的结果。"
+    probe: |
+      def f():
+          pass
+      repr(f())
+    expect: "'None'"
+
+  - id: default-evaluated-once
+    claim: "默认值表达式在函数**定义时**求值**一次**，之后的调用不会重新求值。"
+    wrong: "说成每次调用都会重新求值一次。"
+    probe: |
+      calls = []
+      def make():
+          calls.append(1)
+          return 0
+      def f(x=make()):
+          return x
+      f(); f()
+      len(calls)
+    expect: "1"
+
+  - id: late-binding-closure-in-loop
+    claim: "循环里创建的闭包（`lambda: i`）**捕获变量而不是当时的值**，循环结束后调用它们都看到最后那个值。"
+    wrong: "说成每个 lambda 记住了自己那一轮的值（那需要默认参数 `lambda i=i: i` 才是那个效果）。"
+    probe: |
+      funcs = [lambda: i for i in range(3)]
+      [f() for f in funcs]
+    expect: "[2, 2, 2]"

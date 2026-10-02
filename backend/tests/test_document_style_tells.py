@@ -170,13 +170,13 @@ async def test_style_hits_are_counted_once_per_shipped_section(monkeypatch, capl
     累加的话同一节会被算两遍，汇总出现「命中小节 6/3」这种不可能的比值，
     指标直接失真 —— 而这个指标的用途正是观察实际文风，数字错了就白测。
     """
-    from backend.src.ai_core import resource_graph
+    from backend.src.ai_core import resource_document, resource_graph
 
-    monkeypatch.setattr(resource_graph, "llm", _StylishLlm())
-    monkeypatch.setattr(resource_graph, "kb_search", _no_kb)
+    monkeypatch.setattr(resource_document, "llm", _StylishLlm())
+    monkeypatch.setattr(resource_document, "kb_search", _no_kb)
 
-    with caplog.at_level(logging.INFO, logger="backend.src.ai_core.resource_graph"):
-        content = await resource_graph.generate_document_parallel(
+    with caplog.at_level(logging.INFO, logger="backend.src.ai_core.resource_document"):
+        content = await resource_document.generate_document_parallel(
             "文档切分",
             sections=list(_TITLES),
             section_count=len(_TITLES),

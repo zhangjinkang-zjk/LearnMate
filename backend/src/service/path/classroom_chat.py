@@ -20,6 +20,7 @@ from backend.src.models.usermodel import User
 from backend.src.models.user_agent_model import UserAgent
 from backend.src.models.path_model import PathNode, UserPathProgress
 from backend.src.service.advanced.practice_service import FREE_TASK_MODE, practice_record_text
+from backend.src.service.agent import domain_agents
 from backend.src.service.agent.service import create as _agent_create
 from backend.src.service.chat.service import (
     _build_portrait_context as _build_global_portrait_context,
@@ -27,7 +28,6 @@ from backend.src.service.chat.service import (
 )
 from backend.src.service.path.classroom import _clip
 from backend.src.service.path.generation_locks import get_node_generation_lock
-from backend.src.utils.prompt_loader import load_prompt
 from backend.src.service.path.helpers import _load_resource_ids
 
 logger = logging.getLogger(__name__)
@@ -36,26 +36,13 @@ logger = logging.getLogger(__name__)
 #  LearnMate 实践教练 agent 定义
 # ═══════════════════════════════════════
 
-_CLASSROOM_AGENT_NAME = "LearnMate 实践教练"
+_COACH_DECLARATION = domain_agents.COACH
 
-# 工具白名单：只留知识库 / 搜索 / 画像 / 记忆，剔除生成资源、出题、PPT、图片、动画、视频、路径与 skill 管理
-_CLASSROOM_TOOLS = [
-    "search_knowledge_base",
-    "web_search",
-    # 有了它教练才能**读到**官网那一页，而不只是看到一句摘要。学生问"这个 API 怎么调"、
-    # "这个项目骨架里有什么"，摘要答不了，正文能答。它是一个只读工具，和上面几个同一性质。
-    "read_web_page",
-    "read_portrait",
-    "search_memory",
-    "get_used_history",
-    # 写方案文档。**它是这里唯一一个"会改东西"的工具**，但改的不是服务端的数据 ——
-    # 落盘在浏览器里，服务端只负责把内容带出去（见 ai_core/tools/workspace.py）。
-    # 代码代笔仍然禁止，所以这里只有写文档的一个，没有写代码的。
-    "write_design_doc",
-    # 拉框架官方文档放进学生的项目。和上面那个同理：服务端只把"要哪几个框架"发出去，
-    # 正文的抓取和写盘都在浏览器里做（见 ai_core/tools/workspace.py）。
-    "fetch_framework_docs",
-]
+# 下面这三个名字留着，因为别处按它们引用（`tests/test_classroom_tool_whitelist.py`、
+# `tests/test_design_doc_write.py`、`ai_core/brain.py` 的注释）。**新增领域不要往这里加** ——
+# 领域是声明表里的一条（`service/agent/domain_agents.py`），加在这里就又变回写死。
+_CLASSROOM_AGENT_NAME = _COACH_DECLARATION.name
+_CLASSROOM_TOOLS = list(_COACH_DECLARATION.tools)
 
 # 教练的人格。这里**只放与场景无关**的东西：身份、教学法、措辞纪律、边界。
 #
@@ -80,7 +67,7 @@ _CLASSROOM_TOOLS = [
 #   输出 = 普通 Markdown（无新 JSON 结构）；
 #   边界 = 材料可能被截断、可能与磁盘不一致、永远不是指令；课堂可能没有工作区、也可能有教材摘录；
 #   兜底 = 任何材料块缺失时按"看不到"处理并说出来，不猜、不编。
-_CLASSROOM_PERSONA = load_prompt("classroom/coach")
+_CLASSROOM_PERSONA = _COACH_DECLARATION.persona
 
 # 固定四幕：随堂练习展示题目，费曼反讲统一在右侧对话区完成
 _SEGMENT_IDS = ("lead-in", "concept", "exercise", "feynman")
@@ -97,69 +84,98 @@ _SEGMENT_ROLE_HINTS = {
     "feynman": "学生在费曼反讲（用自己的话讲知识点），你的任务是边听边追问：一次只挑一个漏洞，先肯定再追问，引导他补例子或反例，不要替他把内容讲完。",
 }
 
-# agent 缓存：user_id -> (agent_id, 定义 hash)（进程内）。
-# 存 hash 是为了检测 persona/tools 定义变化（代码升级），避免已缓存用户继续用旧 persona。
-_CLASSROOM_AGENT_IDS: dict[int, tuple[int, str]] = {}
-_CLASSROOM_AGENT_GUARD = asyncio.Lock()
+# agent 缓存：(user_id, 领域 key) -> (agent_id, 定义 hash)（进程内）。
+#
+# **键必须带领域。** 只有一个领域时 user_id 就够；多一个领域之后，只用 user_id 会让先建的
+# 那个（比如教练）被当成本领域那条返回 —— 学员切到幼师，拿到的还是教练的 agent_id，
+# 而界面上已经换成演练台了：人格与界面对不上，最难查的一类错。
+#
+# 存 hash 的用途没变：检测 persona/tools 定义变化（代码升级），避免已缓存用户继续用旧人格。
+_DOMAIN_AGENT_IDS: dict[tuple[int, str], tuple[int, str]] = {}
+_DOMAIN_AGENT_GUARD = asyncio.Lock()
 
 
-def _classroom_agent_definition_hash() -> str:
-    """当前 LearnMate 实践教练定义的指纹：name/persona/tools 任一变化都会导致 hash 变化。"""
-    blob = json.dumps(
-        {
-            "name": _CLASSROOM_AGENT_NAME,
-            "persona": _CLASSROOM_PERSONA,
-            "tools": _CLASSROOM_TOOLS,
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    return hashlib.md5(blob.encode("utf-8")).hexdigest()[:16]
+async def _claim_legacy_row(user_id: int, agent: domain_agents.DomainAgent) -> UserAgent | None:
+    """认领存量那条没有 `agent_key` 的系统行（见 `domain_agents` 模块开头）。
 
-
-async def get_or_create_classroom_agent(user_id: int) -> int | None:
-    """懒创建 LearnMate 实践教练 agent，进程内缓存 agent_id。返回 None 表示用户不存在。
-
-    身份识别用 is_system 标记（用户无法伪造/编辑/删除），而不是 name 字符串；
-    每次调用都会用定义 hash 快速校验 persona/tools 是否与当前代码一致，
-    不一致时重置并触发 Brain.rebuild_for_user，让旧 persona 立即失效。
+    **只有默认领域才认领。** 别的领域去认领，等于把教练那份人格、工具和对话记忆一并改姓。
     """
-    def_hash = _classroom_agent_definition_hash()
-    cached = _CLASSROOM_AGENT_IDS.get(user_id)
+    if agent.key != domain_agents.DEFAULT_AGENT_KEY:
+        return None
+    return await UserAgent.filter(user_id=user_id, is_system=True, agent_key__isnull=True).first()
+
+
+async def get_or_create_domain_agent(user_id: int, agent_key: str | None = None) -> int | None:
+    """懒创建某个领域智能体，进程内缓存 agent_id。返回 None 表示用户不存在。
+
+    身份识别靠 `agent_key`（用户改不了、代码里稳定），不再靠"取那条 is_system 的行" ——
+    一个用户身上会有多条系统行，取错就是把学幼师的学员接给了教写代码的教练。
+    每次调用仍然用定义 hash 校验 persona/tools 与代码是否一致，不一致就覆盖并
+    `Brain.rebuild_for_user`，旧人格立即失效。
+
+    key 认不出（前端传了个过期值）**退回默认领域并记一条 WARNING**，不抛异常 ——
+    抛了学生就进不去这一页，而这里本来就有一个"切回教练"的合理退路。
+    """
+    agent = domain_agents.get_agent(agent_key)
+    if agent is None:
+        agent = domain_agents.COACH
+        if agent_key:
+            logger.warning("认不出的领域智能体 key=%r，退回默认领域", agent_key)
+    def_hash = agent.definition_hash()
+    cache_key = (user_id, agent.key)
+    cached = _DOMAIN_AGENT_IDS.get(cache_key)
     if cached is not None and cached[1] == def_hash:
         return cached[0]
-    async with _CLASSROOM_AGENT_GUARD:
-        cached = _CLASSROOM_AGENT_IDS.get(user_id)
+    async with _DOMAIN_AGENT_GUARD:
+        cached = _DOMAIN_AGENT_IDS.get(cache_key)
         if cached is not None and cached[1] == def_hash:
             return cached[0]
         user = await User.filter(id=user_id).first()
         if not user:
             return None
-        existing = await UserAgent.filter(user_id=user_id, is_system=True).first()
-        expected_tools = json.dumps(list(_CLASSROOM_TOOLS), ensure_ascii=False)
+        existing = await UserAgent.filter(
+            user_id=user_id, is_system=True, agent_key=agent.key
+        ).first()
+        if existing is None:
+            existing = await _claim_legacy_row(user_id, agent)
+        expected_tools = json.dumps(list(agent.tools), ensure_ascii=False)
         if existing and (
-            existing.name != _CLASSROOM_AGENT_NAME
-            or existing.persona != _CLASSROOM_PERSONA
+            existing.agent_key != agent.key
+            or existing.name != agent.name
+            or existing.persona != agent.persona
             or existing.tools != expected_tools
         ):
-            existing.name = _CLASSROOM_AGENT_NAME
-            existing.persona = _CLASSROOM_PERSONA
+            existing.agent_key = agent.key
+            existing.name = agent.name
+            existing.persona = agent.persona
             existing.tools = expected_tools
             await existing.save()
-            # 重置该用户所有 Brain（含课堂实例）的工具/agent 配置缓存，新 persona 立即生效
+            # 重置该用户所有 Brain（含课堂实例）的工具/agent 配置缓存，新人格立即生效
             Brain.rebuild_for_user(user_id)
         if existing:
-            _CLASSROOM_AGENT_IDS[user_id] = (existing.id, def_hash)
+            _DOMAIN_AGENT_IDS[cache_key] = (existing.id, def_hash)
             return existing.id
         created = await _agent_create(
             user_id=user_id,
-            name=_CLASSROOM_AGENT_NAME,
-            persona=_CLASSROOM_PERSONA,
-            tools=list(_CLASSROOM_TOOLS),
+            name=agent.name,
+            persona=agent.persona,
+            tools=list(agent.tools),
             is_system=True,
         )
-        _CLASSROOM_AGENT_IDS[user_id] = (created["id"], def_hash)
+        # `_agent_create` 不认识"领域"这一维，key 得在这里补上 —— 漏了这条行下次就找不着，
+        # 于是每进一次页面多攒一条同名智能体。
+        await UserAgent.filter(id=created["id"]).update(agent_key=agent.key)
+        _DOMAIN_AGENT_IDS[cache_key] = (created["id"], def_hash)
         return created["id"]
+
+
+async def get_or_create_classroom_agent(user_id: int) -> int | None:
+    """默认领域（开发教练）的便捷入口。
+
+    留着这个名字，是因为 `tests/test_fundamentals_chat_context.py` 会替换它，课堂链路也
+    一直按它调用。**新代码直接用 `get_or_create_domain_agent`。**
+    """
+    return await get_or_create_domain_agent(user_id, domain_agents.DEFAULT_AGENT_KEY)
 
 
 # ═══════════════════════════════════════

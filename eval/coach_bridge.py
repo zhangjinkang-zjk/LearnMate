@@ -158,37 +158,34 @@ def _capture_stream_input() -> None:
 #  学生这一轮的输入
 # ═══════════════════════════════════════
 
-def _task_script_parts(task: dict) -> list[str]:
-    """照抄前端的 `taskScriptParts()`（`PracticeDialogue.vue`）。
-
-    每一段都是"先有内容才拼标签"：自由任务没有 `focus` 时不能拼出一句「重点能力：」——
-    它非空，`filter(Boolean)` 留不住也拦不住，就成了只有标签没有内容的一行。
-    """
-    criteria = "；".join(task.get("criteria") or [])
-    return [
-        task.get("brief"),
-        task.get("problem"),
-        f"重点能力：{task['focus']}" if task.get("focus") else None,
-        f"验收标准：{criteria}" if criteria else None,
-    ]
-
-
 def _practice_segment(task: dict, workspace: object, scenario_id: str) -> dict:
-    """学生这一轮发上去的 segment —— 形状照抄前端的 `practiceSegment()`。
+    """学生这一轮发上去的 segment —— 形状照抄**现在**的 `practiceSegment()`。
 
-    服务端**不采信**这里面的任务说明（以 `task_snapshot` 账本为准），但 `script` 仍然会被
-    渲染成上下文里的「讲解要点」，所以它得是生产里真会发的那份，不能空着。
+    ## 这里原本是错的，记下来免得改回去
+
+    原来它拼的是 `brief / problem / 重点能力：{focus} / 验收标准：{criteria}`，注释写着
+    "照抄前端的 `taskScriptParts()`"。**但前端早就把那一份删了**：`PracticeDialogue.vue` 的
+    `practiceSegment()` 现在只发 `script: clientChapterSummary()`，也就是「主讲材料摘要：…」
+    或「当前没有可用主讲材料」，任务说明一个字都不拼（前端那段注释写明了原因：同一份任务在
+    教练眼前出现两套说法，它就照着表格那套念给学生听）。
+
+    而服务端会把 `script` **原文**渲染进上下文（`classroom_chat._compose_user_prompt`：练习线
+    直接 `lines.append(script)`）。于是评估桥喂进去的「验收标准：…」真的会被教练读到，
+    教练复述出来，判据「说话像同行」的步骤 1（别念栏位名）就必然违规 ——
+    **评估测的是它自己塞进去的缺陷**，而生产里根本没有这个缺陷了。
+
+    这正是 `README` 里那条原则的反面教材：**"照抄前端"抄的必须是当前那一版**，
+    前端改了而桥没跟着改，桥就从"真世界"变成了"另一个世界"。
+
+    所以这里只留服务端不知道的那一件事：这一章有没有主讲材料（评估没有，所以按没有发）。
+    `points` / `question` 一并去掉 —— 前端也去掉了，它们会被渲染成「板书：」「课堂提问：」，
+    而实践对话里没有这两样东西。
     """
-    parts = [part for part in _task_script_parts(task or {}) if part]
-    # 前端在没有主讲材料时发的就是这一句（`clientChapterSummary()`）
-    parts.append("当前没有可用主讲材料")
     return {
         "id": f"practice-{scenario_id}",
         "type": "practice",
         "title": (task or {}).get("title") or "",
-        "script": "\n".join(parts),
-        "points": list((task or {}).get("constraints") or [])[:6],
-        "question": {"prompt": "请围绕这个任务推进对话。"},
+        "script": "当前没有可用主讲材料",
         "workspace": workspace,
     }
 
