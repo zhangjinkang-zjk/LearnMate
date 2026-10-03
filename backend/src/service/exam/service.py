@@ -477,8 +477,11 @@ class ExamService:
                         if rt == "exercise":
                             yield f"data: {json.dumps({'type': 'progress', 'msg': '题目内容已生成，正在审核...'}, ensure_ascii=False)}\n\n"
                     elif "review_passed" in payload:
-                        passed = payload.get("review_passed", True)
-                        yield f"data: {json.dumps({'type': 'progress', 'msg': f'审核{"通过" if passed else "未通过，重新生成"}...'}, ensure_ascii=False)}\n\n"
+                        # 审核结论先算成一个变量再拼。写成嵌套 f-string —— `f"…{f"…"—}…`
+                        # 要 Python 3.12 的 PEP 701 才认，而 Dockerfile 是 3.11-slim，
+                        # 整个模块会在 import 期直接 SyntaxError。
+                        verdict = "通过" if payload.get("review_passed", True) else "未通过，重新生成"
+                        yield f"data: {json.dumps({'type': 'progress', 'msg': f'审核{verdict}...'}, ensure_ascii=False)}\n\n"
                 except json.JSONDecodeError:
                     logger.warning("已忽略异常 backend/src/service/exam/service.py:241", exc_info=True)
 
