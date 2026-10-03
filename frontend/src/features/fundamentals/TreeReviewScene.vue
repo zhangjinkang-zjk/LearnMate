@@ -46,8 +46,11 @@
     </div>
 
     <div class="tree-review__actions">
-      <button v-if="canStartTest" type="button" @click="$emit('quiz')"><SquareCheck :size="17" /><span>题目测试</span></button>
-      <button v-if="canStartTest" type="button" @click="$emit('feynman')"><MessageCircle :size="17" /><span>费曼复讲</span></button>
+      <!-- 「题目测试」**没有 v-if**：同一张复盘页在不同章节给出不同的按钮，是这一版
+           之前最大的那处读不懂 —— 右侧写着「完成本章题目测试」，左边却没有那颗按钮。
+           题是现场生成的，任何未锁章节都测得出来。 -->
+      <button type="button" @click="$emit('quiz')"><SquareCheck :size="17" /><span>题目测试</span></button>
+      <button v-if="canFeynman" type="button" @click="$emit('feynman')"><MessageCircle :size="17" /><span>费曼复讲</span></button>
       <button type="button" @click="$emit('learn')"><BookOpenText :size="17" /><span>继续学习</span></button>
       <button type="button" @click="$emit('advanced')"><ArrowUpRight :size="17" /><span>进阶训练</span></button>
     </div>
@@ -69,7 +72,12 @@ const props = defineProps({
   weakPoints: { type: Array, default: () => [] },
   nextSuggestionTitle: { type: String, default: '' },
   nextSuggestionReason: { type: String, default: '' },
-  canStartTest: { type: Boolean, default: false },
+  /**
+   * 能不能开费曼复讲。**和"能不能做题"是两件事，别合并。**
+   * 复讲要拿本章正文当底稿，一份资料没读过的章节没有正文，开了是空讲。
+   * 「题目测试」相反 —— 题是现场从章节主题生成的，任何章节都能测（见 FoundationTestPage）。
+   */
+  canFeynman: { type: Boolean, default: false },
 })
 
 defineEmits(['back', 'quiz', 'feynman', 'learn', 'advanced'])

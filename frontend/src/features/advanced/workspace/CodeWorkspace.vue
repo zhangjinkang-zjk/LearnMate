@@ -28,9 +28,9 @@
       </div>
       <div class="workspace__group">
         <span v-if="rootName" class="workspace__root" :title="rootName">{{ rootName }}</span>
-        <!-- 整个工作区打包下载。**和「清空」一样，它只读不写磁盘** —— 导出的是工作区里的内容
-             （含没保存的编辑，见 workspaceExport.js 开头），本机文件一个都不动。
-             单个文件夹的导出不在这里，在资源管理器里右键那个文件夹。 -->
+        <!-- 导出和旁边那颗保存按钮是**两件事**：保存写的是当前打开的那一个文件，
+             导出打的是整个工作区（或右键的某个文件夹）。所以图标不能复用 Download ——
+             那颗表示"这一个文件下载一份副本"，复用会让人以为是同一件事。 -->
         <button
           class="button button--quiet"
           type="button"
@@ -149,8 +149,8 @@ import {
   splitEntryPath,
   writeEntryToDisk,
 } from './localWorkspace'
-import { exportWorkspaceZip } from './workspaceExport'
 import { DESIGN_DOC_PATH, mergeDocSection } from './designDoc'
+import { exportWorkspaceZip } from './workspaceExport'
 import { buildWorkspaceSnapshot } from './workspaceSnapshot'
 import { fromDraft, toDraft } from './workspaceDraft'
 import {
@@ -439,9 +439,12 @@ async function relocate(from, to, verb) {
 }
 
 function renameEntry({ path, name }) {
-  // 和 `createEntry` 同一条校验。少了它，把文件改名成 `..`、或者改成 `a/../../b` 是能过的，
-  // 而这个名字会成为导出 zip 里的键 —— 归档里出现 `..` 就是一条能写到解压目录之外的路径
-  // （见 workspaceExport.js 的 sanitizeSegment）。磁盘那边也会真的建出这个路径。
+  // 和 `createEntry` 同一条校验。少了它，改名成 `..` / `a/../../b` 是能过的 ——
+  // `relocate` 只查重名和"放进它自己里"，不管名字里有没有路径段。在此之前这只是个
+  // 显示上的怪东西（树里多出一行叫 `..`），但导出会把它写成 zip 里的 `../`，
+  // 也就是 zip-slip。所以这一道是必须的，不是顺手加的。
+  // 只校验、不改写：新名字照原样用（和改动前一致），免得顺手改出一个"输入 a/b.py
+  // 结果落在 a/ 里"的隐式行为。
   const segments = String(name ?? '').split('/').map((segment) => segment.trim()).filter(Boolean)
   if (!segments.length) return
   if (segments.some((segment) => segment === '.' || segment === '..')) {
@@ -564,16 +567,21 @@ async function saveActive() {
   }
 }
 
-// ── 导出 ────────────────────────────────────────────────────────
-// `targetPath` 空串 = 整个工作区；否则是资源管理器右键点中的那个文件夹。
+// ── 导出 ─────────────────────────────────────────────────────
+// `targetPath` 为 `''` 是整包，否则是某一个目录（右键菜单来的）。
+// 两条路共用这一个函数：挑条目、剥前缀、洗路径、定包名全在 workspaceExport.js 里，
+// 这里只管把结果说给用户听。
 //
-// **不走后端，也不读磁盘**：打包的是工作区里的内容（`entry.text`），含还没保存到磁盘的编辑。
-// 这一点和"保存"的区别必须清楚 —— 保存在 FSA 模式下是写回磁盘，导出永远只是下载一份副本。
+// 只在**能写回本机**时它才真的需要（导入模式磁盘上什么都没有）。但 FSA 模式下也留着 ——
+// 恢复出来的草稿、以及"这个文件不在本机文件夹里"的那些条目，一样只能靠下载拿走。
 async function runExport(targetPath) {
+  // `:disabled` 挡不住同一个 tick 里的第二次点击，这里再挡一道
   if (busy.value || !entries.value.length) return
   busy.value = true
   try {
     const result = await exportWorkspaceZip(entries.value, targetPath, rootName.value)
+    // 文件数要说出来：导出是**有损**的（截断、空目录、node_modules 那类目录都被丢过），
+    // 数字是学生唯一能自己核对"是不是少了"的东西。
     setNotice(result.ok
       ? `已导出 ${result.fileName}（${result.fileCount} 个文件）`
       : result.reason)

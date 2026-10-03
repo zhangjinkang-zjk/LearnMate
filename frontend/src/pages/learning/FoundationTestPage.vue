@@ -68,7 +68,7 @@
         :weak-points="testInsights.weakPoints"
         :next-suggestion-title="nextSuggestionTitle"
         :next-suggestion-reason="nextSuggestionReason"
-        :can-start-test="canStartTest"
+        :can-feynman="chapterRead"
         @back="closeReview"
         @quiz="openQuiz"
         @feynman="activeTab = 'feynman'"
@@ -84,7 +84,7 @@
 
       <template v-if="isReviewOpen && activeNode">
         <FeynmanCoach
-          v-if="canStartTest && activeTab === 'feynman'"
+          v-if="chapterRead && activeTab === 'feynman'"
           :key="`feynman-${activeNode.id}`"
           :path-id="learningPath.path_id"
           :node-id="activeNode.id"
@@ -181,7 +181,30 @@ function resolveFallbackNode(nodes) {
 }
 
 const activeNode = computed(() => testableNodes.value.find((node) => String(node.id) === String(activeNodeId.value)) || resolveFallbackNode(testableNodes.value) || null)
-const canStartTest = computed(() => Boolean(activeNode.value?.resources_viewed))
+
+/**
+ * 本章能不能做题。
+ *
+ * **这里以前是 `activeNode.resources_viewed`（读没读过资料），已经拿掉了。**
+ * 那道闸看着讲得通（先学后测），实际结果是同一张复盘页在不同章节给出**不同的按钮**：
+ * 读过的章节有四颗（题目测试 / 费曼复讲 / 继续学习 / 进阶训练），一份资料没读过的
+ * 只剩两颗，而右侧"下一步建议"还写着「完成本章题目测试」—— 让学生去做一件页面上
+ * 没有入口的事。花园里那棵树光秃秃的也在说同一句话（没测过 = 不挂叶）。
+ * 兜底文案和隐藏按钮撞在一起，才是真正读不懂的地方。
+ *
+ * 现在判据只看"这一章能不能测"：节点存在且没锁（`testableNodes` 已经滤掉 locked）。
+ * 题目由后端现场生成（`/generate-quiz` 走的是 `pre_generate=True`，本来就不看阅读量）。
+ */
+const canStartTest = computed(() => Boolean(activeNode.value))
+
+/**
+ * 本章**读过**（后端 `resources_viewed` = 用户自己读过至少一份）。
+ *
+ * 只剩两个用处，都跟"能不能考"无关：费曼复讲要拿本章正文当底稿（没读过就没正文），
+ * 以及下面 `loadNode` 里那次取正文 —— 取正文的接口会**把资源记成已读**，
+ * 在测试页顺手读一下就把花园里的树喂大了，那是假的。
+ */
+const chapterRead = computed(() => Boolean(activeNode.value?.resources_viewed))
 const latestScore = computed(() => testInsights.value.masteryScore)
 const latestScoreLabel = computed(() => latestScore.value === null || latestScore.value === undefined ? '--' : `${Math.round(Number(latestScore.value))}%`)
 const answerSummary = computed(() => {
@@ -296,8 +319,8 @@ async function loadNode() {
     documentResource.value = resources.find((resource) => resource.resource_type === 'document') || null
     const resourceId = documentResource.value?.resource_id || documentResource.value?.id
     // 只有基础讲解页已经记录过阅读，测试页才读取完整正文；否则读取接口
-    // 会把未学习章节误计为已查看，绕过后端的资源阅读门禁。
-    if (resourceId && canStartTest.value) {
+    // 会把未学习章节误计为已查看 —— 花园里的树第二天就长了一截，而学生没读。
+    if (resourceId && chapterRead.value) {
       const resource = await fundamentalsApi.getResource(resourceId)
       chapterContent.value = normalizeContent(resource?.content || documentResource.value?.content)
     } else chapterContent.value = normalizeContent(documentResource.value?.content)
@@ -404,7 +427,8 @@ function openAdvanced() {
 }
 
 function openQuiz() {
-  if (!learningPath.value || !activeNode.value || !canStartTest.value) return
+  // `canStartTest` 已经蕴含 `activeNode` 非空（见它的定义），不用再判一遍。
+  if (!learningPath.value || !canStartTest.value) return
   router.push({ name: 'foundationQuiz', query: { pathId: learningPath.value.path_id, node: activeNode.value.id } })
 }
 

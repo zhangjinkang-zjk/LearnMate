@@ -21,12 +21,6 @@
       <button class="button button--quiet" type="button" @click="loadQuizPage">重试</button>
     </section>
 
-    <section v-else-if="!canStartTest" class="quiz-state surface">
-      <BookOpenText :size="24" />
-      <div><strong>请先完成本章阅读</strong><p>完成基础学习后，系统才会开放与当前章节对应的检查题。</p></div>
-      <RouterLink class="button button--primary" :to="backToLesson">前往基础学习</RouterLink>
-    </section>
-
     <template v-else>
       <ChapterCheck
         :key="`quiz-${learningPath.path_id}-${activeNode.id}`"
@@ -44,7 +38,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { ArrowLeft, BookOpenText, CircleAlert, LoaderCircle } from 'lucide-vue-next'
+import { ArrowLeft, CircleAlert, LoaderCircle } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 import ChapterCheck from '@/features/fundamentals/ChapterCheck.vue'
 import PageTitle from '@/shared/ui/PageTitle.vue'
@@ -59,9 +53,10 @@ const activeNodeId = ref(null)
 const nodeDetail = ref(null)
 
 const activeNode = computed(() => (learningPath.value?.nodes || []).find((node) => String(node.id) === String(activeNodeId.value)) || null)
-const canStartTest = computed(() => Boolean(activeNode.value?.resources_viewed))
+// 这里原来还有一道 `resources_viewed` 的闸：没读过本章资料就整页换成
+// 「请先完成本章阅读 / 前往基础学习」。它和复盘页那颗被藏起来的按钮是同一条规则的两头，
+// 一起拿掉了 —— 学生从复盘页点进来，不该再撞上一堵墙。题由 ChapterCheck 现场生成。
 const backToTest = computed(() => ({ name: 'foundationTest', query: { pathId: learningPath.value?.path_id || route.query.pathId, node: activeNodeId.value || route.query.node } }))
-const backToLesson = computed(() => ({ name: 'fundamentals', query: { pathId: learningPath.value?.path_id || route.query.pathId, node: activeNodeId.value || route.query.node } }))
 const chapterPosition = computed(() => {
   const index = (learningPath.value?.nodes || []).findIndex((node) => String(node.id) === String(activeNodeId.value))
   return index >= 0 ? `第 ${index + 1} / ${learningPath.value.nodes.length} 章` : '当前章节'

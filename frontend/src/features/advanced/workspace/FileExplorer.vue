@@ -111,6 +111,7 @@
           <template v-if="menu.isDirectory">
             <li><button type="button" role="menuitem" @click="createInMenu('file')">在此新建文件</button></li>
             <li><button type="button" role="menuitem" @click="createInMenu('directory')">在此新建文件夹</button></li>
+            <!-- 导出只对目录有意义：导一个文件就是"下载副本"，那件事工具栏已经在做了。 -->
             <li><button type="button" role="menuitem" @click="exportFromMenu">导出这个文件夹</button></li>
             <li class="file-menu__divider" role="separator"></li>
           </template>
@@ -281,9 +282,9 @@ function expand(path) {
 
 // 菜单贴着指针弹，但要夹在视口里 —— 贴着右/下边缘的行上右键，菜单会有一半在屏幕外。
 //
-// **先把菜单渲染出来量一次真实尺寸，再定坐标**，不用写死的估值：菜单项是按行类型增减的
-// （目录多三项），写死的高度每加一项就得跟着改一次，改漏了就是"菜单贴底时下面两项点不到"。
-// 量不到（还没渲染、或者被 `display:none` 掉）就退回原坐标：宁可贴边，不要看不见。
+// 尺寸**等渲染完再量**，不写死常数：菜单项随类型变（目录比文件多几项），标签长短也不一，
+// 写死的值会跟着 CSS 慢慢漂移，最后表现成"贴着边缘右键就少一截"。量一次的成本可以忽略，
+// 而它换来的是这个夹取永远不会和实际渲染对不上。
 function openMenu(node, event) {
   menu.value = {
     path: node.path,
@@ -295,6 +296,7 @@ function openMenu(node, event) {
   confirmingDelete.value = ''
   nextTick(() => {
     const element = menuEl.value
+    // 0 说明还没渲染出来（或已经被关掉了），那就保持指针位置，不硬凑
     if (!element?.offsetWidth || !menu.value) return
     menu.value = {
       ...menu.value,
@@ -342,21 +344,19 @@ function renameFromMenu() {
   if (node) startRename(node)
 }
 
-// 打包这个文件夹（内容由 CodeWorkspace 决定，这里只报"哪个文件夹"）。菜单项只在目录上出现，
-// 所以不用再判一次类型 —— 判了也只是把上面 v-if 的规则抄第二遍。
-function exportFromMenu() {
-  const path = menu.value?.path
-  closeMenu()
-  if (!path) return
-  emit('exportFolder', { path })
-}
-
 function deleteFromMenu() {
   const path = menu.value?.path
   const isDirectory = Boolean(menu.value?.isDirectory)
   closeMenu()
   if (!path) return
   emit('delete', { path, isDirectory })
+}
+
+function exportFromMenu() {
+  const path = menu.value?.path
+  closeMenu()
+  if (!path) return
+  emit('exportFolder', { path })
 }
 
 // 键盘那条路（F2 / Delete）手上只有路径，得反查节点

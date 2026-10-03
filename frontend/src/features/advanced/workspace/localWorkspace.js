@@ -291,8 +291,8 @@ export async function importFromFileList(fileList) {
   }
 }
 
-// 触发一次浏览器下载。抽出来是因为工作区导出（见 workspaceExport.js）也要走同一条路，
-// 两处的差别只有"文件名是什么、内容是什么"。
+// 触发一次浏览器下载。**单个文件**（降级模式下的"保存"）和**整包 zip**（导出工作区）
+// 共用这一份 —— 两边都是"造个 blob、点一下锚点、再回收 URL"，没有第二套写法。
 export function downloadBlob(filename, blob) {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
@@ -301,9 +301,8 @@ export function downloadBlob(filename, blob) {
   document.body.appendChild(anchor)
   anchor.click()
   anchor.remove()
-  // 立刻 revoke 会让部分浏览器的下载中断，所以要挪后。**挪 1 秒，不是下一轮宏任务**：
-  // 导出的 zip 有几 MB，Firefox 上和下载起动抢这个 URL 会直接断掉，而 `setTimeout(0)`
-  // 根本来不及 —— 那条路上实测就是这么挂的。
+  // 立刻 revoke 会让部分浏览器的下载中断，得挪到后面。延时按**大文件**取：几 MB 的 zip
+  // 在 Firefox 上和下载起动抢过 URL 会直接断掉，而小文本多留一秒也无所谓。
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
