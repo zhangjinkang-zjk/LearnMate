@@ -291,18 +291,24 @@ export async function importFromFileList(fileList) {
   }
 }
 
-// 降级模式下的"保存"：下载一份副本，原文件不动。
-export function downloadEntry(entry, text) {
-  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+// 触发一次浏览器下载。**单个文件**（降级模式下的"保存"）和**整包 zip**（导出工作区）
+// 共用这一份 —— 两边都是"造个 blob、点一下锚点、再回收 URL"，没有第二套写法。
+export function downloadBlob(filename, blob) {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
-  anchor.download = entry?.name || 'untitled.txt'
+  anchor.download = filename || 'untitled.txt'
   document.body.appendChild(anchor)
   anchor.click()
   anchor.remove()
-  // 立刻 revoke 会让部分浏览器的下载中断，挪到下一轮宏任务
-  window.setTimeout(() => URL.revokeObjectURL(url), 0)
+  // 立刻 revoke 会让部分浏览器的下载中断，得挪到后面。延时按**大文件**取：几 MB 的 zip
+  // 在 Firefox 上和下载起动抢过 URL 会直接断掉，而小文本多留一秒也无所谓。
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+// 降级模式下的"保存"：下载一份副本，原文件不动。
+export function downloadEntry(entry, text) {
+  downloadBlob(entry?.name || 'untitled.txt', new Blob([text], { type: 'text/plain;charset=utf-8' }))
 }
 
 export function createBlankEntry(path = 'untitled.py', extra = {}) {

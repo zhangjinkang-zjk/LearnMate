@@ -1570,13 +1570,16 @@ class PathService:
             count = quiz_config.get("count", 5)
             difficulty = "medium"
 
-            # 检查资源是否已查看，根据查看次数决定难度
-            has_viewed, total_views = await check_resource_viewed(node_id, user_id)
-            if not has_viewed:
-                yield f"data: {json.dumps({'type': 'blocked', 'reason': '请先学习当前节点的学习资料后再进行检测'}, ensure_ascii=False)}\n\n"
-                yield "data: [DONE]\n\n"
-                return
-
+            # 资源阅读量只用来**挑难度**，不再当门禁。
+            #
+            # 原来没读过就 yield "blocked" 直接掐掉，前端两处（复盘页藏掉「题目测试」、
+            # 测验页整页换成「请先完成本章阅读」）也在同一条规则上各拦一道。
+            # 三处一起把学生顶在一个没有出口的地方：复盘页右侧写着「完成本章题目测试」，
+            # 那颗按钮却不在；花园里对应的那棵树是光秃的（没测过 = 不挂叶），
+            # 于是"该测一下了"和"你测不了"同时成立。
+            # 现在练习题由本章主题现场生成（同文件的非流式分支本来就是
+            # `pre_generate=True` 跳过门禁的），读没读过都能测，读过只影响起始难度。
+            _has_viewed, total_views = await check_resource_viewed(node_id, user_id)
             if previous_state and previous_state["score"] is not None:
                 difficulty = adjust_quiz_difficulty(
                     previous_state["difficulty"], previous_state["score"]
