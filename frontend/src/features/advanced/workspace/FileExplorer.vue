@@ -111,6 +111,7 @@
           <template v-if="menu.isDirectory">
             <li><button type="button" role="menuitem" @click="createInMenu('file')">在此新建文件</button></li>
             <li><button type="button" role="menuitem" @click="createInMenu('directory')">在此新建文件夹</button></li>
+            <li><button type="button" role="menuitem" @click="exportFromMenu">导出这个文件夹</button></li>
             <li class="file-menu__divider" role="separator"></li>
           </template>
           <li><button type="button" role="menuitem" @click="renameFromMenu">重命名<span class="file-menu__key">F2</span></button></li>
@@ -139,7 +140,7 @@ const props = defineProps({
   entries: { type: Array, default: () => [] },
   activePath: { type: String, default: '' },
 })
-const emit = defineEmits(['select', 'create', 'rename', 'delete', 'move'])
+const emit = defineEmits(['select', 'create', 'rename', 'delete', 'move', 'exportFolder'])
 
 // 拖到列表空白处 = 移到根目录，用这个哨兵值表示（空字符串要留给"没有目标"）
 const ROOT_TARGET = '__root__'
@@ -279,17 +280,28 @@ function expand(path) {
 }
 
 // 菜单贴着指针弹，但要夹在视口里 —— 贴着右/下边缘的行上右键，菜单会有一半在屏幕外。
+//
+// **先把菜单渲染出来量一次真实尺寸，再定坐标**，不用写死的估值：菜单项是按行类型增减的
+// （目录多三项），写死的高度每加一项就得跟着改一次，改漏了就是"菜单贴底时下面两项点不到"。
+// 量不到（还没渲染、或者被 `display:none` 掉）就退回原坐标：宁可贴边，不要看不见。
 function openMenu(node, event) {
-  const width = 168
-  const height = node.type === 'dir' ? 168 : 104
   menu.value = {
     path: node.path,
     name: node.name,
     isDirectory: node.type === 'dir',
-    x: Math.max(4, Math.min(event.clientX, window.innerWidth - width - 8)),
-    y: Math.max(4, Math.min(event.clientY, window.innerHeight - height - 8)),
+    x: event.clientX,
+    y: event.clientY,
   }
   confirmingDelete.value = ''
+  nextTick(() => {
+    const element = menuEl.value
+    if (!element?.offsetWidth || !menu.value) return
+    menu.value = {
+      ...menu.value,
+      x: Math.max(4, Math.min(event.clientX, window.innerWidth - element.offsetWidth - 8)),
+      y: Math.max(4, Math.min(event.clientY, window.innerHeight - element.offsetHeight - 8)),
+    }
+  })
 }
 
 function closeMenu() {
@@ -328,6 +340,15 @@ function renameFromMenu() {
   const node = nodeOf(menu.value?.path)
   closeMenu()
   if (node) startRename(node)
+}
+
+// 打包这个文件夹（内容由 CodeWorkspace 决定，这里只报"哪个文件夹"）。菜单项只在目录上出现，
+// 所以不用再判一次类型 —— 判了也只是把上面 v-if 的规则抄第二遍。
+function exportFromMenu() {
+  const path = menu.value?.path
+  closeMenu()
+  if (!path) return
+  emit('exportFolder', { path })
 }
 
 function deleteFromMenu() {

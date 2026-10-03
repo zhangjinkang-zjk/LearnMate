@@ -28,6 +28,18 @@
       </div>
       <div class="workspace__group">
         <span v-if="rootName" class="workspace__root" :title="rootName">{{ rootName }}</span>
+        <!-- 整个工作区打包下载。**和「清空」一样，它只读不写磁盘** —— 导出的是工作区里的内容
+             （含没保存的编辑，见 workspaceExport.js 开头），本机文件一个都不动。
+             单个文件夹的导出不在这里，在资源管理器里右键那个文件夹。 -->
+        <button
+          class="button button--quiet"
+          type="button"
+          :disabled="busy || !entries.length"
+          :title="entries.length ? '把整个工作区打包成 zip 下载' : '工作区还是空的'"
+          @click="runExport('')"
+        >
+          <FolderArchive :size="14" />导出工作区
+        </button>
         <button class="button button--quiet" type="button" :disabled="!activeEntry || busy" @click="saveActive">
           <Download v-if="!canWriteBack" :size="14" /><Save v-else :size="14" />{{ saveLabel }}
         </button>
@@ -50,6 +62,7 @@
           @rename="renameEntry"
           @delete="deleteEntry"
           @move="moveEntry"
+          @export-folder="onExportFolder"
         />
       </aside>
 
@@ -112,7 +125,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Download, Eraser, FileCode2, FilePlus2, FolderOpen, PanelLeft, Save } from 'lucide-vue-next'
+import { Download, Eraser, FileCode2, FilePlus2, FolderArchive, FolderOpen, PanelLeft, Save } from 'lucide-vue-next'
 import CodeEditor from './CodeEditor.vue'
 import FileExplorer from './FileExplorer.vue'
 import {
@@ -136,6 +149,7 @@ import {
   splitEntryPath,
   writeEntryToDisk,
 } from './localWorkspace'
+import { exportWorkspaceZip } from './workspaceExport'
 import { DESIGN_DOC_PATH, mergeDocSection } from './designDoc'
 import { buildWorkspaceSnapshot } from './workspaceSnapshot'
 import { fromDraft, toDraft } from './workspaceDraft'
@@ -425,6 +439,15 @@ async function relocate(from, to, verb) {
 }
 
 function renameEntry({ path, name }) {
+  // 和 `createEntry` 同一条校验。少了它，把文件改名成 `..`、或者改成 `a/../../b` 是能过的，
+  // 而这个名字会成为导出 zip 里的键 —— 归档里出现 `..` 就是一条能写到解压目录之外的路径
+  // （见 workspaceExport.js 的 sanitizeSegment）。磁盘那边也会真的建出这个路径。
+  const segments = String(name ?? '').split('/').map((segment) => segment.trim()).filter(Boolean)
+  if (!segments.length) return
+  if (segments.some((segment) => segment === '.' || segment === '..')) {
+    setNotice('名字里不能出现 . 或 ..')
+    return
+  }
   const parent = parentPathOf(path)
   return relocate(path, parent ? `${parent}/${name}` : name, '改名')
 }
@@ -539,6 +562,30 @@ async function saveActive() {
   } finally {
     busy.value = false
   }
+}
+
+// ── 导出 ────────────────────────────────────────────────────────
+// `targetPath` 空串 = 整个工作区；否则是资源管理器右键点中的那个文件夹。
+//
+// **不走后端，也不读磁盘**：打包的是工作区里的内容（`entry.text`），含还没保存到磁盘的编辑。
+// 这一点和"保存"的区别必须清楚 —— 保存在 FSA 模式下是写回磁盘，导出永远只是下载一份副本。
+async function runExport(targetPath) {
+  if (busy.value || !entries.value.length) return
+  busy.value = true
+  try {
+    const result = await exportWorkspaceZip(entries.value, targetPath, rootName.value)
+    setNotice(result.ok
+      ? `已导出 ${result.fileName}（${result.fileCount} 个文件）`
+      : result.reason)
+  } catch (error) {
+    setNotice(`导出失败：${error?.message || error}`)
+  } finally {
+    busy.value = false
+  }
+}
+
+function onExportFolder({ path }) {
+  return runExport(path)
 }
 
 // ── 教练写方案 ───────────────────────────────────────────────
